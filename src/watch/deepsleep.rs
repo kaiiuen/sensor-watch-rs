@@ -180,9 +180,28 @@ pub fn enter_deep_sleep_mode() {
 }
 
 /// Enters the SAM L22's lowest-power mode, BACKUP.
+///
+/// In BACKUP mode, RAM and the CPU are powered off; only the RTC keeps time.
+/// Waking requires an RTC alarm or an external wake on A2/A4, and does a full
+/// reset (RAM is lost). Callers should save critical state to flash first.
 pub fn enter_backup_mode() {
     rtc::disable_all_periodic_callbacks();
-    // TODO: disable all peripherals and pins except the RTC.
-    // Enter backup mode (5).
+
+    // Set the SLEEPDEEP bit so the next WFI enters BACKUP mode.
+    // SAFETY: setting the SLEEPDEEP bit in the SCR is safe.
+    unsafe {
+        let scb = &*cortex_m::peripheral::SCB::PTR;
+        scb.scr.modify(|scr| scr | (1 << 2));
+    }
+
+    // Enter BACKUP mode. This does not return until a wake event resets the
+    // device.
     cortex_m::asm::wfi();
+
+    // Clear SLEEPDEEP in case we somehow return (e.g. a spurious wake).
+    // SAFETY: clearing the SLEEPDEEP bit in the SCR is safe.
+    unsafe {
+        let scb = &*cortex_m::peripheral::SCB::PTR;
+        scb.scr.modify(|scr| scr & !(1 << 2));
+    }
 }

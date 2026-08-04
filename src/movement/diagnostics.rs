@@ -216,6 +216,19 @@ impl DiagnosticsFace {
                 buf[8] = b'0' + cfg.buzzer_voltage % 10;
                 buf[9] = b'V';
             }
+            2 => {
+                // Power off (BACKUP mode).
+                let s = "POWER ";
+                let sb = s.as_bytes();
+                for (i, &c) in sb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                let name = "OFF";
+                let nb = name.as_bytes();
+                for (i, &c) in nb.iter().enumerate() {
+                    buf[6 + i] = c;
+                }
+            }
             _ => {}
         }
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
@@ -346,6 +359,11 @@ impl WatchFace for DiagnosticsFace {
                         1 => {
                             // Adjust buzzer voltage up by 0.1V (cycle 0-9V).
                             self.adjust_buzzer(1);
+                        }
+                        2 => {
+                            // Power off: save settings, then enter BACKUP mode.
+                            crate::movement::save_settings();
+                            crate::watch::deepsleep::enter_backup_mode();
                         }
                         _ => {}
                     }
