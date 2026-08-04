@@ -5,5 +5,7 @@
 //! behind a safe, idiomatic Rust API.
 
 pub mod clock;
+pub mod extint;
+pub mod gpio;
 pub mod rtc;
 pub mod slcd;
