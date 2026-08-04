@@ -4,6 +4,7 @@
 //! peripheral of the SAM L22 (RTC, SLCD, buttons, LED, buzzer, I2C/SPI/UART, ...)
 //! behind a safe, idiomatic Rust API.
 
+pub mod adc;
 pub mod buzzer;
 pub mod clock;
 pub mod extint;
