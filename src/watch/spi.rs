@@ -15,7 +15,7 @@ const A4: Pin = Pin(1, 0);
 fn spi() -> &'static Spi {
     // SAFETY: the SERCOM3 register block lives at a fixed address for the whole
     // program; this is the standard svd2rust `PTR` access pattern.
-    unsafe { &(*atsaml22j::Sercom3::PTR).spi() }
+    unsafe { (*atsaml22j::Sercom3::PTR).spi() }
 }
 
 /// Returns a reference to the MCLK peripheral register block.

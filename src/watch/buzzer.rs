@@ -132,7 +132,7 @@ fn tcc0() -> &'static Tcc0 {
 fn tc3() -> &'static atsaml22j::tc0::count8::Count8 {
     // SAFETY: the TC3 register block lives at a fixed address for the whole
     // program.
-    unsafe { &(*atsaml22j::Tc3::PTR).count8() }
+    unsafe { (*atsaml22j::Tc3::PTR).count8() }
 }
 
 /// Returns a reference to the GCLK peripheral register block.

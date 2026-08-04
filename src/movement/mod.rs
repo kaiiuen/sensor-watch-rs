@@ -66,15 +66,15 @@ fn disable_fast_tick_if_possible() {
 /// Handles background tasks for all faces.
 fn handle_background_tasks() {
     unsafe {
-        for i in 0..MOVEMENT_NUM_FACES {
-            if let Some(face) = WATCH_FACES[i].as_deref_mut() {
-                if face.wants_background_task(&MOVEMENT_STATE.settings) {
-                    let background_event = Event {
-                        event_type: EventType::BackgroundTask,
-                        subsecond: 0,
-                    };
-                    face.loop_(background_event, &MOVEMENT_STATE.settings);
-                }
+        for face in WATCH_FACES.iter_mut() {
+            if let Some(face) = face.as_deref_mut()
+                && face.wants_background_task(&MOVEMENT_STATE.settings)
+            {
+                let background_event = Event {
+                    event_type: EventType::BackgroundTask,
+                    subsecond: 0,
+                };
+                face.loop_(background_event, &MOVEMENT_STATE.settings);
             }
         }
         MOVEMENT_STATE.needs_background_tasks_handled = false;
@@ -139,12 +139,12 @@ pub fn illuminate_led() {
         let s = &mut MOVEMENT_STATE;
         if s.settings.led_duration() != 0b111 {
             let red = if s.settings.led_red_color() != 0 {
-                (0xF | (s.settings.led_red_color() << 4)) as u8
+                0xF | (s.settings.led_red_color() << 4)
             } else {
                 0
             };
             let green = if s.settings.led_green_color() != 0 {
-                (0xF | (s.settings.led_green_color() << 4)) as u8
+                0xF | (s.settings.led_green_color() << 4)
             } else {
                 0
             };
@@ -179,11 +179,7 @@ pub fn default_loop_handler(event: Event, _settings: &Settings) -> bool {
             }
         },
         EventType::ModeLongPress => unsafe {
-            if MOVEMENT_STATE.current_face_idx == 0 {
-                move_to_face(0);
-            } else {
-                move_to_face(0);
-            }
+            move_to_face(0);
         },
         _ => {}
     }
@@ -235,13 +231,7 @@ pub fn schedule_background_task_for_face(watch_face_index: usize, date_time: Dat
 pub fn cancel_background_task_for_face(watch_face_index: usize) {
     unsafe {
         SCHEDULED_TASKS[watch_face_index] = 0;
-        let mut other_tasks_scheduled = false;
-        for i in 0..MOVEMENT_NUM_FACES {
-            if SCHEDULED_TASKS[i] != 0 {
-                other_tasks_scheduled = true;
-                break;
-            }
-        }
+        let other_tasks_scheduled = SCHEDULED_TASKS.iter().any(|&t| t != 0);
         MOVEMENT_STATE.has_scheduled_background_task = other_tasks_scheduled;
     }
 }
@@ -365,8 +355,8 @@ pub fn app_setup() {
                 WATCH_FACES[0] = Some(Box::leak(Box::new(simple_clock::SimpleClockFace::new())));
             }
 
-            for i in 0..MOVEMENT_NUM_FACES {
-                if let Some(face) = WATCH_FACES[i].as_deref_mut() {
+            for (i, face) in WATCH_FACES.iter_mut().enumerate() {
+                if let Some(face) = face.as_deref_mut() {
                     face.setup(&MOVEMENT_STATE.settings, i);
                 }
             }

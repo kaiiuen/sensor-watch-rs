@@ -17,14 +17,14 @@ pub const A4: Pin = Pin(1, 0); // PB00 -> RTC/IN0
 fn rtc_mode2() -> &'static Mode2 {
     // SAFETY: the RTC register block lives at a fixed address for the whole
     // program.
-    unsafe { &(*atsaml22j::Rtc::PTR).mode2() }
+    unsafe { (*atsaml22j::Rtc::PTR).mode2() }
 }
 
 /// Returns a reference to the RTC MODE0 register block.
 fn rtc_mode0() -> &'static atsaml22j::rtc::mode0::Mode0 {
     // SAFETY: the RTC register block lives at a fixed address for the whole
     // program.
-    unsafe { &(*atsaml22j::Rtc::PTR).mode0() }
+    unsafe { (*atsaml22j::Rtc::PTR).mode0() }
 }
 
 /// Returns a reference to the SUPC peripheral register block.

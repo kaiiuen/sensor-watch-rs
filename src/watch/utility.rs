@@ -122,7 +122,6 @@ fn year_to_secs(year: u32) -> (u32, bool) {
             leaps = r / 4;
             is_leap = r % 4 == 0;
         }
-        rem = r;
     }
     leap = is_leap;
     let leaps = leaps + 97 * cycles + 24 * centuries - if leap { 1 } else { 0 };
@@ -244,16 +243,9 @@ pub fn date_time_from_unix_time(timestamp: u32, utc_offset: u32) -> DateTime {
     }
     remdays -= remyears * 365;
 
-    let leap = remyears == 0 && (q_cycles != 0 || c_cycles == 0);
-    let mut yday = remdays + 31 + 28 + if leap { 1 } else { 0 };
-    if yday >= 365 + if leap { 1 } else { 0 } {
-        yday -= 365 + if leap { 1 } else { 0 };
-    }
-
     let years = remyears + 4 * q_cycles + 100 * c_cycles + 400 * qc_cycles;
 
     let mut months = 0;
-    let mut remdays = remdays;
     while DAYS_IN_MONTH[months as usize] <= remdays {
         remdays -= DAYS_IN_MONTH[months as usize];
         months += 1;
@@ -267,7 +259,7 @@ pub fn date_time_from_unix_time(timestamp: u32, utc_offset: u32) -> DateTime {
         years += 1;
     }
 
-    if years < 2020 || years > 2083 {
+    if !(2020..=2083).contains(&years) {
         return retval;
     }
     retval.year = (years - WATCH_RTC_REFERENCE_YEAR as i64) as u8;
@@ -331,14 +323,11 @@ pub fn thermistor_temperature(
         reading = series_resistance / (65535.0 / value as f32 - 1.0);
     }
 
-    reading = reading / nominal_resistance;
+    reading /= nominal_resistance;
     reading = libm::logf(reading);
     reading /= b_coefficient;
     reading += 1.0 / (nominal_temperature + 273.15);
-    reading = 1.0 / reading;
-    reading -= 273.15;
-
-    reading
+    1.0 / reading - 273.15
 }
 
 /// Offsets a timestamp by a given amount.

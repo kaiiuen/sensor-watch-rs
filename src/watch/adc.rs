@@ -75,7 +75,7 @@ fn get_analog_value(channel: Muxposselect) -> u16 {
     adc().swtrig().modify(|_, w| w.start().set_bit());
     while !adc().intflag().read().resrdy().bit_is_set() {}
 
-    adc().result().read().bits() as u16
+    adc().result().read().bits()
 }
 
 /// Enables the ADC peripheral.
@@ -231,15 +231,14 @@ pub fn get_vcc_voltage() -> u16 {
     let raw_val = get_analog_value(Muxposselect::Scalediovcc);
 
     // Restore the old reference, if needed.
-    if oldref != Some(Refselselect::Intref) {
-        if let Some(r) = oldref {
-            set_analog_reference_voltage(match r {
-                Refselselect::Intvcc0 => ReferenceVoltage::VccDiv1Point6,
-                Refselselect::Intvcc1 => ReferenceVoltage::VccDiv2,
-                Refselselect::Intvcc2 => ReferenceVoltage::Vcc,
-                _ => ReferenceVoltage::Vcc,
-            });
-        }
+    if let Some(r) = oldref
+        && r != Refselselect::Intref
+    {
+        set_analog_reference_voltage(match r {
+            Refselselect::Intvcc0 => ReferenceVoltage::VccDiv1Point6,
+            Refselselect::Intvcc1 => ReferenceVoltage::VccDiv2,
+            _ => ReferenceVoltage::Vcc,
+        });
     }
 
     let samplenum = adc().avgctrl().read().samplenum().bits();

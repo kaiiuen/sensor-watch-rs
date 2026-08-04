@@ -14,7 +14,7 @@ const SCL: Pin = Pin(1, 31);
 fn i2cm() -> &'static I2cm {
     // SAFETY: the SERCOM1 register block lives at a fixed address for the whole
     // program; this is the standard svd2rust `PTR` access pattern.
-    unsafe { &(*atsaml22j::Sercom1::PTR).i2cm() }
+    unsafe { (*atsaml22j::Sercom1::PTR).i2cm() }
 }
 
 /// Returns a reference to the MCLK peripheral register block.
@@ -121,10 +121,10 @@ pub fn receive(addr: i16, buf: &mut [u8]) {
     // Wait for the address to be acknowledged.
     while i2cm().status().read().busstate().bits() != 1 {}
 
-    for i in 0..buf.len() {
+    for byte in buf.iter_mut() {
         // Wait for data to be ready (slave on bus flag).
         while !i2cm().intflag().read().sb().bit_is_set() {}
-        buf[i] = i2cm().data().read().bits();
+        *byte = i2cm().data().read().bits();
     }
 
     // Issue a STOP condition.

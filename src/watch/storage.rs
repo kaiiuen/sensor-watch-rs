@@ -25,13 +25,7 @@ fn nvmctrl() -> &'static Nvmctrl {
 
 /// Checks that the given address range is within the RWW EEPROM area.
 fn is_valid_address(addr: u32, size: u32) -> bool {
-    if addr < RWWEE_ADDR_START || addr > RWWEE_ADDR_END {
-        return false;
-    }
-    if addr + size > RWWEE_ADDR_END {
-        return false;
-    }
-    true
+    (RWWEE_ADDR_START..=RWWEE_ADDR_END).contains(&addr) && addr + size <= RWWEE_ADDR_END
 }
 
 /// Reads a range of bytes from the storage area.
@@ -49,7 +43,7 @@ pub fn read(row: u32, offset: u32, buffer: &mut [u8]) -> bool {
 
     // SAFETY: reading from the NVM memory array is always safe.
     unsafe {
-        if address % 2 != 0 {
+        if !address.is_multiple_of(2) {
             let data = *NVM_MEMORY.add(nvm_address);
             nvm_address += 1;
             buffer[0] = (data >> 8) as u8;

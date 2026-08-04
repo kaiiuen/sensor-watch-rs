@@ -16,7 +16,7 @@ const A4: Pin = Pin(1, 0);
 fn usart() -> &'static Usart {
     // SAFETY: the SERCOM3 register block lives at a fixed address for the whole
     // program; this is the standard svd2rust `PTR` access pattern.
-    unsafe { &(*atsaml22j::Sercom3::PTR).usart() }
+    unsafe { (*atsaml22j::Sercom3::PTR).usart() }
 }
 
 /// Returns a reference to the MCLK peripheral register block.
@@ -77,7 +77,7 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
             if pin == A2 {
                 usart()
                     .ctrla()
-                    .modify(|r, w| w.bits((r.bits() & !(0x3 << 20)) | (0 << 20)));
+                    .modify(|r, w| w.bits(r.bits() & !(0x3 << 20)));
             } else if pin == A4 {
                 usart()
                     .ctrla()

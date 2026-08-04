@@ -19,11 +19,11 @@ pub struct Settings {
 
 impl Settings {
     /// The inactivity interval for asking the active face to resign.
-    pub fn to_interval(&self) -> u8 {
+    pub fn to_interval(self) -> u8 {
         ((self.reg >> 1) & 0x3) as u8
     }
     /// If true, always time out from the active face to face 0.
-    pub fn to_always(&self) -> bool {
+    pub fn to_always(self) -> bool {
         (self.reg >> 3) & 0x1 != 0
     }
     /// 0 to disable low energy mode, or an inactivity interval for LE mode.
