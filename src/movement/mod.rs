@@ -324,6 +324,9 @@ pub fn app_loop() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
         }
 
+        // Persist any settings a face may have changed.
+        save_settings();
+
         // Release any peripherals a face may have enabled, so nothing is left
         // on to drain the battery while the CPU sleeps.
         release_peripherals();
