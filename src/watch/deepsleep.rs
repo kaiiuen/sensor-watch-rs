@@ -9,9 +9,9 @@ use atsaml22j::rtc::Mode2;
 use atsaml22j::rtc::mode2::tampctrl::{In0actselect, In1actselect, In2actselect};
 
 /// External wake pins.
-const BTN_ALARM: Pin = Pin(0, 2); // PA02 -> RTC/IN2
-const A2: Pin = Pin(1, 2); // PB02 -> RTC/IN1
-const A4: Pin = Pin(1, 0); // PB00 -> RTC/IN0
+pub const BTN_ALARM: Pin = Pin(0, 2); // PA02 -> RTC/IN2
+pub const A2: Pin = Pin(1, 2); // PB02 -> RTC/IN1
+pub const A4: Pin = Pin(1, 0); // PB00 -> RTC/IN0
 
 /// Returns a reference to the RTC MODE2 register block.
 fn rtc_mode2() -> &'static Mode2 {

@@ -48,13 +48,13 @@ fn sync() {
 }
 
 /// Returns true if the TCC0 peripheral is enabled.
-fn tcc_is_enabled() -> bool {
+pub fn is_enabled() -> bool {
     tcc0().ctrla().read().enable().bit_is_set()
 }
 
 /// Enables the bi-color LED.
 pub fn enable_leds() {
-    if !tcc_is_enabled() {
+    if !is_enabled() {
         enable_tcc();
     }
 }
@@ -71,7 +71,7 @@ pub fn set_led_color(red: u8, green: u8) {
 
 /// Sets the LED to a custom RGB color by modulating each output's duty cycle.
 pub fn set_led_color_rgb(red: u8, green: u8, _blue: u8) {
-    if tcc_is_enabled() {
+    if is_enabled() {
         let period = tcc0().per().read().bits();
         // SAFETY: writing valid compare-buffer values.
         unsafe {
