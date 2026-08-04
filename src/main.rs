@@ -21,11 +21,9 @@ fn main() -> ! {
     // Check why we reset (e.g. a watchdog timeout from a previous hang).
     movement::fault::check_reset_reason();
 
-    // Configure interrupt priorities before any interrupt is enabled.
-    watch::irq::init();
-
-    // Initialize the RTC (which sets up the clocks it depends on).
-    watch::rtc::init();
+    // Initialize the hardware in dependency order: interrupt priorities,
+    // clocks, RTC, then the watchdog backstop.
+    watch::init();
 
     // Initialize the Movement framework.
     movement::app_init();
@@ -33,10 +31,6 @@ fn main() -> ! {
 
     // Register the 1 Hz tick callback that wakes the CPU each second.
     watch::rtc::register_tick_callback(movement::cb_tick);
-
-    // Start the hardware watchdog. If the main loop ever hangs, the WDT
-    // resets the chip so the watch always recovers.
-    watch::wdt::init();
 
     loop {
         // The CPU is a start/stop resource: react to the pending event, then

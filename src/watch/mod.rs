@@ -21,3 +21,18 @@ pub mod timeout;
 pub mod uart;
 pub mod utility;
 pub mod wdt;
+
+/// Initializes the hardware in dependency order.
+///
+/// The order matters: each peripheral must be ready before anything that
+/// depends on it is used.
+///   1. Interrupt priorities (before any interrupt is enabled)
+///   2. Clocks (the 32 kHz crystal and GCLK routing that everything needs)
+///   3. RTC (depends on the 32 kHz clock)
+///   4. Watchdog (the hang backstop)
+pub fn init() {
+    irq::init();
+    clock::init();
+    rtc::init();
+    wdt::init();
+}
