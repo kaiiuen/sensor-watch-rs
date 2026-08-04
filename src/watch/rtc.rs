@@ -15,7 +15,7 @@ use atsaml22j::rtc::mode2::ctrla::{Modeselect, Prescalerselect};
 fn rtc() -> &'static Mode2 {
     // SAFETY: the RTC register block lives at a fixed address for the whole
     // program; this is the standard svd2rust `PTR` access pattern.
-    unsafe { &(*atsaml22j::Rtc::PTR).mode2() }
+    unsafe { (*atsaml22j::Rtc::PTR).mode2() }
 }
 
 /// Reference year for the 6-bit year field (2020 is a leap year, giving us
@@ -82,6 +82,12 @@ pub type Callback = fn();
 static mut TICK_CALLBACKS: [Option<Callback>; 8] = [None; 8];
 static mut ALARM_CALLBACK: Option<Callback> = None;
 
+// External wake (tamper) callbacks, keyed by tamper input.
+// IN0 = A4, IN1 = A2, IN2 = BTN_ALARM. These are set by the deep-sleep driver.
+pub(crate) static mut BTN_ALARM_CALLBACK: Option<Callback> = None;
+pub(crate) static mut A2_CALLBACK: Option<Callback> = None;
+pub(crate) static mut A4_CALLBACK: Option<Callback> = None;
+
 /// Returns true if the RTC peripheral is currently enabled.
 pub fn is_enabled() -> bool {
     rtc().ctrla().read().enable().bit_is_set()
@@ -97,8 +103,9 @@ fn sync() {
 /// This is called from the boot code. It is a no-op if the RTC is already
 /// enabled (so we don't reset the clock on a warm reboot).
 pub fn init() {
-    // TODO: enable the MCLK APBAMASK bit for the RTC. The PAC exposes MCLK;
-    //       we'll wire this up when we port the clock init.
+    // Set up the clocks the RTC depends on (XOSC32K + APB clock).
+    super::clock::init();
+
     if is_enabled() {
         return;
     }
@@ -233,9 +240,29 @@ pub extern "C" fn RTC() {
         }
     } else if (interrupt_status & interrupt_enabled) & 0x4000 != 0 {
         // Tamper (external wake) interrupts.
-        // TODO: dispatch btn_alarm / a2 / a4 callbacks from TAMPID.
-        // SAFETY: writing a valid interrupt-flag clear bitmask.
-        unsafe { rtc().intflag().write(|w| w.bits(0x4000)) };
+        let reason = rtc().tampid().read().bits();
+        if reason & 0x04 != 0 {
+            // TAMPID2 = BTN_ALARM
+            if let Some(cb) = unsafe { BTN_ALARM_CALLBACK } {
+                cb();
+            }
+        } else if reason & 0x02 != 0 {
+            // TAMPID1 = A2
+            if let Some(cb) = unsafe { A2_CALLBACK } {
+                cb();
+            }
+        } else if reason & 0x01 != 0 {
+            // TAMPID0 = A4
+            if let Some(cb) = unsafe { A4_CALLBACK } {
+                cb();
+            }
+        }
+        // Clear the tamper ID and the interrupt flag.
+        // SAFETY: writing valid clear values.
+        unsafe {
+            rtc().tampid().write(|w| w.bits(reason));
+            rtc().intflag().write(|w| w.bits(0x4000));
+        }
     } else if (interrupt_status & interrupt_enabled) & 0x0100 != 0 {
         // Alarm0.
         if let Some(cb) = unsafe { ALARM_CALLBACK } {
