@@ -7,9 +7,9 @@ license = "MIT OR Apache-2.0"
 
 [dependencies]
 cortex-m = "0.7"
-cortex-m-rt = "0.7"
+cortex-m-rt = { version = "0.7", features = ["device"] }
 panic-halt = "0.2"
-atsaml22j = "0.1.0"
+atsaml22j = { version = "0.1.0", features = ["rt"] }
 
 # Optional: embedded-hal traits for driver-style code
 embedded-hal = "0.2"
