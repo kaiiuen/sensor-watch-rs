@@ -4,6 +4,7 @@
 //! A4; RX can be A1, A2, A3, or A4.
 
 use crate::watch::gpio::{self, Direction, Function, Pin};
+use crate::watch::timeout::wait_until;
 use atsaml22j::sercom0::usart::Usart;
 
 /// The UART-capable pins.
@@ -35,7 +36,7 @@ fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
 
 /// Waits for the SERCOM to finish synchronizing.
 fn sync() {
-    while usart().syncbusy().read().bits() != 0 {}
+    wait_until(|| usart().syncbusy().read().bits() == 0);
 }
 
 /// Initializes the debug UART.
@@ -122,19 +123,22 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
 /// Transmits a string of bytes on the UART's TX pin.
 pub fn puts(s: &str) {
     for &byte in s.as_bytes() {
-        // Wait for the data register to be empty.
-        while !usart().intflag().read().dre().bit_is_set() {}
+        // Wait for the data register to be empty (bounded).
+        if !wait_until(|| usart().intflag().read().dre().bit_is_set()) {
+            return;
+        }
         // SAFETY: writing a valid DATA value.
         unsafe {
             usart().data().write(|w| w.bits(byte as u16));
         }
     }
-    // Wait for transmission to complete.
-    while !usart().intflag().read().txc().bit_is_set() {}
+    // Wait for transmission to complete (bounded).
+    wait_until(|| usart().intflag().read().txc().bit_is_set());
 }
 
 /// Receives a single byte from the UART's RX pin (blocking).
 pub fn getc() -> u8 {
-    while !usart().intflag().read().rxc().bit_is_set() {}
+    // Wait for a byte (bounded).
+    wait_until(|| usart().intflag().read().rxc().bit_is_set());
     usart().data().read().bits() as u8
 }

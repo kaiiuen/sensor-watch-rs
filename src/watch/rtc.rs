@@ -4,6 +4,7 @@
 //! only peripheral enabled by the boot code; it drives the 1 Hz tick, the alarm,
 //! and wake-from-sleep behavior.
 
+use crate::watch::timeout::wait_until;
 use atsaml22j::rtc::Mode2;
 use atsaml22j::rtc::mode2::ctrla::{Modeselect, Prescalerselect};
 
@@ -95,7 +96,7 @@ pub fn is_enabled() -> bool {
 
 /// Waits for the RTC to finish synchronizing its registers.
 fn sync() {
-    while rtc().syncbusy().read().bits() != 0 {}
+    wait_until(|| rtc().syncbusy().read().bits() == 0);
 }
 
 /// Initializes the RTC in clock/calendar (MODE2) mode.

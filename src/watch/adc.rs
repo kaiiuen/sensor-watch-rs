@@ -4,6 +4,7 @@
 //! analog-capable pins on the 9-pin connector.
 
 use crate::watch::gpio::{self, Direction, Function, Pin};
+use crate::watch::timeout::wait_until;
 use atsaml22j::adc::RegisterBlock as Adc;
 use atsaml22j::adc::avgctrl::Samplenumselect;
 use atsaml22j::adc::ctrlb::Prescalerselect;
@@ -62,7 +63,7 @@ fn supc() -> &'static atsaml22j::supc::RegisterBlock {
 
 /// Waits for the ADC to finish synchronizing.
 fn sync() {
-    while adc().syncbusy().read().bits() != 0 {}
+    wait_until(|| adc().syncbusy().read().bits() == 0);
 }
 
 /// Reads an analog value from the given MUXPOS channel.
@@ -73,7 +74,8 @@ fn get_analog_value(channel: Muxposselect) -> u16 {
     }
 
     adc().swtrig().modify(|_, w| w.start().set_bit());
-    while !adc().intflag().read().resrdy().bit_is_set() {}
+    // Wait for the result to be ready (bounded).
+    wait_until(|| adc().intflag().read().resrdy().bit_is_set());
 
     adc().result().read().bits()
 }

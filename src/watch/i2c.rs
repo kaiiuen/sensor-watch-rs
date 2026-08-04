@@ -4,6 +4,7 @@
 //! devices on the 9-pin connector's I2C bus (SDA=PB30, SCL=PB31).
 
 use crate::watch::gpio::{self, Direction, Function, Pin};
+use crate::watch::timeout::wait_until;
 use atsaml22j::sercom0::i2cm::I2cm;
 
 /// The I2C pins (SDA=PB30, SCL=PB31).
@@ -33,7 +34,7 @@ fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
 
 /// Waits for the SERCOM to finish synchronizing.
 fn sync() {
-    while i2cm().syncbusy().read().bits() != 0 {}
+    wait_until(|| i2cm().syncbusy().read().bits() == 0);
 }
 
 /// Enables the I2C peripheral.
@@ -88,16 +89,20 @@ pub fn send(addr: i16, buf: &[u8]) {
     unsafe {
         i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1));
     }
-    // Wait for the address to be acknowledged.
-    while i2cm().status().read().busstate().bits() != 1 {}
+    // Wait for the address to be acknowledged (bounded).
+    if !wait_until(|| i2cm().status().read().busstate().bits() == 1) {
+        return;
+    }
 
     for &byte in buf {
         // SAFETY: writing a valid DATA value.
         unsafe {
             i2cm().data().write(|w| w.bits(byte));
         }
-        // Wait for the data to be transmitted (master on bus flag).
-        while !i2cm().intflag().read().mb().bit_is_set() {}
+        // Wait for the data to be transmitted (master on bus flag), bounded.
+        if !wait_until(|| i2cm().intflag().read().mb().bit_is_set()) {
+            return;
+        }
     }
 
     // Issue a STOP condition.
@@ -118,12 +123,16 @@ pub fn receive(addr: i16, buf: &mut [u8]) {
             .addr()
             .write(|w| w.bits(((addr as u32) & 0x7F) << 1 | 1));
     }
-    // Wait for the address to be acknowledged.
-    while i2cm().status().read().busstate().bits() != 1 {}
+    // Wait for the address to be acknowledged (bounded).
+    if !wait_until(|| i2cm().status().read().busstate().bits() == 1) {
+        return;
+    }
 
     for byte in buf.iter_mut() {
-        // Wait for data to be ready (slave on bus flag).
-        while !i2cm().intflag().read().sb().bit_is_set() {}
+        // Wait for data to be ready (slave on bus flag), bounded.
+        if !wait_until(|| i2cm().intflag().read().sb().bit_is_set()) {
+            return;
+        }
         *byte = i2cm().data().read().bits();
     }
 

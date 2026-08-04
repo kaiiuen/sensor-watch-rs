@@ -4,6 +4,7 @@
 //! uses A1 (SCK), A2 (MOSI), A4 (MISO), and A3 (CS, not managed here).
 
 use crate::watch::gpio::{self, Direction, Function, Pin};
+use crate::watch::timeout::wait_until;
 use atsaml22j::sercom0::spi::Spi;
 
 /// SPI pins (A1=SCK, A2=MOSI, A4=MISO).
@@ -34,7 +35,7 @@ fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
 
 /// Waits for the SERCOM to finish synchronizing.
 fn sync() {
-    while spi().syncbusy().read().bits() != 0 {}
+    wait_until(|| spi().syncbusy().read().bits() == 0);
 }
 
 /// Enables the SPI peripheral.
@@ -89,16 +90,17 @@ pub fn disable_spi() {
 /// Writes a series of bytes to a device on the SPI bus.
 pub fn write(buf: &[u8]) -> bool {
     for &byte in buf {
-        // Wait for the data register to be empty.
-        while !spi().intflag().read().dre().bit_is_set() {}
+        // Wait for the data register to be empty (bounded).
+        if !wait_until(|| spi().intflag().read().dre().bit_is_set()) {
+            return false;
+        }
         // SAFETY: writing a valid DATA value.
         unsafe {
             spi().data().write(|w| w.bits(byte as u32));
         }
     }
-    // Wait for transmission to complete.
-    while !spi().intflag().read().txc().bit_is_set() {}
-    true
+    // Wait for transmission to complete (bounded).
+    wait_until(|| spi().intflag().read().txc().bit_is_set())
 }
 
 /// Reads a series of bytes from a device on the SPI bus.
@@ -109,8 +111,10 @@ pub fn read(buf: &mut [u8]) -> bool {
         unsafe {
             spi().data().write(|w| w.bits(0xFF));
         }
-        // Wait for the receive buffer to be full.
-        while !spi().intflag().read().rxc().bit_is_set() {}
+        // Wait for the receive buffer to be full (bounded).
+        if !wait_until(|| spi().intflag().read().rxc().bit_is_set()) {
+            return false;
+        }
         *byte = spi().data().read().bits() as u8;
     }
     true
@@ -120,14 +124,18 @@ pub fn read(buf: &mut [u8]) -> bool {
 pub fn transfer(data_out: &[u8], data_in: &mut [u8]) -> bool {
     let len = data_out.len().min(data_in.len());
     for i in 0..len {
-        // Wait for the data register to be empty.
-        while !spi().intflag().read().dre().bit_is_set() {}
+        // Wait for the data register to be empty (bounded).
+        if !wait_until(|| spi().intflag().read().dre().bit_is_set()) {
+            return false;
+        }
         // SAFETY: writing a valid DATA value.
         unsafe {
             spi().data().write(|w| w.bits(data_out[i] as u32));
         }
-        // Wait for the receive buffer to be full.
-        while !spi().intflag().read().rxc().bit_is_set() {}
+        // Wait for the receive buffer to be full (bounded).
+        if !wait_until(|| spi().intflag().read().rxc().bit_is_set()) {
+            return false;
+        }
         data_in[i] = spi().data().read().bits() as u8;
     }
     true

@@ -16,6 +16,7 @@ pub mod rtc;
 pub mod slcd;
 pub mod spi;
 pub mod storage;
+pub mod timeout;
 pub mod uart;
 pub mod utility;
 pub mod wdt;
