@@ -1,0 +1,156 @@
+# Sensor-Watch Firmware — Getting Started & Contributing
+
+This guide covers how to build, test, and contribute to the Sensor-Watch firmware
+rewrite in Rust.
+
+---
+
+## Prerequisites
+
+- **Rust** (stable) with the `thumbv6m-none-eabi` target:
+  ```sh
+  rustup target add thumbv6m-none-eabi
+  ```
+- **Git** for version control.
+
+## Building
+
+The firmware builds for the SAM L22 (Cortex-M0+):
+
+```sh
+cargo build --target thumbv6m-none-eabi
+```
+
+For a release build (optimized, smaller):
+
+```sh
+cargo build --release --target thumbv6m-none-eabi
+```
+
+The output ELF is at `target/thumbv6m-none-eabi/release/sensor-watch`.
+
+## Testing
+
+The `core` crate contains pure logic that can be tested on the host:
+
+```sh
+cargo test -p sensor-watch-core
+```
+
+This runs the unit tests for date math, settings bit-packing, and DateTime
+pack/unpack. These tests give *proof* the logic is correct without needing the
+physical watch.
+
+## Linting
+
+```sh
+cargo clippy --target thumbv6m-none-eabi -- -D warnings
+cargo clippy -p sensor-watch-core -- -D warnings
+```
+
+## Formatting
+
+```sh
+cargo fmt --check
+```
+
+## CI
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
+
+- Build (thumbv6m)
+- Clippy (`-D warnings`)
+- Host tests
+- Format check
+
+---
+
+## Project structure
+
+```
+sensor-watch-rs/
+├── Cargo.toml          # workspace + firmware package
+├── core/               # pure logic, host-testable
+├── src/
+│   ├── main.rs         # entry point
+│   ├── panic.rs        # panic handler
+│   ├── watch/          # hardware abstraction layer
+│   └── movement/       # watchface framework + faces
+├── docs/               # this documentation
+└── .github/workflows/  # CI
+```
+
+---
+
+## How to add a new watch face
+
+1. Create a new file `src/movement/<name>.rs`.
+2. Define a state struct with a `new_static()` const constructor.
+3. Implement the `WatchFace` trait:
+   - `setup()` — one-time init
+   - `activate()` — prepare to go on-screen
+   - `loop_()` — react to events, update the display
+   - `resign()` — prepare to go off-screen
+   - `wants_background_task()` — optional
+4. Add the module to `src/movement/mod.rs`.
+5. Add a `static` instance and register it in `app_setup()`.
+
+### Example skeleton
+
+```rust
+use crate::movement::types::{Event, Settings, WatchFace};
+
+pub struct MyFace {
+    // state fields
+}
+
+impl MyFace {
+    pub const fn new_static() -> Self {
+        MyFace { /* init */ }
+    }
+}
+
+impl WatchFace for MyFace {
+    fn setup(&mut self, _settings: &Settings, _index: usize) {}
+    fn activate(&mut self, _settings: &Settings) {}
+    fn loop_(&mut self, event: Event, _settings: &mut Settings) {
+        match event {
+            // handle events
+            _ => {}
+        }
+    }
+    fn resign(&mut self, _settings: &mut Settings) {}
+}
+```
+
+---
+
+## Design rules to follow
+
+1. **No heap.** Everything is a `static` instance or a fixed-size stack buffer.
+   Do not allocate.
+2. **No polling.** If a face needs periodic work, schedule an RTC wakeup. Never
+   keep the CPU awake.
+3. **React and sleep.** A face's `loop_` reacts to one event and returns. It
+   never loops.
+4. **Release peripherals.** If a face enables a peripheral, it's auto-released
+   after the reaction. Don't leave anything on.
+5. **Persist settings.** If a face changes a setting, it's auto-saved. Don't
+   write to flash during normal operation.
+6. **Bounded waits.** Never use an unbounded `while !flag {}`. Use
+   `wait_until()`.
+7. **Document.** Every public item should have a doc comment explaining what and
+   why.
+
+---
+
+## Testing philosophy
+
+The firmware itself can't run unit tests (it's bare-metal). So:
+
+- **Pure logic** lives in the `core` crate, which is host-testable.
+- **Hardware drivers** are verified by review and by the CI build.
+- **Faces** are verified by review and by the CI build.
+
+When you add logic that has no hardware dependency, put it in `core` so it can be
+tested.
