@@ -12,6 +12,7 @@ pub mod fault;
 pub mod persist;
 pub mod simple_clock;
 pub mod types;
+pub mod world_clock;
 
 use crate::movement::types::*;
 use crate::watch;
@@ -38,6 +39,9 @@ static mut ALARM: alarm::AlarmFace = alarm::AlarmFace::new_static();
 
 /// The static counter face instance.
 static mut COUNTER: counter::CounterFace = counter::CounterFace::new_static();
+
+/// The static world clock face instance.
+static mut WORLD_CLOCK: world_clock::WorldClockFace = world_clock::WorldClockFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -270,6 +274,7 @@ pub fn app_setup() {
             WATCH_FACES[1] = Some(&mut *core::ptr::addr_of_mut!(COUNTDOWN));
             WATCH_FACES[2] = Some(&mut *core::ptr::addr_of_mut!(ALARM));
             WATCH_FACES[3] = Some(&mut *core::ptr::addr_of_mut!(COUNTER));
+            WATCH_FACES[4] = Some(&mut *core::ptr::addr_of_mut!(WORLD_CLOCK));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
