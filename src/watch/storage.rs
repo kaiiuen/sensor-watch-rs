@@ -104,8 +104,15 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
             w.cmdex().bits(0xA5)
         });
     }
+    sync();
 
-    true
+    // Write-verify: read back the data and confirm it matches. If it does
+    // not, the write failed (e.g. the row was not erased) and we report it.
+    let mut verify = [0u8; 256];
+    if !read(row, offset, &mut verify[..size as usize]) {
+        return false;
+    }
+    verify[..size as usize] == *buffer
 }
 
 /// Erases a row in the storage area, setting all its bytes to 0xFF.
@@ -136,5 +143,37 @@ pub fn sync() -> bool {
     unsafe {
         nvmctrl().status().write(|w| w.bits(0xFFFF));
     }
+    true
+}
+
+/// The number of rows used for wear-leveled writes.
+///
+/// We rotate writes across these rows so no single row wears out first,
+/// extending the life of the EEPROM emulation area.
+const WEAR_ROWS: u32 = 8;
+
+/// The current wear-leveling row index, stored in a backup register.
+const WEAR_ROW_REG: u8 = 7;
+
+/// Writes data with simple wear leveling.
+///
+/// The data is written to a rotating row (0..WEAR_ROWS). Each write moves to
+/// the next row, so writes are spread across the area instead of hammering
+/// one row. The current row index is persisted in an RTC backup register so
+/// it survives resets.
+pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
+    let row = crate::watch::deepsleep::get_backup_data(WEAR_ROW_REG) % WEAR_ROWS;
+
+    // Erase the target row, then write to it.
+    if !erase(row) {
+        return false;
+    }
+    if !write(row, offset, buffer) {
+        return false;
+    }
+
+    // Advance to the next row for the next write.
+    let next = (row + 1) % WEAR_ROWS;
+    crate::watch::deepsleep::store_backup_data(next, WEAR_ROW_REG);
     true
 }
