@@ -5,6 +5,7 @@
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
 pub mod alarm;
+pub mod blinky;
 pub mod board;
 pub mod countdown;
 pub mod counter;
@@ -13,10 +14,12 @@ pub mod decimal_time;
 pub mod diagnostics;
 pub mod fault;
 pub mod flashlight;
+pub mod minimal_clock;
 pub mod persist;
 pub mod simple_clock;
 pub mod stats;
 pub mod types;
+pub mod weeknumber;
 pub mod world_clock;
 
 use crate::movement::types::*;
@@ -57,6 +60,17 @@ static mut FLASHLIGHT: flashlight::FlashlightFace = flashlight::FlashlightFace::
 /// The static decimal time face instance.
 static mut DECIMAL_TIME: decimal_time::DecimalTimeFace =
     decimal_time::DecimalTimeFace::new_static();
+
+/// The static week number clock face instance.
+static mut WEEKNUMBER: weeknumber::WeekNumberClockFace =
+    weeknumber::WeekNumberClockFace::new_static();
+
+/// The static minimal clock face instance.
+static mut MINIMAL_CLOCK: minimal_clock::MinimalClockFace =
+    minimal_clock::MinimalClockFace::new_static();
+
+/// The static blinky face instance.
+static mut BLINKY: blinky::BlinkyFace = blinky::BlinkyFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -316,6 +330,9 @@ pub fn app_setup() {
             WATCH_FACES[5] = Some(&mut *core::ptr::addr_of_mut!(DIAGNOSTICS));
             WATCH_FACES[6] = Some(&mut *core::ptr::addr_of_mut!(FLASHLIGHT));
             WATCH_FACES[7] = Some(&mut *core::ptr::addr_of_mut!(DECIMAL_TIME));
+            WATCH_FACES[8] = Some(&mut *core::ptr::addr_of_mut!(WEEKNUMBER));
+            WATCH_FACES[9] = Some(&mut *core::ptr::addr_of_mut!(MINIMAL_CLOCK));
+            WATCH_FACES[10] = Some(&mut *core::ptr::addr_of_mut!(BLINKY));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
