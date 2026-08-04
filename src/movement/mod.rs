@@ -4,6 +4,7 @@
 //! resource: it wakes only to react to a single event, then immediately
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
+pub mod debounce;
 pub mod fault;
 pub mod simple_clock;
 pub mod types;
@@ -30,6 +31,9 @@ pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FAC
 
 /// The pending event that woke the CPU.
 pub static mut PENDING_EVENT: Event = Event::Tick;
+
+/// A fast-tick counter (128 Hz) used for long-press detection.
+pub static mut FAST_TICKS: u16 = 0;
 
 /// Handles background tasks for all faces.
 fn handle_background_tasks() {
@@ -209,6 +213,9 @@ pub fn app_setup() {
         };
         rtc::register_alarm_callback(cb_alarm_fired, alarm_time, rtc::AlarmMatch::Ss);
 
+        // Register a fast tick for long-press detection.
+        rtc::register_periodic_callback(cb_fast_tick, 128);
+
         // Register the button interrupts.
         watch::extint::enable_external_interrupts();
         watch::extint::register_interrupt_callback(
@@ -279,42 +286,32 @@ pub fn app_loop() {
     }
 }
 
-/// Figures out the button event from the pin level and down timestamp.
-fn figure_out_button_event(pin_level: bool, button: Button, down_timestamp: &mut u16) -> Event {
-    if pin_level {
-        *down_timestamp = 1;
-        Event::Button(button, ButtonEvent::Down)
-    } else {
-        let long = *down_timestamp > MOVEMENT_LONG_PRESS_TICKS;
-        *down_timestamp = 0;
-        if long {
-            Event::Button(button, ButtonEvent::LongUp)
-        } else {
-            Event::Button(button, ButtonEvent::Up)
-        }
-    }
-}
-
 // --- Interrupt callbacks ---
 
 fn cb_light_btn_interrupt() {
     unsafe {
         let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_LIGHT);
-        PENDING_EVENT = figure_out_button_event(pin_level, Button::Light, &mut 0);
+        if let Some(ev) = debounce::update(Button::Light, pin_level) {
+            PENDING_EVENT = ev;
+        }
     }
 }
 
 fn cb_mode_btn_interrupt() {
     unsafe {
         let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_MODE);
-        PENDING_EVENT = figure_out_button_event(pin_level, Button::Mode, &mut 0);
+        if let Some(ev) = debounce::update(Button::Mode, pin_level) {
+            PENDING_EVENT = ev;
+        }
     }
 }
 
 fn cb_alarm_btn_interrupt() {
     unsafe {
         let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_ALARM);
-        PENDING_EVENT = figure_out_button_event(pin_level, Button::Alarm, &mut 0);
+        if let Some(ev) = debounce::update(Button::Alarm, pin_level) {
+            PENDING_EVENT = ev;
+        }
     }
 }
 
@@ -328,5 +325,17 @@ fn cb_alarm_fired() {
 pub fn cb_tick() {
     unsafe {
         PENDING_EVENT = Event::Tick;
+    }
+}
+
+/// The 128 Hz fast tick: tracks time for long-press detection.
+pub fn cb_fast_tick() {
+    unsafe {
+        FAST_TICKS = FAST_TICKS.wrapping_add(1);
+        for button in [Button::Light, Button::Mode, Button::Alarm] {
+            if let Some(ev) = debounce::check_long_press(button, FAST_TICKS) {
+                PENDING_EVENT = ev;
+            }
+        }
     }
 }
