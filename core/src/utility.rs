@@ -1,10 +1,10 @@
-//! Utility functions.
+//! Date/time utility functions.
 //!
-//! Port of the C `watch_utility.c`. Provides date/time helpers used by watch
-//! faces: weekday, week number, leap year, UNIX time conversion, durations,
-//! 12-hour conversion, and thermistor temperature.
+//! Port of the C `watch_utility.c`. Provides weekday, week number, leap year,
+//! UNIX time conversion, durations, and 12-hour conversion. Pure logic with no
+//! hardware dependency, so it is fully unit-testable.
 
-use crate::watch::rtc::{DateTime, WATCH_RTC_REFERENCE_YEAR};
+use crate::datetime::{DateTime, WATCH_RTC_REFERENCE_YEAR};
 
 /// A duration broken into days, hours, minutes, and seconds.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,7 +64,7 @@ pub fn get_weeknumber(year: u16, month: u8, day: u8) -> u8 {
     val as u8
 }
 
-/// Returns 1 if the year is a leap year, 0 otherwise.
+/// Returns true if the year is a leap year.
 pub fn is_leap(y: u16) -> bool {
     let y = y as i32;
     y % 4 == 0 && (y % 100 != 0 || y % 400 == 0)
@@ -305,40 +305,6 @@ pub fn convert_to_12_hour(date_time: &mut DateTime) -> bool {
     is_pm
 }
 
-/// Returns a temperature in degrees Celsius for a thermistor voltage divider.
-pub fn thermistor_temperature(
-    value: u16,
-    highside: bool,
-    b_coefficient: f32,
-    nominal_temperature: f32,
-    nominal_resistance: f32,
-    series_resistance: f32,
-) -> f32 {
-    let mut reading = value as f32;
-
-    if highside {
-        reading = (1023.0 * series_resistance) / (reading / 64.0);
-        reading -= series_resistance;
-    } else {
-        reading = series_resistance / (65535.0 / value as f32 - 1.0);
-    }
-
-    reading /= nominal_resistance;
-    reading = libm::logf(reading);
-    reading /= b_coefficient;
-    reading += 1.0 / (nominal_temperature + 273.15);
-    1.0 / reading - 273.15
-}
-
-/// Offsets a timestamp by a given amount.
-pub fn offset_timestamp(now: u32, hours: i8, minutes: i8, seconds: i8) -> u32 {
-    let mut new = now as i64;
-    new += hours as i64 * 60 * 60;
-    new += minutes as i64 * 60;
-    new += seconds as i64;
-    new as u32
-}
-
 /// Returns the number of days in a month, handling leap years for February.
 pub fn days_in_month(month: u8, year: u16) -> u8 {
     const DAYS_IN_MONTH: [u8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
@@ -347,4 +313,104 @@ pub fn days_in_month(month: u8, year: u16) -> u8 {
         days += 1;
     }
     days
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn dt(y: u16, mo: u8, d: u8, h: u8, mi: u8, s: u8) -> DateTime {
+        DateTime {
+            second: s,
+            minute: mi,
+            hour: h,
+            day: d,
+            month: mo,
+            year: (y - WATCH_RTC_REFERENCE_YEAR) as u8,
+        }
+    }
+
+    #[test]
+    fn leap_year_rules() {
+        assert!(is_leap(2020));
+        assert!(is_leap(2024));
+        assert!(!is_leap(2021));
+        assert!(!is_leap(2100)); // divisible by 100 but not 400
+        assert!(is_leap(2000)); // divisible by 400
+    }
+
+    #[test]
+    fn known_weekdays() {
+        // 2023-01-01 was a Sunday.
+        assert_eq!(get_iso8601_weekday_number(2023, 1, 1), 7);
+        // 2023-01-02 was a Monday.
+        assert_eq!(get_iso8601_weekday_number(2023, 1, 2), 1);
+        // 2023-07-04 was a Tuesday.
+        assert_eq!(get_iso8601_weekday_number(2023, 7, 4), 2);
+    }
+
+    #[test]
+    fn unix_epoch() {
+        // 1970-01-01 00:00:00 UTC = 0.
+        assert_eq!(convert_to_unix_time(1970, 1, 1, 0, 0, 0, 0), 0);
+    }
+
+    #[test]
+    fn known_unix_time() {
+        // 2023-01-01 00:00:00 UTC.
+        assert_eq!(convert_to_unix_time(2023, 1, 1, 0, 0, 0, 0), 1672531200);
+    }
+
+    #[test]
+    fn unix_round_trip() {
+        // A date within the representable range (2020-2083).
+        let d = dt(2025, 6, 15, 12, 30, 45);
+        let ts = date_time_to_unix_time(d, 0);
+        assert_eq!(date_time_from_unix_time(ts, 0), d);
+    }
+
+    #[test]
+    fn unix_round_trip_leap_day() {
+        let d = dt(2024, 2, 29, 8, 0, 0);
+        let ts = date_time_to_unix_time(d, 0);
+        assert_eq!(date_time_from_unix_time(ts, 0), d);
+    }
+
+    #[test]
+    fn timezone_conversion() {
+        // 12:00 UTC -> 07:00 EST (UTC-5, i.e. -300 min = -18000 s).
+        // A positive utc_offset means the local time is ahead of UTC.
+        let d = dt(2025, 1, 1, 12, 0, 0);
+        // Convert from UTC (offset 0) to a zone 5 hours behind (offset -18000).
+        let converted = date_time_convert_zone(d, 0, 18000);
+        assert_eq!(converted.hour, 17);
+    }
+
+    #[test]
+    fn seconds_to_duration_works() {
+        let dur = seconds_to_duration(90061); // 1 day, 1 hour, 1 min, 1 sec
+        assert_eq!(dur.days, 1);
+        assert_eq!(dur.hours, 1);
+        assert_eq!(dur.minutes, 1);
+        assert_eq!(dur.seconds, 1);
+    }
+
+    #[test]
+    fn twelve_hour_conversion() {
+        let mut d = dt(2025, 1, 1, 0, 0, 0); // midnight
+        assert!(!convert_to_12_hour(&mut d));
+        assert_eq!(d.hour, 12);
+
+        let mut d = dt(2025, 1, 1, 15, 0, 0); // 3 PM
+        assert!(convert_to_12_hour(&mut d));
+        assert_eq!(d.hour, 3);
+    }
+
+    #[test]
+    fn days_in_month_leap() {
+        assert_eq!(days_in_month(2, 2023), 28);
+        assert_eq!(days_in_month(2, 2024), 29);
+        assert_eq!(days_in_month(4, 2024), 30);
+        assert_eq!(days_in_month(1, 2024), 31);
+    }
 }
