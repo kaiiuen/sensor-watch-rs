@@ -8,6 +8,9 @@
 
 #![no_std]
 
+extern crate alloc;
+
 pub mod datetime;
 pub mod settings;
+pub mod uf2;
 pub mod utility;
