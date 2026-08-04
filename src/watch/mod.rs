@@ -14,4 +14,5 @@ pub mod led;
 pub mod rtc;
 pub mod slcd;
 pub mod spi;
+pub mod uart;
 pub mod utility;
