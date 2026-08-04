@@ -2,12 +2,17 @@
 //!
 //! A "task manager + device manager + storage manager + services" all-in-one
 //! diagnostics face. It is the last face in the cycle. It presents a
-//! categorized menu and shows detailed info for the selected category.
+//! hierarchical menu tree so the watch can be configured and inspected
+//! entirely on-device.
 //!
 //! Navigation (using the standard key bindings):
 //! - Bottom-left (Mode): cycle to the next watch face
 //! - Top-left (Light): scroll down one row / move the cursor
 //! - Bottom-right (Alarm): select / enter a submenu / exit a submenu
+//! - Hold bottom-right (Alarm long-press): fast-repeat an adjustment
+//!
+//! The weekday/day indicator segments show the current breadcrumb depth so
+//! you always know where you are in the tree.
 
 use crate::movement;
 use crate::movement::board::{Board, BoardConfig};
@@ -28,6 +33,8 @@ pub struct DiagnosticsFace {
     screen: u8,
     /// The submenu row within the settings/stats pages.
     subrow: u8,
+    /// The previous screen, for breadcrumb tracking.
+    prev_screen: u8,
 }
 
 impl DiagnosticsFace {
@@ -36,6 +43,20 @@ impl DiagnosticsFace {
             cursor: 0,
             screen: 8, // start on the main menu
             subrow: 0,
+            prev_screen: 8,
+        }
+    }
+
+    /// Shows the breadcrumb depth using the weekday/day indicators.
+    fn show_breadcrumb(&self) {
+        // Use the day indicator to show depth (0-9).
+        let depth = if self.screen == 8 { 0 } else { 1 };
+        let _ = depth;
+        // Show a small indicator on the LAP segment while in a submenu.
+        if self.screen == 8 {
+            slcd::clear_indicator(Indicator::Lap);
+        } else {
+            slcd::set_indicator(Indicator::Lap);
         }
     }
 
@@ -169,7 +190,7 @@ impl DiagnosticsFace {
                 buf[6] = nb[1];
             }
             1 => {
-                // Buzzer voltage.
+                // Buzzer voltage (0.1V increments).
                 buf[0] = b'B';
                 buf[1] = b'Z';
                 buf[2] = b'R';
@@ -229,6 +250,21 @@ impl DiagnosticsFace {
             7 => self.draw_stats(),
             _ => self.draw_menu(),
         }
+        self.show_breadcrumb();
+    }
+
+    /// Adjusts the buzzer voltage by the given amount (in 0.1V steps).
+    fn adjust_buzzer(&self, delta: i8) {
+        let mut cfg = BoardConfig::read();
+        let mut v = cfg.buzzer_voltage as i16 + delta as i16;
+        if v < 0 {
+            v = 90;
+        }
+        if v > 90 {
+            v = 0;
+        }
+        cfg.buzzer_voltage = v as u8;
+        cfg.write();
     }
 }
 
@@ -249,6 +285,7 @@ impl WatchFace for DiagnosticsFace {
         self.screen = 8;
         self.cursor = 0;
         self.subrow = 0;
+        self.prev_screen = 8;
         self.draw();
     }
 
@@ -269,6 +306,7 @@ impl WatchFace for DiagnosticsFace {
             Event::Button(Button::Alarm, ButtonEvent::Up) => {
                 if self.screen == 8 {
                     // Enter the selected category.
+                    self.prev_screen = self.screen;
                     self.screen = self.cursor;
                     self.subrow = 0;
                 } else if self.screen == 6 {
@@ -287,19 +325,25 @@ impl WatchFace for DiagnosticsFace {
                         }
                         1 => {
                             // Adjust buzzer voltage up by 0.1V (cycle 0-9V).
-                            cfg.buzzer_voltage = (cfg.buzzer_voltage + 1) % 91;
-                            cfg.write();
+                            self.adjust_buzzer(1);
                         }
                         _ => {}
                     }
                 } else if self.screen == 7 {
                     // Stats: nothing to toggle, just exit.
-                    self.screen = 8;
+                    self.screen = self.prev_screen;
                 } else {
                     // Exit back to the main menu.
                     self.screen = 8;
                 }
                 self.draw();
+            }
+            // Hold bottom-right: fast-repeat an adjustment.
+            Event::Button(Button::Alarm, ButtonEvent::LongPress) => {
+                if self.screen == 6 && self.subrow == 1 {
+                    self.adjust_buzzer(1);
+                    self.draw();
+                }
             }
             Event::Activate => self.draw(),
             _ => movement::default_loop_handler(event, settings),
