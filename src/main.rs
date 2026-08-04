@@ -21,6 +21,9 @@ fn main() -> ! {
     // Check why we reset (e.g. a watchdog timeout from a previous hang).
     movement::fault::check_reset_reason();
 
+    // Configure interrupt priorities before any interrupt is enabled.
+    watch::irq::init();
+
     // Initialize the RTC (which sets up the clocks it depends on).
     watch::rtc::init();
 
