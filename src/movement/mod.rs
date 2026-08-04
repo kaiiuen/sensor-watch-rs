@@ -5,6 +5,7 @@
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
 pub mod alarm;
+pub mod counter;
 pub mod countdown;
 pub mod debounce;
 pub mod fault;
@@ -34,6 +35,9 @@ static mut COUNTDOWN: countdown::CountdownFace = countdown::CountdownFace::new_s
 
 /// The static alarm face instance.
 static mut ALARM: alarm::AlarmFace = alarm::AlarmFace::new_static();
+
+/// The static counter face instance.
+static mut COUNTER: counter::CounterFace = counter::CounterFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -265,6 +269,7 @@ pub fn app_setup() {
             WATCH_FACES[0] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK));
             WATCH_FACES[1] = Some(&mut *core::ptr::addr_of_mut!(COUNTDOWN));
             WATCH_FACES[2] = Some(&mut *core::ptr::addr_of_mut!(ALARM));
+            WATCH_FACES[3] = Some(&mut *core::ptr::addr_of_mut!(COUNTER));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
