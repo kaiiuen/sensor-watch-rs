@@ -6,6 +6,7 @@
 
 pub mod debounce;
 pub mod fault;
+pub mod persist;
 pub mod simple_clock;
 pub mod types;
 
@@ -90,6 +91,15 @@ pub fn default_loop_handler(event: Event, _settings: &Settings) {
         Event::Button(Button::Light, ButtonEvent::Down) => illuminate_led(),
         Event::Button(Button::Mode, ButtonEvent::LongPress) => move_to_face(0),
         _ => {}
+    }
+}
+
+/// Saves the current settings to flash so they survive a reset.
+///
+/// Faces should call this after changing any setting.
+pub fn save_settings() {
+    unsafe {
+        persist::save(&MOVEMENT_STATE.settings);
     }
 }
 
@@ -186,13 +196,19 @@ pub fn app_init() {
     unsafe {
         rtc::freqcorr_write(22, 0);
         MOVEMENT_STATE = MovementState::new();
-        MOVEMENT_STATE.settings.set_clock_mode_24h(false);
-        MOVEMENT_STATE.settings.set_led_red_color(0x0);
-        MOVEMENT_STATE.settings.set_led_green_color(0xF);
-        MOVEMENT_STATE.settings.set_button_should_sound(true);
-        MOVEMENT_STATE.settings.set_to_interval(0);
-        MOVEMENT_STATE.settings.set_le_interval(2);
-        MOVEMENT_STATE.settings.set_led_duration(1);
+
+        // Load persisted settings, or apply defaults on first boot.
+        if let Some(saved) = persist::load() {
+            MOVEMENT_STATE.settings = saved;
+        } else {
+            MOVEMENT_STATE.settings.set_clock_mode_24h(false);
+            MOVEMENT_STATE.settings.set_led_red_color(0x0);
+            MOVEMENT_STATE.settings.set_led_green_color(0xF);
+            MOVEMENT_STATE.settings.set_button_should_sound(true);
+            MOVEMENT_STATE.settings.set_to_interval(0);
+            MOVEMENT_STATE.settings.set_le_interval(2);
+            MOVEMENT_STATE.settings.set_led_duration(1);
+        }
         MOVEMENT_STATE.next_available_backup_register = 4;
     }
 }
