@@ -21,15 +21,19 @@ pub mod metronome;
 pub mod minimal_clock;
 pub mod moon_phase;
 pub mod persist;
+pub mod probability;
 pub mod pulsometer;
+pub mod ratemeter;
 pub mod sailing;
 pub mod ships_bell;
 pub mod simple_clock;
+pub mod simple_coin_flip;
 pub mod stats;
 pub mod stopwatch;
 pub mod tachymeter;
 pub mod tally;
 pub mod timer;
+pub mod toss_up;
 pub mod types;
 pub mod weeknumber;
 pub mod world_clock;
@@ -121,6 +125,19 @@ static mut TACHYMETER: tachymeter::TachymeterFace = tachymeter::TachymeterFace::
 
 /// The static pulsometer face instance.
 static mut PULSOMETER: pulsometer::PulsometerFace = pulsometer::PulsometerFace::new_static();
+
+/// The static ratemeter face instance.
+static mut RATEMETER: ratemeter::RatemeterFace = ratemeter::RatemeterFace::new_static();
+
+/// The static probability face instance.
+static mut PROBABILITY: probability::ProbabilityFace = probability::ProbabilityFace::new_static();
+
+/// The static simple coin flip face instance.
+static mut SIMPLE_COIN_FLIP: simple_coin_flip::SimpleCoinFlipFace =
+    simple_coin_flip::SimpleCoinFlipFace::new_static();
+
+/// The static toss-up face instance.
+static mut TOSS_UP: toss_up::TossUpFace = toss_up::TossUpFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -395,6 +412,10 @@ pub fn app_setup() {
             WATCH_FACES[20] = Some(&mut *core::ptr::addr_of_mut!(METRONOME));
             WATCH_FACES[21] = Some(&mut *core::ptr::addr_of_mut!(TACHYMETER));
             WATCH_FACES[22] = Some(&mut *core::ptr::addr_of_mut!(PULSOMETER));
+            WATCH_FACES[23] = Some(&mut *core::ptr::addr_of_mut!(RATEMETER));
+            WATCH_FACES[24] = Some(&mut *core::ptr::addr_of_mut!(PROBABILITY));
+            WATCH_FACES[25] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_COIN_FLIP));
+            WATCH_FACES[26] = Some(&mut *core::ptr::addr_of_mut!(TOSS_UP));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
