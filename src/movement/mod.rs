@@ -4,6 +4,7 @@
 //! resource: it wakes only to react to a single event, then immediately
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
+pub mod alarm;
 pub mod countdown;
 pub mod debounce;
 pub mod fault;
@@ -30,6 +31,9 @@ static mut SIMPLE_CLOCK: simple_clock::SimpleClockFace =
 
 /// The static countdown face instance.
 static mut COUNTDOWN: countdown::CountdownFace = countdown::CountdownFace::new_static();
+
+/// The static alarm face instance.
+static mut ALARM: alarm::AlarmFace = alarm::AlarmFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -260,6 +264,7 @@ pub fn app_setup() {
         if WATCH_FACES[0].is_none() {
             WATCH_FACES[0] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK));
             WATCH_FACES[1] = Some(&mut *core::ptr::addr_of_mut!(COUNTDOWN));
+            WATCH_FACES[2] = Some(&mut *core::ptr::addr_of_mut!(ALARM));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
@@ -281,7 +286,7 @@ pub fn app_loop() {
         // Handle a pending face change first.
         if MOVEMENT_STATE.watch_face_changed {
             if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
-                face.resign(&MOVEMENT_STATE.settings);
+                face.resign(&mut MOVEMENT_STATE.settings);
             }
             MOVEMENT_STATE.current_face_idx = MOVEMENT_STATE.next_face_idx;
             watch::slcd::clear_display();
@@ -299,7 +304,7 @@ pub fn app_loop() {
         // React to the single pending event.
         let event = PENDING_EVENT;
         if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
-            face.loop_(event, &MOVEMENT_STATE.settings);
+            face.loop_(event, &mut MOVEMENT_STATE.settings);
         }
 
         // Release any peripherals a face may have enabled, so nothing is left

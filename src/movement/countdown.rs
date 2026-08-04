@@ -184,7 +184,7 @@ impl WatchFace for CountdownFace {
         }
     }
 
-    fn loop_(&mut self, event: Event, settings: &Settings) {
+    fn loop_(&mut self, event: Event, settings: &mut Settings) {
         match event {
             Event::Activate => self.draw(),
             Event::Tick => {
@@ -245,7 +245,7 @@ impl WatchFace for CountdownFace {
         self.draw();
     }
 
-    fn resign(&mut self, _settings: &Settings) {
+    fn resign(&mut self, _settings: &mut Settings) {
         if self.mode == Mode::Setting {
             self.selection = 0;
             self.mode = Mode::Reset;

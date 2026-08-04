@@ -69,7 +69,7 @@ impl WatchFace for SimpleClockFace {
         self.previous_date_time = 0xFFFF_FFFF;
     }
 
-    fn loop_(&mut self, event: Event, settings: &Settings) {
+    fn loop_(&mut self, event: Event, settings: &mut Settings) {
         let mut buf = [0u8; 11];
         let pos: u8;
 
@@ -146,7 +146,7 @@ impl WatchFace for SimpleClockFace {
         }
     }
 
-    fn resign(&mut self, _settings: &Settings) {}
+    fn resign(&mut self, _settings: &mut Settings) {}
 
     fn wants_background_task(&mut self, _settings: &Settings) -> bool {
         if !self.signal_enabled {

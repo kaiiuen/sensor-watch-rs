@@ -139,6 +139,13 @@ pub enum Event {
     Button(Button, ButtonEvent),
 }
 
+impl Event {
+    /// Returns the subsecond value (0 on non-tick events).
+    pub fn subsecond(&self) -> u8 {
+        0
+    }
+}
+
 /// The interface a watch face must implement.
 ///
 /// Faces are pure state machines: they react to a single event and return.
@@ -149,9 +156,9 @@ pub trait WatchFace {
     /// Prepare to go on-screen.
     fn activate(&mut self, settings: &Settings);
     /// React to a single event and update the display.
-    fn loop_(&mut self, event: Event, settings: &Settings);
+    fn loop_(&mut self, event: Event, settings: &mut Settings);
     /// Prepare to go off-screen.
-    fn resign(&mut self, settings: &Settings);
+    fn resign(&mut self, settings: &mut Settings);
     /// OPTIONAL: request an opportunity to run a background task.
     fn wants_background_task(&mut self, _settings: &Settings) -> bool {
         false
