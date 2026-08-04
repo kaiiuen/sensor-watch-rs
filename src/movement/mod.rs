@@ -281,9 +281,24 @@ pub fn app_loop() {
             face.loop_(event, &MOVEMENT_STATE.settings);
         }
 
+        // Release any peripherals a face may have enabled, so nothing is left
+        // on to drain the battery while the CPU sleeps.
+        release_peripherals();
+
         // After reacting, always return to STANDBY. The CPU never stays awake.
         PENDING_EVENT = Event::Tick;
     }
+}
+
+/// Disables peripherals that should not remain on while the CPU sleeps.
+///
+/// The LCD, RTC, and buttons must stay on (they retain the display and wake
+/// the CPU). Everything else — ADC, I2C, SPI, UART — is released so it cannot
+/// drain the battery.
+fn release_peripherals() {
+    watch::adc::disable_adc();
+    watch::i2c::disable_i2c();
+    watch::spi::disable_spi();
 }
 
 // --- Interrupt callbacks ---
