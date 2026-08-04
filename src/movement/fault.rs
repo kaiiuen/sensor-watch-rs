@@ -69,6 +69,21 @@ pub fn record_reset_reason(reason: ResetReason) {
     deepsleep::store_backup_data(reason as u32, REG_RESET_REASON);
 }
 
+/// Checks the hardware reset cause and records a fault if the watchdog fired.
+///
+/// Called once at boot. If the device reset because the watchdog timed out
+/// (a hang), we record a `WatchdogReset` fault so the user is informed.
+pub fn check_reset_reason() {
+    // SAFETY: reading the reset cause register is always safe.
+    let rcause = unsafe { &*atsaml22j::Rstc::PTR }.rcause().read();
+    if rcause.wdt().bit_is_set() {
+        record_fault(Fault::WatchdogReset);
+        record_reset_reason(ResetReason::Watchdog);
+    } else if rcause.por().bit_is_set() {
+        record_reset_reason(ResetReason::PowerOn);
+    }
+}
+
 /// Returns the reason the device last reset.
 pub fn reset_reason() -> ResetReason {
     match deepsleep::get_backup_data(REG_RESET_REASON) {

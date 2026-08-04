@@ -18,3 +18,4 @@ pub mod spi;
 pub mod storage;
 pub mod uart;
 pub mod utility;
+pub mod wdt;
