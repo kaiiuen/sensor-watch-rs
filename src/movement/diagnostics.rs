@@ -11,8 +11,10 @@
 //! - Bottom-right (Alarm): select / enter a submenu / exit a submenu
 //! - Hold bottom-right (Alarm long-press): fast-repeat an adjustment
 //!
-//! The weekday/day indicator segments show the current breadcrumb depth so
-//! you always know where you are in the tree.
+//! Screen real estate is used for breadcrumb tracking:
+//! - The DAY indicator (2 digits) shows which watch face you are on.
+//! - The DATE indicator (2 digits) shows the submenu depth from the main
+//!   diagnostics menu (00 = main menu, 01 = category, 02 = submenu).
 
 use crate::movement;
 use crate::movement::board::{Board, BoardConfig};
@@ -22,8 +24,10 @@ use crate::watch;
 use crate::watch::rtc;
 use crate::watch::slcd::{self, Indicator};
 
-/// The main menu categories.
-const MENU_ITEMS: [&str; 8] = ["CPU", "MEM", "STO", "HW", "SW", "SYS", "SET", "STA"];
+/// The main menu categories (up to 6 characters each).
+const MENU_ITEMS: [&str; 8] = [
+    "CPU   ", "MEMORY", "STORAG", "HARDWR", "SOFTWR", "SYSTEM", "SETTNG", "STATS ",
+];
 
 /// The diagnostics face state.
 pub struct DiagnosticsFace {
@@ -35,6 +39,8 @@ pub struct DiagnosticsFace {
     subrow: u8,
     /// The previous screen, for breadcrumb tracking.
     prev_screen: u8,
+    /// The current watch face index (set at setup).
+    face_index: u8,
 }
 
 impl DiagnosticsFace {
@@ -44,110 +50,119 @@ impl DiagnosticsFace {
             screen: 8, // start on the main menu
             subrow: 0,
             prev_screen: 8,
+            face_index: 0,
         }
     }
 
-    /// Shows the breadcrumb depth using the weekday/day indicators.
+    /// Shows the breadcrumb using the day/date indicators.
     fn show_breadcrumb(&self) {
-        // Use the day indicator to show depth (0-9).
-        let depth = if self.screen == 8 { 0 } else { 1 };
-        let _ = depth;
-        // Show a small indicator on the LAP segment while in a submenu.
-        if self.screen == 8 {
-            slcd::clear_indicator(Indicator::Lap);
+        // DAY indicator: which watch face we are on.
+        let day = self.face_index;
+        // DATE indicator: submenu depth (00 = main menu, 01 = category, 02+ = submenu).
+        let date = if self.screen == 8 {
+            0
+        } else if self.screen == 6 || self.screen == 7 {
+            2
         } else {
-            slcd::set_indicator(Indicator::Lap);
-        }
+            1
+        };
+
+        // Use the day-of-month digits (positions 2-3) for the face index,
+        // and the day-of-week digits (positions 0-1) for the depth.
+        let mut buf = [0u8; 4];
+        buf[0] = b'0' + date / 10;
+        buf[1] = b'0' + date % 10;
+        buf[2] = b'0' + day / 10;
+        buf[3] = b'0' + day % 10;
+        slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
     /// Draws the main menu (one row at a time, showing the cursor).
     fn draw_menu(&self) {
         let mut buf = [0u8; 11];
-        buf[0] = b'D';
-        buf[1] = b'I';
-        buf[2] = b'A';
-        buf[3] = b'G';
-        buf[4] = b' ';
         let item = MENU_ITEMS[(self.cursor as usize).min(MENU_ITEMS.len() - 1)];
         let ib = item.as_bytes();
-        buf[5] = ib[0];
-        buf[6] = ib[1];
-        buf[7] = ib[2];
-        buf[8] = b'>';
+        // Show the category name (up to 6 chars) in the main clock line.
+        for (i, &c) in ib.iter().take(6).enumerate() {
+            buf[4 + i] = c;
+        }
+        // Cursor indicator.
+        buf[3] = b'>';
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
     /// Draws the CPU info page.
     fn draw_cpu(&self) {
         let mut buf = [0u8; 11];
-        buf[0] = b'C';
-        buf[1] = b'P';
-        buf[2] = b'U';
-        buf[3] = b' ';
-        buf[4] = b' ';
-        buf[5] = b'C';
-        buf[6] = b'T';
-        buf[7] = b'X';
-        buf[8] = b'M';
-        buf[9] = b'0';
+        let s = "CPU  ";
+        let sb = s.as_bytes();
+        for (i, &c) in sb.iter().enumerate() {
+            buf[i] = c;
+        }
+        buf[6] = b'C';
+        buf[7] = b'T';
+        buf[8] = b'X';
+        buf[9] = b'M';
+        buf[10] = b'0';
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
     /// Draws the memory info page.
     fn draw_memory(&self) {
         let mut buf = [0u8; 11];
-        buf[0] = b'M';
-        buf[1] = b'E';
-        buf[2] = b'M';
-        buf[3] = b' ';
-        buf[4] = b' ';
-        buf[5] = b'3';
-        buf[6] = b'2';
-        buf[7] = b'K';
-        buf[8] = b'B';
+        let s = "MEMORY";
+        let sb = s.as_bytes();
+        for (i, &c) in sb.iter().enumerate() {
+            buf[i] = c;
+        }
+        buf[6] = b'3';
+        buf[7] = b'2';
+        buf[8] = b'K';
+        buf[9] = b'B';
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
     /// Draws the storage info page.
     fn draw_storage(&self) {
         let mut buf = [0u8; 11];
-        buf[0] = b'S';
-        buf[1] = b'T';
-        buf[2] = b'O';
-        buf[3] = b' ';
-        buf[4] = b' ';
-        buf[5] = b'8';
-        buf[6] = b'K';
-        buf[7] = b'B';
+        let s = "STORAG";
+        let sb = s.as_bytes();
+        for (i, &c) in sb.iter().enumerate() {
+            buf[i] = c;
+        }
+        buf[6] = b'8';
+        buf[7] = b'K';
+        buf[8] = b'B';
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
     /// Draws the hardware info page.
     fn draw_hardware(&self) {
         let mut buf = [0u8; 11];
-        buf[0] = b'H';
-        buf[1] = b'W';
-        buf[2] = b' ';
-        buf[3] = b' ';
-        buf[4] = b'S';
-        buf[5] = b'A';
-        buf[6] = b'M';
-        buf[7] = b'L';
-        buf[8] = b'2';
-        buf[9] = b'2';
+        let s = "HARDWR";
+        let sb = s.as_bytes();
+        for (i, &c) in sb.iter().enumerate() {
+            buf[i] = c;
+        }
+        buf[6] = b'S';
+        buf[7] = b'A';
+        buf[8] = b'M';
+        buf[9] = b'L';
+        buf[10] = b'2';
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
     /// Draws the software info page.
     fn draw_software(&self) {
         let mut buf = [0u8; 11];
-        buf[0] = b'S';
-        buf[1] = b'W';
-        buf[2] = b' ';
-        buf[3] = b' ';
-        buf[4] = b'R';
-        buf[5] = b'S';
-        buf[6] = b'T';
+        let s = "SOFTWR";
+        let sb = s.as_bytes();
+        for (i, &c) in sb.iter().enumerate() {
+            buf[i] = c;
+        }
+        buf[6] = b'R';
+        buf[7] = b'S';
+        buf[8] = b'T';
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
@@ -155,15 +170,15 @@ impl DiagnosticsFace {
     fn draw_system(&self) {
         let dt = rtc::get_date_time();
         let mut buf = [0u8; 11];
-        buf[0] = b'S';
-        buf[1] = b'Y';
-        buf[2] = b'S';
-        buf[3] = b' ';
-        buf[4] = b' ';
-        buf[5] = b'0' + dt.hour / 10;
-        buf[6] = b'0' + dt.hour % 10;
-        buf[7] = b'0' + dt.minute / 10;
-        buf[8] = b'0' + dt.minute % 10;
+        let s = "SYSTEM";
+        let sb = s.as_bytes();
+        for (i, &c) in sb.iter().enumerate() {
+            buf[i] = c;
+        }
+        buf[6] = b'0' + dt.hour / 10;
+        buf[7] = b'0' + dt.hour % 10;
+        buf[8] = b'0' + dt.minute / 10;
+        buf[9] = b'0' + dt.minute % 10;
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
@@ -174,32 +189,33 @@ impl DiagnosticsFace {
         match self.subrow {
             0 => {
                 // LED color / board preset.
-                buf[0] = b'L';
-                buf[1] = b'E';
-                buf[2] = b'D';
-                buf[3] = b' ';
-                buf[4] = b' ';
+                let s = "LED   ";
+                let sb = s.as_bytes();
+                for (i, &c) in sb.iter().enumerate() {
+                    buf[i] = c;
+                }
                 let name = match cfg.board {
-                    Board::Green => "GR",
-                    Board::Red => "RD",
-                    Board::Blue => "BL",
-                    Board::Pro => "PR",
+                    Board::Green => "GREEN",
+                    Board::Red => "RED  ",
+                    Board::Blue => "BLUE ",
+                    Board::Pro => "PRO  ",
                 };
                 let nb = name.as_bytes();
-                buf[5] = nb[0];
-                buf[6] = nb[1];
+                for (i, &c) in nb.iter().take(6).enumerate() {
+                    buf[5 + i] = c;
+                }
             }
             1 => {
                 // Buzzer voltage (0.1V increments).
-                buf[0] = b'B';
-                buf[1] = b'Z';
-                buf[2] = b'R';
-                buf[3] = b' ';
-                buf[4] = b' ';
-                buf[5] = b'0' + cfg.buzzer_voltage / 10;
-                buf[6] = b'.';
-                buf[7] = b'0' + cfg.buzzer_voltage % 10;
-                buf[8] = b'V';
+                let s = "BUZZER";
+                let sb = s.as_bytes();
+                for (i, &c) in sb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                buf[6] = b'0' + cfg.buzzer_voltage / 10;
+                buf[7] = b'.';
+                buf[8] = b'0' + cfg.buzzer_voltage % 10;
+                buf[9] = b'V';
             }
             _ => {}
         }
@@ -212,25 +228,28 @@ impl DiagnosticsFace {
         let mut buf = [0u8; 11];
         match self.subrow {
             0 => {
-                buf[0] = b'L';
-                buf[1] = b'T';
-                buf[2] = b' ';
-                buf[3] = b' ';
-                write_count(&mut buf, s.btn_light, 4);
+                let label = "LIGHT ";
+                let lb = label.as_bytes();
+                for (i, &c) in lb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                write_count(&mut buf, s.btn_light, 6);
             }
             1 => {
-                buf[0] = b'M';
-                buf[1] = b'D';
-                buf[2] = b' ';
-                buf[3] = b' ';
-                write_count(&mut buf, s.btn_mode, 4);
+                let label = "MODE  ";
+                let lb = label.as_bytes();
+                for (i, &c) in lb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                write_count(&mut buf, s.btn_mode, 6);
             }
             2 => {
-                buf[0] = b'B';
-                buf[1] = b'Z';
-                buf[2] = b' ';
-                buf[3] = b' ';
-                write_count(&mut buf, s.buzzer_rings, 4);
+                let label = "BUZZER";
+                let lb = label.as_bytes();
+                for (i, &c) in lb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                write_count(&mut buf, s.buzzer_rings, 6);
             }
             _ => {}
         }
@@ -278,7 +297,9 @@ fn write_count(buf: &mut [u8; 11], count: u32, offset: usize) {
 }
 
 impl WatchFace for DiagnosticsFace {
-    fn setup(&mut self, _settings: &Settings, _watch_face_index: usize) {}
+    fn setup(&mut self, _settings: &Settings, watch_face_index: usize) {
+        self.face_index = watch_face_index as u8;
+    }
 
     fn activate(&mut self, _settings: &Settings) {
         // Show the main menu on entry.
