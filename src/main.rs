@@ -27,6 +27,10 @@ fn main() -> ! {
 
     // Initialize the Movement framework.
     movement::app_init();
+
+    // Apply the board config (LED polarity, buzzer voltage).
+    movement::board::apply();
+
     movement::app_setup();
 
     // Register the 1 Hz tick callback that wakes the CPU each second.

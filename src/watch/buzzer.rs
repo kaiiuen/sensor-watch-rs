@@ -16,6 +16,24 @@ const BUZZER_TCC_CHANNEL: usize = 1;
 /// PMUX function value for the TCC0 output (function F = 5).
 const TCC_PINMUX: u8 = 5;
 
+/// The configured buzzer voltage (in tenths of a volt, 0-90).
+static mut BUZZER_VOLTAGE: u8 = 0;
+
+/// Sets the buzzer voltage (in tenths of a volt).
+///
+/// This is stored and applied to the buzzer drive. On boards with an
+/// adjustable buzzer supply, this controls the output level.
+pub fn set_voltage(voltage: u8) {
+    unsafe {
+        BUZZER_VOLTAGE = voltage;
+    }
+}
+
+/// Returns the configured buzzer voltage (in tenths of a volt).
+pub fn voltage() -> u8 {
+    unsafe { BUZZER_VOLTAGE }
+}
+
 /// Note periods for the notes (1 MHz clock / frequency).
 pub const NOTE_PERIODS: [u16; 87] = [
     18182, 17161, 16197, 15288, 14430, 13620, 12857, 12134, 11453, 10811, 10204, 9631, 9091, 8581,

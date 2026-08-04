@@ -47,4 +47,21 @@ impl BoardConfig {
         let reg = (self.board as u32 & 0x3) | ((self.buzzer_voltage as u32 & 0xFF) << 8);
         deepsleep::store_backup_data(reg, REG_BOARD);
     }
+
+    /// Returns true if the LED polarity should be inverted (common-anode).
+    ///
+    /// The Red dev board and Pro use a common-anode LED, so the polarity is
+    /// inverted relative to the common-cathode green/blue boards.
+    pub fn invert_led_polarity(&self) -> bool {
+        matches!(self.board, Board::Red | Board::Pro)
+    }
+}
+
+/// Applies the board config to the hardware (LED polarity, buzzer voltage).
+///
+/// Called once at boot after loading the config.
+pub fn apply() {
+    let cfg = BoardConfig::read();
+    crate::watch::led::set_invert_polarity(cfg.invert_led_polarity());
+    crate::watch::buzzer::set_voltage(cfg.buzzer_voltage);
 }

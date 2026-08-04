@@ -4,9 +4,9 @@
 //! `watch_private.c`. The LEDs are driven by TCC0 in normal PWM mode.
 
 use crate::watch::gpio::{self, Direction, Function, Pin};
-use atsaml22j::tcc0::RegisterBlock as Tcc0;
 use atsaml22j::tcc0::ctrla::Prescalerselect;
 use atsaml22j::tcc0::wave::Wavegenselect;
+use atsaml22j::tcc0::RegisterBlock as Tcc0;
 
 /// LED pins and TCC channels (OSO-SWAT-A1-05 board, red/green edition).
 const RED: Pin = Pin(0, 20); // PA20
@@ -20,6 +20,19 @@ const BUZZER_TCC_CHANNEL: usize = 1;
 
 /// PMUX function value for the TCC0 outputs (function F = 5).
 const TCC_PINMUX: u8 = 5;
+
+/// Whether the LED polarity is inverted (common-anode, for Red/Pro boards).
+static mut INVERT_POLARITY: bool = false;
+
+/// Sets whether the LED polarity is inverted.
+///
+/// Red dev boards and Pro use a common-anode LED, so the polarity must be
+/// inverted relative to the common-cathode green/blue boards.
+pub fn set_invert_polarity(invert: bool) {
+    unsafe {
+        INVERT_POLARITY = invert;
+    }
+}
 
 /// Returns a reference to the TCC0 peripheral register block.
 fn tcc0() -> &'static Tcc0 {
@@ -129,6 +142,14 @@ fn enable_tcc() {
     tcc0()
         .wave()
         .modify(|_, w| w.wavegen().variant(Wavegenselect::Npwm));
+
+    // Invert the output polarity for common-anode (Red/Pro) boards.
+    if unsafe { INVERT_POLARITY } {
+        tcc0().wave().modify(|_, w| {
+            w.pol2().set_bit();
+            w.pol3().set_bit()
+        });
+    }
 
     // Set a period for the LEDs (below 20000 to avoid flickering).
     // SAFETY: writing a valid period value.
