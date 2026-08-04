@@ -21,7 +21,8 @@ pub struct SimpleClockFace {
 }
 
 impl SimpleClockFace {
-    pub fn new() -> Self {
+    /// A const constructor for use in a static initializer.
+    pub const fn new_static() -> Self {
         SimpleClockFace {
             signal_enabled: false,
             watch_face_index: 0,
@@ -30,6 +31,10 @@ impl SimpleClockFace {
             battery_low: false,
             alarm_enabled: false,
         }
+    }
+
+    pub fn new() -> Self {
+        SimpleClockFace::new_static()
     }
 
     fn update_alarm_indicator(&mut self, settings_alarm_enabled: bool) {

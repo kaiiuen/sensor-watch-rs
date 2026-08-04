@@ -4,6 +4,7 @@
 //! resource: it wakes only to react to a single event, then immediately
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
+pub mod fault;
 pub mod simple_clock;
 pub mod types;
 
@@ -11,14 +12,18 @@ use crate::movement::types::*;
 use crate::watch;
 use crate::watch::buzzer::{self, Note as BuzzerNote};
 use crate::watch::rtc::{self, DateTime};
-use alloc::boxed::Box;
 
 /// The global movement state.
 pub static mut MOVEMENT_STATE: MovementState = MovementState::new_static();
 
-/// The list of watch faces (filled in by the app).
+/// The list of watch faces. Faces are static instances — there is no heap, so
+/// nothing can be allocated and nothing can grow.
 pub static mut WATCH_FACES: [Option<&'static mut dyn WatchFace>; MOVEMENT_NUM_FACES] =
     [const { None }; MOVEMENT_NUM_FACES];
+
+/// The static simple clock face instance.
+static mut SIMPLE_CLOCK: simple_clock::SimpleClockFace =
+    simple_clock::SimpleClockFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -224,9 +229,9 @@ pub fn app_setup() {
 
         watch::slcd::enable_display();
 
-        // Register the watch faces.
+        // Register the watch faces (static instances, no heap).
         if WATCH_FACES[0].is_none() {
-            WATCH_FACES[0] = Some(Box::leak(Box::new(simple_clock::SimpleClockFace::new())));
+            WATCH_FACES[0] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {

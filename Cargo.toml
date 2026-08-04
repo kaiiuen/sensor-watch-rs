@@ -16,7 +16,6 @@ embedded-hal = "0.2"
 
 # Math functions for no_std (used by the thermistor temperature calculation)
 libm = "0.2"
-embedded-alloc = "0.7.0"
 critical-section = "1.2.0"
 
 [profile.dev]

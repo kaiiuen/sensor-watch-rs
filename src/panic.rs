@@ -15,14 +15,12 @@ fn panic(info: &PanicInfo) -> ! {
     let _ = info;
 
     // Blink the red LED a few times as a visible fault indicator.
-    unsafe {
-        crate::watch::led::enable_leds();
-        for _ in 0..3 {
-            crate::watch::led::set_led_red();
-            delay();
-            crate::watch::led::set_led_off();
-            delay();
-        }
+    crate::watch::led::enable_leds();
+    for _ in 0..3 {
+        crate::watch::led::set_led_red();
+        delay();
+        crate::watch::led::set_led_off();
+        delay();
     }
 
     // Reset the device so it recovers on its own.
