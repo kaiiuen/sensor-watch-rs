@@ -14,6 +14,9 @@ atsaml22j = { version = "0.1.0", features = ["rt"] }
 # Optional: embedded-hal traits for driver-style code
 embedded-hal = "0.2"
 
+# Math functions for no_std (used by the thermistor temperature calculation)
+libm = "0.2"
+
 [profile.dev]
 opt-level = 1
 

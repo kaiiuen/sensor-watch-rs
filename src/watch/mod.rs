@@ -11,3 +11,4 @@ pub mod gpio;
 pub mod led;
 pub mod rtc;
 pub mod slcd;
+pub mod utility;
