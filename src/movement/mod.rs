@@ -7,6 +7,7 @@
 pub mod alarm;
 pub mod blinky;
 pub mod board;
+pub mod close_enough;
 pub mod countdown;
 pub mod counter;
 pub mod debounce;
@@ -16,8 +17,10 @@ pub mod fault;
 pub mod flashlight;
 pub mod minimal_clock;
 pub mod persist;
+pub mod ships_bell;
 pub mod simple_clock;
 pub mod stats;
+pub mod tally;
 pub mod types;
 pub mod weeknumber;
 pub mod world_clock;
@@ -71,6 +74,16 @@ static mut MINIMAL_CLOCK: minimal_clock::MinimalClockFace =
 
 /// The static blinky face instance.
 static mut BLINKY: blinky::BlinkyFace = blinky::BlinkyFace::new_static();
+
+/// The static tally face instance.
+static mut TALLY: tally::TallyFace = tally::TallyFace::new_static();
+
+/// The static ships bell face instance.
+static mut SHIPS_BELL: ships_bell::ShipsBellFace = ships_bell::ShipsBellFace::new_static();
+
+/// The static close-enough clock face instance.
+static mut CLOSE_ENOUGH: close_enough::CloseEnoughClockFace =
+    close_enough::CloseEnoughClockFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -333,6 +346,9 @@ pub fn app_setup() {
             WATCH_FACES[8] = Some(&mut *core::ptr::addr_of_mut!(WEEKNUMBER));
             WATCH_FACES[9] = Some(&mut *core::ptr::addr_of_mut!(MINIMAL_CLOCK));
             WATCH_FACES[10] = Some(&mut *core::ptr::addr_of_mut!(BLINKY));
+            WATCH_FACES[11] = Some(&mut *core::ptr::addr_of_mut!(TALLY));
+            WATCH_FACES[12] = Some(&mut *core::ptr::addr_of_mut!(SHIPS_BELL));
+            WATCH_FACES[13] = Some(&mut *core::ptr::addr_of_mut!(CLOSE_ENOUGH));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
