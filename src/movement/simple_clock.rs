@@ -1,9 +1,10 @@
 //! Simple clock watch face.
 //!
 //! Port of the C `simple_clock_face.c`. Displays the weekday, day, and time,
-//! with a battery-low indicator and an optional hourly signal.
+//! with a battery-low indicator and an optional hourly signal. It is a pure
+//! state machine: it renders on wake and returns; it never keeps the CPU awake.
 
-use crate::movement::types::{Event, EventType, Settings, WatchFace};
+use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch;
 use crate::watch::rtc::{self, DateTime};
 use crate::watch::slcd::Indicator;
@@ -63,12 +64,12 @@ impl WatchFace for SimpleClockFace {
         self.previous_date_time = 0xFFFF_FFFF;
     }
 
-    fn loop_(&mut self, event: Event, settings: &Settings) -> bool {
+    fn loop_(&mut self, event: Event, settings: &Settings) {
         let mut buf = [0u8; 11];
         let pos: u8;
 
-        match event.event_type {
-            EventType::Activate | EventType::Tick | EventType::LowEnergyUpdate => {
+        match event {
+            Event::Activate | Event::Tick => {
                 let date_time = rtc::get_date_time();
                 let previous_date_time = self.previous_date_time;
                 self.previous_date_time = date_time.to_reg();
@@ -86,19 +87,15 @@ impl WatchFace for SimpleClockFace {
                 }
 
                 let mut set_leading_zero = false;
-                if (date_time.to_reg() >> 6) == (previous_date_time >> 6)
-                    && event.event_type != EventType::LowEnergyUpdate
-                {
+                if (date_time.to_reg() >> 6) == (previous_date_time >> 6) {
                     // Only seconds changed; update just the seconds.
                     write_seconds(&mut buf, date_time);
                     watch::slcd::display_string(core::str::from_utf8(&buf[..4]).unwrap_or("  "), 8);
-                    return true;
-                } else if (date_time.to_reg() >> 12) == (previous_date_time >> 12)
-                    && event.event_type != EventType::LowEnergyUpdate
-                {
+                } else if (date_time.to_reg() >> 12) == (previous_date_time >> 12) {
                     // Only minutes/seconds changed.
                     pos = 6;
                     write_minutes_seconds(&mut buf, date_time);
+                    watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), pos);
                 } else {
                     // Everything changed; render it all.
                     let mut hour = date_time.hour;
@@ -117,16 +114,9 @@ impl WatchFace for SimpleClockFace {
                         set_leading_zero = true;
                     }
                     pos = 0;
-                    if event.event_type == EventType::LowEnergyUpdate {
-                        if !watch::slcd::tick_animation_is_running() {
-                            watch::slcd::start_tick_animation(500);
-                        }
-                        write_low_energy(&mut buf, date_time, hour);
-                    } else {
-                        write_full(&mut buf, date_time, hour);
-                    }
+                    write_full(&mut buf, date_time, hour);
+                    watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), pos);
                 }
-                watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), pos);
 
                 if set_leading_zero {
                     watch::slcd::display_string("0", 4);
@@ -136,7 +126,7 @@ impl WatchFace for SimpleClockFace {
                     self.update_alarm_indicator(settings.alarm_enabled());
                 }
             }
-            EventType::AlarmLongPress => {
+            Event::Button(Button::Alarm, ButtonEvent::LongPress) => {
                 self.signal_enabled = !self.signal_enabled;
                 if self.signal_enabled {
                     watch::slcd::set_indicator(Indicator::Bell);
@@ -144,13 +134,11 @@ impl WatchFace for SimpleClockFace {
                     watch::slcd::clear_indicator(Indicator::Bell);
                 }
             }
-            EventType::BackgroundTask => {
+            Event::BackgroundTask => {
                 crate::movement::play_signal();
             }
-            _ => return crate::movement::default_loop_handler(event, settings),
+            _ => crate::movement::default_loop_handler(event, settings),
         }
-
-        true
     }
 
     fn resign(&mut self, _settings: &Settings) {}
@@ -174,19 +162,6 @@ fn write_minutes_seconds(buf: &mut [u8; 11], dt: DateTime) {
     buf[1] = b'0' + dt.minute % 10;
     buf[2] = b'0' + dt.second / 10;
     buf[3] = b'0' + dt.second % 10;
-}
-
-fn write_low_energy(buf: &mut [u8; 11], dt: DateTime, hour: u8) {
-    let weekday = utility::get_weekday(dt);
-    let wb = weekday.as_bytes();
-    buf[0] = wb[0];
-    buf[1] = wb[1];
-    buf[2] = b'0' + dt.day / 10;
-    buf[3] = b'0' + dt.day % 10;
-    buf[4] = b'0' + hour / 10;
-    buf[5] = b'0' + hour % 10;
-    buf[6] = b'0' + dt.minute / 10;
-    buf[7] = b'0' + dt.minute % 10;
 }
 
 fn write_full(buf: &mut [u8; 11], dt: DateTime, hour: u8) {

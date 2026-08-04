@@ -1,7 +1,9 @@
 //! Movement types and constants.
 //!
-//! Port of the C `movement.h`. Defines the settings structs, event types, the
-//! `WatchFace` trait, and the global movement state.
+//! Port of the C `movement.h`, restructured around an event-driven, interrupt-
+//! powered model. The CPU is a start/stop resource: it wakes only to react to
+//! a single event, then immediately returns to STANDBY. All timekeeping is
+//! owned by the RTC, never by the CPU.
 
 use crate::watch::buzzer::Note as BuzzerNote;
 
@@ -27,43 +29,43 @@ impl Settings {
         (self.reg >> 3) & 0x1 != 0
     }
     /// 0 to disable low energy mode, or an inactivity interval for LE mode.
-    pub fn le_interval(&self) -> u8 {
+    pub fn le_interval(self) -> u8 {
         ((self.reg >> 4) & 0x7) as u8
     }
     /// How many seconds to shine the LED for (x2); 0 = only while pressed.
-    pub fn led_duration(&self) -> u8 {
+    pub fn led_duration(self) -> u8 {
         ((self.reg >> 7) & 0x7) as u8
     }
     /// Red LED value (0-15) for general illumination.
-    pub fn led_red_color(&self) -> u8 {
+    pub fn led_red_color(self) -> u8 {
         ((self.reg >> 10) & 0xF) as u8
     }
     /// Green LED value (0-15) for general illumination.
-    pub fn led_green_color(&self) -> u8 {
+    pub fn led_green_color(self) -> u8 {
         ((self.reg >> 14) & 0xF) as u8
     }
     /// An index into the time zone table.
-    pub fn time_zone(&self) -> u8 {
+    pub fn time_zone(self) -> u8 {
         ((self.reg >> 18) & 0x3F) as u8
     }
     /// Whether the clock should use 12 or 24 hour mode.
-    pub fn clock_mode_24h(&self) -> bool {
+    pub fn clock_mode_24h(self) -> bool {
         (self.reg >> 24) & 0x1 != 0
     }
     /// Whether the clock should show a leading zero in 24h mode.
-    pub fn clock_24h_leading_zero(&self) -> bool {
+    pub fn clock_24h_leading_zero(self) -> bool {
         (self.reg >> 25) & 0x1 != 0
     }
     /// Whether to use imperial units.
-    pub fn use_imperial_units(&self) -> bool {
+    pub fn use_imperial_units(self) -> bool {
         (self.reg >> 26) & 0x1 != 0
     }
     /// Whether there is at least one alarm enabled.
-    pub fn alarm_enabled(&self) -> bool {
+    pub fn alarm_enabled(self) -> bool {
         (self.reg >> 27) & 0x1 != 0
     }
     /// Whether pressing a button emits a sound.
-    pub fn button_should_sound(&self) -> bool {
+    pub fn button_should_sound(self) -> bool {
         self.reg & 0x1 != 0
     }
 
@@ -105,70 +107,49 @@ impl Settings {
     }
 }
 
-/// The event types dispatched to watch faces.
+/// A button on the watch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[repr(u8)]
-pub enum EventType {
-    None = 0,
+pub enum Button {
+    Light,
+    Mode,
+    Alarm,
+}
+
+/// A button press event.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ButtonEvent {
+    Down,
+    Up,
+    LongPress,
+    LongUp,
+}
+
+/// The closed set of events that wake the CPU.
+///
+/// The CPU wakes only for one of these, reacts, and returns to STANDBY.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Event {
+    /// A watch face entered the foreground.
     Activate,
+    /// The RTC ticked (once per second).
     Tick,
-    LowEnergyUpdate,
+    /// A scheduled background task is due.
     BackgroundTask,
-    Timeout,
-    LightButtonDown,
-    LightButtonUp,
-    LightLongPress,
-    LightLongUp,
-    ModeButtonDown,
-    ModeButtonUp,
-    ModeLongPress,
-    ModeLongUp,
-    AlarmButtonDown,
-    AlarmButtonUp,
-    AlarmLongPress,
-    AlarmLongUp,
-}
-
-/// An event dispatched to a watch face.
-#[derive(Clone, Copy, Debug)]
-pub struct Event {
-    pub event_type: EventType,
-    pub subsecond: u8,
-}
-
-impl From<u8> for EventType {
-    fn from(v: u8) -> Self {
-        match v {
-            1 => EventType::Activate,
-            2 => EventType::Tick,
-            3 => EventType::LowEnergyUpdate,
-            4 => EventType::BackgroundTask,
-            5 => EventType::Timeout,
-            6 => EventType::LightButtonDown,
-            7 => EventType::LightButtonUp,
-            8 => EventType::LightLongPress,
-            9 => EventType::LightLongUp,
-            10 => EventType::ModeButtonDown,
-            11 => EventType::ModeButtonUp,
-            12 => EventType::ModeLongPress,
-            13 => EventType::ModeLongUp,
-            14 => EventType::AlarmButtonDown,
-            15 => EventType::AlarmButtonUp,
-            16 => EventType::AlarmLongPress,
-            17 => EventType::AlarmLongUp,
-            _ => EventType::None,
-        }
-    }
+    /// A button was pressed.
+    Button(Button, ButtonEvent),
 }
 
 /// The interface a watch face must implement.
+///
+/// Faces are pure state machines: they react to a single event and return.
+/// They never keep the CPU awake; periodic work is scheduled via the RTC.
 pub trait WatchFace {
     /// Perform setup for the watch face (called once at boot and after sleep).
     fn setup(&mut self, settings: &Settings, watch_face_index: usize);
     /// Prepare to go on-screen.
     fn activate(&mut self, settings: &Settings);
-    /// Handle events and update the display. Return true to allow standby.
-    fn loop_(&mut self, event: Event, settings: &Settings) -> bool;
+    /// React to a single event and update the display.
+    fn loop_(&mut self, event: Event, settings: &Settings);
     /// Prepare to go off-screen.
     fn resign(&mut self, settings: &Settings);
     /// OPTIONAL: request an opportunity to run a background task.
@@ -183,23 +164,8 @@ pub struct MovementState {
     pub current_face_idx: usize,
     pub next_face_idx: usize,
     pub watch_face_changed: bool,
-    pub fast_tick_enabled: bool,
-    pub fast_ticks: i16,
-    pub light_ticks: i16,
-    pub alarm_ticks: i16,
     pub is_buzzing: bool,
     pub alarm_note: BuzzerNote,
-    pub light_down_timestamp: u16,
-    pub mode_down_timestamp: u16,
-    pub alarm_down_timestamp: u16,
-    pub needs_background_tasks_handled: bool,
-    pub has_scheduled_background_task: bool,
-    pub needs_wake: bool,
-    pub le_mode_ticks: i32,
-    pub timeout_ticks: i16,
-    pub tick_frequency: u8,
-    pub last_second: u8,
-    pub subsecond: u8,
     pub next_available_backup_register: u8,
 }
 
@@ -211,23 +177,8 @@ impl MovementState {
             current_face_idx: 0,
             next_face_idx: 0,
             watch_face_changed: false,
-            fast_tick_enabled: false,
-            fast_ticks: 0,
-            light_ticks: -1,
-            alarm_ticks: -1,
             is_buzzing: false,
             alarm_note: BuzzerNote::C8,
-            light_down_timestamp: 0,
-            mode_down_timestamp: 0,
-            alarm_down_timestamp: 0,
-            needs_background_tasks_handled: false,
-            has_scheduled_background_task: false,
-            needs_wake: false,
-            le_mode_ticks: 0,
-            timeout_ticks: 0,
-            tick_frequency: 1,
-            last_second: 0,
-            subsecond: 0,
             next_available_backup_register: 4,
         }
     }
@@ -238,23 +189,8 @@ impl MovementState {
             current_face_idx: 0,
             next_face_idx: 0,
             watch_face_changed: false,
-            fast_tick_enabled: false,
-            fast_ticks: 0,
-            light_ticks: -1,
-            alarm_ticks: -1,
             is_buzzing: false,
             alarm_note: BuzzerNote::C8,
-            light_down_timestamp: 0,
-            mode_down_timestamp: 0,
-            alarm_down_timestamp: 0,
-            needs_background_tasks_handled: false,
-            has_scheduled_background_task: false,
-            needs_wake: false,
-            le_mode_ticks: 0,
-            timeout_ticks: 0,
-            tick_frequency: 1,
-            last_second: 0,
-            subsecond: 0,
             next_available_backup_register: 4,
         }
     }
@@ -266,10 +202,3 @@ pub const TIMEZONE_OFFSETS: [i16; 41] = [
     660, 720, 765, 780, 825, 840, -720, -660, -600, -570, -540, -480, -420, -360, -300, -270, -240,
     -210, -180, -150, -120, -60,
 ];
-
-/// Low energy mode inactivity deadlines (seconds), indexed by le_interval.
-pub const LE_INACTIVITY_DEADLINES: [i32; 8] =
-    [i32::MAX, 600, 3600, 7200, 21600, 43200, 86400, 604800];
-
-/// Timeout inactivity deadlines (seconds), indexed by to_interval.
-pub const TIMEOUT_INACTIVITY_DEADLINES: [i16; 4] = [60, 120, 300, 1800];

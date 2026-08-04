@@ -39,10 +39,13 @@ fn main() -> ! {
     movement::app_init();
     movement::app_setup();
 
+    // Register the 1 Hz tick callback that wakes the CPU each second.
+    watch::rtc::register_tick_callback(movement::cb_tick);
+
     loop {
-        // Run the app loop; if it returns true, enter standby until the next tick.
-        if movement::app_loop() {
-            cortex_m::asm::wfi();
-        }
+        // The CPU is a start/stop resource: react to the pending event, then
+        // immediately enter STANDBY until the next interrupt.
+        movement::app_loop();
+        cortex_m::asm::wfi();
     }
 }
