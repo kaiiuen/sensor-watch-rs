@@ -3,12 +3,14 @@
 //! Port of the C `movement.c`. Manages the main loop, event dispatch, button
 //! handling, LED illumination, alarms, background tasks, and low-energy mode.
 
+pub mod simple_clock;
 pub mod types;
 
 use crate::movement::types::*;
 use crate::watch;
 use crate::watch::buzzer::{self, Note as BuzzerNote};
 use crate::watch::rtc::{self, DateTime};
+use alloc::boxed::Box;
 
 /// The global movement state.
 pub static mut MOVEMENT_STATE: MovementState = MovementState::new_static();
@@ -357,6 +359,11 @@ pub fn app_setup() {
             watch::slcd::enable_display();
 
             request_tick_frequency(1);
+
+            // Register the watch faces.
+            if WATCH_FACES[0].is_none() {
+                WATCH_FACES[0] = Some(Box::leak(Box::new(simple_clock::SimpleClockFace::new())));
+            }
 
             for i in 0..MOVEMENT_NUM_FACES {
                 if let Some(face) = WATCH_FACES[i].as_deref_mut() {

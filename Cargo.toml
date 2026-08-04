@@ -6,7 +6,7 @@ description = "A Rust rewrite of the Sensor-Watch firmware for the Microchip SAM
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-cortex-m = "0.7"
+cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7", features = ["device"] }
 panic-halt = "0.2"
 atsaml22j = { version = "0.1.0", features = ["rt"] }
@@ -16,6 +16,8 @@ embedded-hal = "0.2"
 
 # Math functions for no_std (used by the thermistor temperature calculation)
 libm = "0.2"
+embedded-alloc = "0.7.0"
+critical-section = "1.2.0"
 
 [profile.dev]
 opt-level = 1
