@@ -15,12 +15,21 @@ pub mod decimal_time;
 pub mod diagnostics;
 pub mod fault;
 pub mod flashlight;
+pub mod french_revolutionary;
+pub mod mars_time;
+pub mod metronome;
 pub mod minimal_clock;
+pub mod moon_phase;
 pub mod persist;
+pub mod pulsometer;
+pub mod sailing;
 pub mod ships_bell;
 pub mod simple_clock;
 pub mod stats;
+pub mod stopwatch;
+pub mod tachymeter;
 pub mod tally;
+pub mod timer;
 pub mod types;
 pub mod weeknumber;
 pub mod world_clock;
@@ -84,6 +93,34 @@ static mut SHIPS_BELL: ships_bell::ShipsBellFace = ships_bell::ShipsBellFace::ne
 /// The static close-enough clock face instance.
 static mut CLOSE_ENOUGH: close_enough::CloseEnoughClockFace =
     close_enough::CloseEnoughClockFace::new_static();
+
+/// The static moon phase face instance.
+static mut MOON_PHASE: moon_phase::MoonPhaseFace = moon_phase::MoonPhaseFace::new_static();
+
+/// The static stopwatch face instance.
+static mut STOPWATCH: stopwatch::StopwatchFace = stopwatch::StopwatchFace::new_static();
+
+/// The static timer face instance.
+static mut TIMER: timer::TimerFace = timer::TimerFace::new_static();
+
+/// The static French Revolutionary face instance.
+static mut FRENCH_REVOLUTIONARY: french_revolutionary::FrenchRevolutionaryFace =
+    french_revolutionary::FrenchRevolutionaryFace::new_static();
+
+/// The static Mars time face instance.
+static mut MARS_TIME: mars_time::MarsTimeFace = mars_time::MarsTimeFace::new_static();
+
+/// The static sailing face instance.
+static mut SAILING: sailing::SailingFace = sailing::SailingFace::new_static();
+
+/// The static metronome face instance.
+static mut METRONOME: metronome::MetronomeFace = metronome::MetronomeFace::new_static();
+
+/// The static tachymeter face instance.
+static mut TACHYMETER: tachymeter::TachymeterFace = tachymeter::TachymeterFace::new_static();
+
+/// The static pulsometer face instance.
+static mut PULSOMETER: pulsometer::PulsometerFace = pulsometer::PulsometerFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -349,6 +386,15 @@ pub fn app_setup() {
             WATCH_FACES[11] = Some(&mut *core::ptr::addr_of_mut!(TALLY));
             WATCH_FACES[12] = Some(&mut *core::ptr::addr_of_mut!(SHIPS_BELL));
             WATCH_FACES[13] = Some(&mut *core::ptr::addr_of_mut!(CLOSE_ENOUGH));
+            WATCH_FACES[14] = Some(&mut *core::ptr::addr_of_mut!(MOON_PHASE));
+            WATCH_FACES[15] = Some(&mut *core::ptr::addr_of_mut!(STOPWATCH));
+            WATCH_FACES[16] = Some(&mut *core::ptr::addr_of_mut!(TIMER));
+            WATCH_FACES[17] = Some(&mut *core::ptr::addr_of_mut!(FRENCH_REVOLUTIONARY));
+            WATCH_FACES[18] = Some(&mut *core::ptr::addr_of_mut!(MARS_TIME));
+            WATCH_FACES[19] = Some(&mut *core::ptr::addr_of_mut!(SAILING));
+            WATCH_FACES[20] = Some(&mut *core::ptr::addr_of_mut!(METRONOME));
+            WATCH_FACES[21] = Some(&mut *core::ptr::addr_of_mut!(TACHYMETER));
+            WATCH_FACES[22] = Some(&mut *core::ptr::addr_of_mut!(PULSOMETER));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
