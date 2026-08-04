@@ -111,21 +111,25 @@ pub fn set_pin_pull_mode(pin: Pin, pull: PullMode) {
 /// Sets the peripheral function of a pin.
 pub fn set_pin_function(pin: Pin, function: Function) {
     let (port_idx, pin_idx) = (pin.0 as usize, pin.1 as usize);
+    match function {
+        Function::Off => {
+            pincfg(port_idx, pin_idx).modify(|_, w| w.pmuxen().clear_bit());
+        }
+        Function::A => set_pmux(port_idx, pin_idx, 0),
+        Function::Mux(v) => set_pmux(port_idx, pin_idx, v),
+    }
+}
+
+/// Enables the peripheral multiplexer and sets the PMUX value for a pin.
+fn set_pmux(port_idx: usize, pin_idx: usize, value: u8) {
     // SAFETY: writing valid PINCFG/PMUX values.
     unsafe {
-        match function {
-            Function::Off => {
-                pincfg(port_idx, pin_idx).modify(|_, w| w.pmuxen().clear_bit());
-            }
-            Function::A => {
-                pincfg(port_idx, pin_idx).modify(|_, w| w.pmuxen().set_bit());
-                let pmux = pmux(port_idx, pin_idx / 2);
-                if pin_idx & 1 == 0 {
-                    pmux.modify(|_, w| w.pmuxe().bits(0));
-                } else {
-                    pmux.modify(|_, w| w.pmuxo().bits(0));
-                }
-            }
+        pincfg(port_idx, pin_idx).modify(|_, w| w.pmuxen().set_bit());
+        let pmux = pmux(port_idx, pin_idx / 2);
+        if pin_idx & 1 == 0 {
+            pmux.modify(|_, w| w.pmuxe().bits(value));
+        } else {
+            pmux.modify(|_, w| w.pmuxo().bits(value));
         }
     }
 }
@@ -180,6 +184,10 @@ pub enum PullMode {
 /// Pin peripheral function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Function {
+    /// No peripheral function (plain GPIO).
     Off,
+    /// Peripheral function A (PMUX value 0).
     A,
+    /// A specific PMUX function value (0-15).
+    Mux(u8),
 }

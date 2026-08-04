@@ -7,5 +7,6 @@
 pub mod clock;
 pub mod extint;
 pub mod gpio;
+pub mod led;
 pub mod rtc;
 pub mod slcd;
