@@ -217,6 +217,28 @@ pub fn disable_alarm_callback() {
     unsafe { rtc().intenclr().write(|w| w.bits(1 << 8)) }; // ALARM0
 }
 
+/// Schedules a one-shot wakeup at the given time.
+///
+/// The alarm fires once when the RTC clock reaches `alarm_time` (matching
+/// seconds, minutes, hours, and day). This is how faces request a future
+/// wakeup without keeping the CPU awake.
+pub fn schedule_wakeup(callback: Callback, alarm_time: DateTime) {
+    register_alarm_callback(callback, alarm_time, AlarmMatch::HhMmSs);
+}
+
+/// Schedules a wakeup a given number of seconds in the future.
+pub fn schedule_wakeup_in(callback: Callback, seconds: u32) {
+    let now = get_date_time();
+    let mut target = now;
+    let mut s = now.second as u32 + seconds;
+    target.second = (s % 60) as u8;
+    s /= 60;
+    target.minute = (target.minute as u32 + s % 60) as u8;
+    s /= 60;
+    target.hour = (target.hour as u32 + s % 24) as u8;
+    schedule_wakeup(callback, target);
+}
+
 /// The RTC interrupt handler.
 ///
 /// The PAC's `rt` feature declares `extern "C" { fn RTC(); }` and places it in

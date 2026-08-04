@@ -12,9 +12,9 @@
 extern crate alloc;
 
 use cortex_m_rt::entry;
-use panic_halt as _;
 
 mod movement;
+mod panic;
 mod watch;
 
 // Global allocator for the watch faces (which use Box).

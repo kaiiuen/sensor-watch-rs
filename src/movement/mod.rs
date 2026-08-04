@@ -268,6 +268,9 @@ pub fn app_loop() {
         if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
             face.loop_(event, &MOVEMENT_STATE.settings);
         }
+
+        // After reacting, always return to STANDBY. The CPU never stays awake.
+        PENDING_EVENT = Event::Tick;
     }
 }
 
