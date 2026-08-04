@@ -235,6 +235,26 @@ pub fn app_init() {
     }
 }
 
+/// Sets the wake rate based on whether seconds are displayed.
+///
+/// - Seconds shown: wake once per second (1 Hz tick).
+/// - Seconds hidden: wake once per minute (power-saving). The RTC alarm
+///   fires at :00 each minute to advance the clock.
+pub fn set_tick_rate(show_seconds: bool) {
+    // Always keep the 128 Hz fast tick for long-press detection.
+    if show_seconds {
+        rtc::register_tick_callback(cb_tick);
+    } else {
+        rtc::disable_tick_callback();
+        // Schedule a wake at the top of each minute.
+        let now = rtc::get_date_time();
+        let mut target = now;
+        target.second = 0;
+        target.minute = (target.minute + 1) % 60;
+        rtc::schedule_wakeup(cb_tick, target);
+    }
+}
+
 /// App setup: called when entering the foreground.
 pub fn app_setup() {
     unsafe {
@@ -253,6 +273,9 @@ pub fn app_setup() {
 
         // Register a fast tick for long-press detection.
         rtc::register_periodic_callback(cb_fast_tick, 128);
+
+        // Set the wake rate based on the seconds-display setting.
+        set_tick_rate(MOVEMENT_STATE.settings.show_seconds());
 
         // Register the button interrupts.
         watch::extint::enable_external_interrupts();

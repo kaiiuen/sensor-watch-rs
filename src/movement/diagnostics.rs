@@ -20,9 +20,8 @@ use crate::movement;
 use crate::movement::board::{Board, BoardConfig};
 use crate::movement::stats;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::watch;
 use crate::watch::rtc;
-use crate::watch::slcd::{self, Indicator};
+use crate::watch::slcd;
 
 /// The main menu categories (up to 6 characters each).
 const MENU_ITEMS: [&str; 8] = [

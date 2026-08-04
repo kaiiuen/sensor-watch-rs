@@ -7,7 +7,7 @@
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::movement::{self, TIMEZONE_OFFSETS};
 use crate::watch;
-use crate::watch::rtc::{self, DateTime};
+use crate::watch::rtc;
 use crate::watch::slcd::Indicator;
 use crate::watch::utility;
 
@@ -140,11 +140,7 @@ impl CountdownFace {
 
         match self.mode {
             Mode::Running => {
-                let delta = if self.target_ts <= self.now_ts {
-                    0
-                } else {
-                    self.target_ts - self.now_ts
-                };
+                let delta = self.target_ts.saturating_sub(self.now_ts);
                 self.seconds = (delta % 60) as u8;
                 let mins = delta / 60;
                 self.hours = (mins / 60) as u8;

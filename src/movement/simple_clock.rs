@@ -70,66 +70,14 @@ impl WatchFace for SimpleClockFace {
     }
 
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
-        let mut buf = [0u8; 11];
-        let pos: u8;
-
         match event {
-            Event::Activate | Event::Tick => {
-                let date_time = rtc::get_date_time();
-                let previous_date_time = self.previous_date_time;
-                self.previous_date_time = date_time.to_reg();
-
-                // Check the battery voltage once a day.
-                if date_time.day != self.last_battery_check {
-                    self.last_battery_check = date_time.day;
-                    watch::adc::enable_adc();
-                    let voltage = watch::adc::get_vcc_voltage();
-                    watch::adc::disable_adc();
-                    self.battery_low = voltage < 2200;
-                }
-                if self.battery_low {
-                    watch::slcd::set_indicator(Indicator::Lap);
-                }
-
-                let mut set_leading_zero = false;
-                if (date_time.to_reg() >> 6) == (previous_date_time >> 6) {
-                    // Only seconds changed; update just the seconds.
-                    write_seconds(&mut buf, date_time);
-                    watch::slcd::display_string(core::str::from_utf8(&buf[..4]).unwrap_or("  "), 8);
-                } else if (date_time.to_reg() >> 12) == (previous_date_time >> 12) {
-                    // Only minutes/seconds changed.
-                    pos = 6;
-                    write_minutes_seconds(&mut buf, date_time);
-                    watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), pos);
-                } else {
-                    // Everything changed; render it all.
-                    let mut hour = date_time.hour;
-                    if !settings.clock_mode_24h() {
-                        if hour < 12 {
-                            watch::slcd::clear_indicator(Indicator::Pm);
-                        } else {
-                            watch::slcd::set_indicator(Indicator::Pm);
-                        }
-                        hour %= 12;
-                        if hour == 0 {
-                            hour = 12;
-                        }
-                    }
-                    if settings.clock_mode_24h() && settings.clock_24h_leading_zero() && hour < 10 {
-                        set_leading_zero = true;
-                    }
-                    pos = 0;
-                    write_full(&mut buf, date_time, hour);
-                    watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), pos);
-                }
-
-                if set_leading_zero {
-                    watch::slcd::display_string("0", 4);
-                }
-
-                if self.alarm_enabled != settings.alarm_enabled() {
-                    self.update_alarm_indicator(settings.alarm_enabled());
-                }
+            Event::Activate | Event::Tick => self.draw_clock(settings),
+            Event::Button(Button::Alarm, ButtonEvent::Up) => {
+                // Toggle the seconds display (power-saving).
+                let show = !settings.show_seconds();
+                settings.set_show_seconds(show);
+                crate::movement::set_tick_rate(show);
+                self.draw_clock(settings);
             }
             Event::Button(Button::Alarm, ButtonEvent::LongPress) => {
                 self.signal_enabled = !self.signal_enabled;
@@ -157,6 +105,76 @@ impl WatchFace for SimpleClockFace {
     }
 }
 
+impl SimpleClockFace {
+    /// Renders the clock, hiding seconds when power-saving mode is active.
+    fn draw_clock(&mut self, settings: &mut Settings) {
+        let mut buf = [0u8; 11];
+        let date_time = rtc::get_date_time();
+        let previous = self.previous_date_time;
+        self.previous_date_time = date_time.to_reg();
+        let show_seconds = settings.show_seconds();
+
+        // Check the battery voltage once a day.
+        if date_time.day != self.last_battery_check {
+            self.last_battery_check = date_time.day;
+            watch::adc::enable_adc();
+            let voltage = watch::adc::get_vcc_voltage();
+            watch::adc::disable_adc();
+            self.battery_low = voltage < 2200;
+        }
+        if self.battery_low {
+            watch::slcd::set_indicator(Indicator::Lap);
+        }
+
+        let mut set_leading_zero = false;
+        let mut hour = date_time.hour;
+        if !settings.clock_mode_24h() {
+            if hour < 12 {
+                watch::slcd::clear_indicator(Indicator::Pm);
+            } else {
+                watch::slcd::set_indicator(Indicator::Pm);
+            }
+            hour %= 12;
+            if hour == 0 {
+                hour = 12;
+            }
+        }
+        if settings.clock_mode_24h() && settings.clock_24h_leading_zero() && hour < 10 {
+            set_leading_zero = true;
+        }
+
+        if show_seconds {
+            // Full render with seconds.
+            if (date_time.to_reg() >> 6) == (previous >> 6) {
+                // Only seconds changed; update just the seconds.
+                write_seconds(&mut buf, date_time);
+                watch::slcd::display_string(core::str::from_utf8(&buf[..4]).unwrap_or("  "), 8);
+            } else if (date_time.to_reg() >> 12) == (previous >> 12) {
+                // Minutes and seconds changed.
+                write_minutes_seconds(&mut buf, date_time);
+                watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 6);
+            } else {
+                write_full(&mut buf, date_time, hour);
+                watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+            }
+        } else {
+            // Power-saving: no seconds, only update on minute change.
+            if (date_time.to_reg() >> 12) != (previous >> 12) {
+                write_no_seconds(&mut buf, date_time, hour);
+                watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+            }
+        }
+
+        if set_leading_zero {
+            watch::slcd::display_string("0", 4);
+        }
+
+        if self.alarm_enabled != settings.alarm_enabled() {
+            self.update_alarm_indicator(settings.alarm_enabled());
+        }
+    }
+}
+
 fn write_seconds(buf: &mut [u8; 11], dt: DateTime) {
     buf[0] = b'0' + dt.second / 10;
     buf[1] = b'0' + dt.second % 10;
@@ -167,6 +185,19 @@ fn write_minutes_seconds(buf: &mut [u8; 11], dt: DateTime) {
     buf[1] = b'0' + dt.minute % 10;
     buf[2] = b'0' + dt.second / 10;
     buf[3] = b'0' + dt.second % 10;
+}
+
+fn write_no_seconds(buf: &mut [u8; 11], dt: DateTime, hour: u8) {
+    let weekday = utility::get_weekday(dt);
+    let wb = weekday.as_bytes();
+    buf[0] = wb[0];
+    buf[1] = wb[1];
+    buf[2] = b'0' + dt.day / 10;
+    buf[3] = b'0' + dt.day % 10;
+    buf[4] = b'0' + hour / 10;
+    buf[5] = b'0' + hour % 10;
+    buf[6] = b'0' + dt.minute / 10;
+    buf[7] = b'0' + dt.minute % 10;
 }
 
 fn write_full(buf: &mut [u8; 11], dt: DateTime, hour: u8) {

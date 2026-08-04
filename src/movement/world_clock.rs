@@ -6,7 +6,7 @@
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::movement::{self, TIMEZONE_OFFSETS};
 use crate::watch;
-use crate::watch::rtc::{self, DateTime};
+use crate::watch::rtc;
 use crate::watch::slcd::Indicator;
 use crate::watch::utility;
 
@@ -124,7 +124,7 @@ impl WorldClockFace {
         buf[9] = b'0' + dt.second % 10;
     }
 
-    fn do_settings_mode(&mut self, event: Event, settings: &mut Settings) {
+    fn do_settings_mode(&mut self, event: Event, _settings: &mut Settings) {
         match event {
             Event::Button(Button::Mode, ButtonEvent::Up) => {
                 movement::move_to_next_face();

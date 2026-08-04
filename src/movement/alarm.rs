@@ -3,13 +3,12 @@
 //! Port of the C `alarm_face.c`, adapted to the event-driven model. Supports
 //! multiple alarms with day-of-week, hour, minute, pitch, and beep settings.
 
+use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::movement::{self, TIMEZONE_OFFSETS};
 use crate::watch;
 use crate::watch::buzzer::Note as BuzzerNote;
 use crate::watch::rtc::{self, DateTime};
 use crate::watch::slcd::Indicator;
-use crate::watch::utility;
 
 const ALARM_ALARMS: usize = 16;
 const ALARM_DAY_STATES: u8 = 11;
@@ -149,7 +148,7 @@ impl AlarmFace {
 
         if self.is_setting {
             // Draw pitch level indicator.
-            if subsecond % 2 == 0 || self.setting_state != 4 {
+            if subsecond.is_multiple_of(2) || self.setting_state != 4 {
                 for k in 0..=self.alarm[self.alarm_idx].pitch.min(2) {
                     watch::slcd::set_pixel(
                         BUZZER_SEGDATA[k as usize][0],
@@ -158,7 +157,7 @@ impl AlarmFace {
                 }
             }
             // Draw beep rounds indicator.
-            if subsecond % 2 == 0 || self.setting_state != 5 {
+            if subsecond.is_multiple_of(2) || self.setting_state != 5 {
                 let beeps = self.alarm[self.alarm_idx].beeps;
                 if beeps == ALARM_MAX_BEEP_ROUNDS - 1 {
                     watch::slcd::display_character(b'L', BLINK_IDX[5] as u8);
