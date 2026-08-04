@@ -163,8 +163,8 @@ impl WorldClockFace {
         buf[3] = if hours < 0 { b'-' } else { b' ' };
         buf[4] = b'0' + hours.unsigned_abs() / 10;
         buf[5] = b'0' + hours.unsigned_abs() % 10;
-        buf[6] = b'0' + mins / 10;
-        buf[7] = b'0' + mins % 10;
+        buf[6] = b'0' + (mins / 10) as u8;
+        buf[7] = b'0' + (mins % 10) as u8;
         watch::slcd::set_colon();
         watch::slcd::clear_indicator(Indicator::Pm);
         watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);

@@ -6,8 +6,8 @@
 
 pub mod alarm;
 pub mod board;
-pub mod counter;
 pub mod countdown;
+pub mod counter;
 pub mod debounce;
 pub mod diagnostics;
 pub mod fault;
@@ -65,7 +65,7 @@ fn handle_background_tasks() {
             if let Some(face) = face.as_deref_mut()
                 && face.wants_background_task(&MOVEMENT_STATE.settings)
             {
-                face.loop_(Event::BackgroundTask, &MOVEMENT_STATE.settings);
+                face.loop_(Event::BackgroundTask, &mut MOVEMENT_STATE.settings);
             }
         }
     }
@@ -79,7 +79,7 @@ fn handle_scheduled_tasks() {
             if *task != 0 && *task <= date_time.to_reg() {
                 *task = 0;
                 if let Some(face) = WATCH_FACES[i].as_deref_mut() {
-                    face.loop_(Event::BackgroundTask, &MOVEMENT_STATE.settings);
+                    face.loop_(Event::BackgroundTask, &mut MOVEMENT_STATE.settings);
                 }
             }
         }
