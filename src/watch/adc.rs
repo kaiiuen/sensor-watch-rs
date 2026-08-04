@@ -63,7 +63,7 @@ fn supc() -> &'static atsaml22j::supc::RegisterBlock {
 
 /// Waits for the ADC to finish synchronizing.
 fn sync() {
-    wait_until(|| adc().syncbusy().read().bits() == 0);
+    let _ = wait_until(|| adc().syncbusy().read().bits() == 0);
 }
 
 /// Reads an analog value from the given MUXPOS channel.
@@ -75,7 +75,7 @@ fn get_analog_value(channel: Muxposselect) -> u16 {
 
     adc().swtrig().modify(|_, w| w.start().set_bit());
     // Wait for the result to be ready (bounded).
-    wait_until(|| adc().intflag().read().resrdy().bit_is_set());
+    let _ = wait_until(|| adc().intflag().read().resrdy().bit_is_set());
 
     adc().result().read().bits()
 }

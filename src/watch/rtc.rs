@@ -96,7 +96,7 @@ pub fn is_enabled() -> bool {
 
 /// Waits for the RTC to finish synchronizing its registers.
 fn sync() {
-    wait_until(|| rtc().syncbusy().read().bits() == 0);
+    let _ = wait_until(|| rtc().syncbusy().read().bits() == 0);
 }
 
 /// Initializes the RTC in clock/calendar (MODE2) mode.

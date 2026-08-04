@@ -34,7 +34,7 @@ fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
 
 /// Waits for the SERCOM to finish synchronizing.
 fn sync() {
-    wait_until(|| i2cm().syncbusy().read().bits() == 0);
+    let _ = wait_until(|| i2cm().syncbusy().read().bits() == 0);
 }
 
 /// Enables the I2C peripheral.
@@ -90,7 +90,7 @@ pub fn send(addr: i16, buf: &[u8]) {
         i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1));
     }
     // Wait for the address to be acknowledged (bounded).
-    if !wait_until(|| i2cm().status().read().busstate().bits() == 1) {
+    if wait_until(|| i2cm().status().read().busstate().bits() == 1).is_err() {
         return;
     }
 
@@ -100,7 +100,7 @@ pub fn send(addr: i16, buf: &[u8]) {
             i2cm().data().write(|w| w.bits(byte));
         }
         // Wait for the data to be transmitted (master on bus flag), bounded.
-        if !wait_until(|| i2cm().intflag().read().mb().bit_is_set()) {
+        if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
             return;
         }
     }
@@ -124,13 +124,13 @@ pub fn receive(addr: i16, buf: &mut [u8]) {
             .write(|w| w.bits(((addr as u32) & 0x7F) << 1 | 1));
     }
     // Wait for the address to be acknowledged (bounded).
-    if !wait_until(|| i2cm().status().read().busstate().bits() == 1) {
+    if wait_until(|| i2cm().status().read().busstate().bits() == 1).is_err() {
         return;
     }
 
     for byte in buf.iter_mut() {
         // Wait for data to be ready (slave on bus flag), bounded.
-        if !wait_until(|| i2cm().intflag().read().sb().bit_is_set()) {
+        if wait_until(|| i2cm().intflag().read().sb().bit_is_set()).is_err() {
             return;
         }
         *byte = i2cm().data().read().bits();

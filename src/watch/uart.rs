@@ -36,7 +36,7 @@ fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
 
 /// Waits for the SERCOM to finish synchronizing.
 fn sync() {
-    wait_until(|| usart().syncbusy().read().bits() == 0);
+    let _ = wait_until(|| usart().syncbusy().read().bits() == 0);
 }
 
 /// Initializes the debug UART.
@@ -124,7 +124,7 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
 pub fn puts(s: &str) {
     for &byte in s.as_bytes() {
         // Wait for the data register to be empty (bounded).
-        if !wait_until(|| usart().intflag().read().dre().bit_is_set()) {
+        if wait_until(|| usart().intflag().read().dre().bit_is_set()).is_err() {
             return;
         }
         // SAFETY: writing a valid DATA value.
@@ -133,12 +133,12 @@ pub fn puts(s: &str) {
         }
     }
     // Wait for transmission to complete (bounded).
-    wait_until(|| usart().intflag().read().txc().bit_is_set());
+    let _ = wait_until(|| usart().intflag().read().txc().bit_is_set());
 }
 
 /// Receives a single byte from the UART's RX pin (blocking).
 pub fn getc() -> u8 {
     // Wait for a byte (bounded).
-    wait_until(|| usart().intflag().read().rxc().bit_is_set());
+    let _ = wait_until(|| usart().intflag().read().rxc().bit_is_set());
     usart().data().read().bits() as u8
 }
