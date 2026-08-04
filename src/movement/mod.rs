@@ -9,6 +9,7 @@ pub mod board;
 pub mod countdown;
 pub mod counter;
 pub mod debounce;
+pub mod decimal_time;
 pub mod diagnostics;
 pub mod fault;
 pub mod flashlight;
@@ -52,6 +53,10 @@ static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsF
 
 /// The static flashlight face instance.
 static mut FLASHLIGHT: flashlight::FlashlightFace = flashlight::FlashlightFace::new_static();
+
+/// The static decimal time face instance.
+static mut DECIMAL_TIME: decimal_time::DecimalTimeFace =
+    decimal_time::DecimalTimeFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -310,6 +315,7 @@ pub fn app_setup() {
             WATCH_FACES[4] = Some(&mut *core::ptr::addr_of_mut!(WORLD_CLOCK));
             WATCH_FACES[5] = Some(&mut *core::ptr::addr_of_mut!(DIAGNOSTICS));
             WATCH_FACES[6] = Some(&mut *core::ptr::addr_of_mut!(FLASHLIGHT));
+            WATCH_FACES[7] = Some(&mut *core::ptr::addr_of_mut!(DECIMAL_TIME));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
