@@ -1,0 +1,10 @@
+# Build configuration for the SAM L22 (Cortex-M0+)
+[build]
+target = "thumbv6m-none-eabi"
+
+[target.thumbv6m-none-eabi]
+# Use the rust-lld linker bundled with the toolchain
+rustflags = [
+    "-C", "link-arg=-Tlink.x",
+    "-C", "linker=rust-lld",
+]

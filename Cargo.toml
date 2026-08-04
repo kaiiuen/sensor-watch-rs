@@ -1,0 +1,23 @@
+[package]
+name = "sensor-watch"
+version = "0.1.0"
+edition = "2024"
+description = "A Rust rewrite of the Sensor-Watch firmware for the Microchip SAM L22"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+cortex-m = "0.7"
+cortex-m-rt = "0.7"
+panic-halt = "0.2"
+atsaml22j = "0.1.0"
+
+# Optional: embedded-hal traits for driver-style code
+embedded-hal = "0.2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
