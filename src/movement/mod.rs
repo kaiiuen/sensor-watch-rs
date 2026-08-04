@@ -5,6 +5,7 @@
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
 pub mod alarm;
+pub mod board;
 pub mod counter;
 pub mod countdown;
 pub mod debounce;
@@ -12,6 +13,7 @@ pub mod diagnostics;
 pub mod fault;
 pub mod persist;
 pub mod simple_clock;
+pub mod stats;
 pub mod types;
 pub mod world_clock;
 
@@ -348,6 +350,7 @@ fn cb_light_btn_interrupt() {
     unsafe {
         let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_LIGHT);
         if let Some(ev) = debounce::update(Button::Light, pin_level) {
+            stats::press_light();
             PENDING_EVENT = ev;
         }
     }
@@ -357,6 +360,7 @@ fn cb_mode_btn_interrupt() {
     unsafe {
         let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_MODE);
         if let Some(ev) = debounce::update(Button::Mode, pin_level) {
+            stats::press_mode();
             PENDING_EVENT = ev;
         }
     }
@@ -366,6 +370,7 @@ fn cb_alarm_btn_interrupt() {
     unsafe {
         let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_ALARM);
         if let Some(ev) = debounce::update(Button::Alarm, pin_level) {
+            stats::press_alarm();
             PENDING_EVENT = ev;
         }
     }
