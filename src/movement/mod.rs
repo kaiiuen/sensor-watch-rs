@@ -4,6 +4,7 @@
 //! resource: it wakes only to react to a single event, then immediately
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
+pub mod countdown;
 pub mod debounce;
 pub mod fault;
 pub mod persist;
@@ -26,6 +27,9 @@ pub static mut WATCH_FACES: [Option<&'static mut dyn WatchFace>; MOVEMENT_NUM_FA
 /// The static simple clock face instance.
 static mut SIMPLE_CLOCK: simple_clock::SimpleClockFace =
     simple_clock::SimpleClockFace::new_static();
+
+/// The static countdown face instance.
+static mut COUNTDOWN: countdown::CountdownFace = countdown::CountdownFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -255,6 +259,7 @@ pub fn app_setup() {
         // Register the watch faces (static instances, no heap).
         if WATCH_FACES[0].is_none() {
             WATCH_FACES[0] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK));
+            WATCH_FACES[1] = Some(&mut *core::ptr::addr_of_mut!(COUNTDOWN));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
