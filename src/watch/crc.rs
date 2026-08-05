@@ -46,7 +46,7 @@ pub fn firmware_crc() -> u32 {
 /// been stored yet (first boot after flashing).
 fn load_stored() -> Option<u32> {
     let mut buf = [0u8; 8];
-    if !crate::watch::storage::read(CRC_ROW, CRC_OFFSET, &mut buf) {
+    if !crate::watch::storage::wear_leveled_read(CRC_OFFSET, &mut buf) {
         return None;
     }
     let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);

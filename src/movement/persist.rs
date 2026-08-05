@@ -19,7 +19,7 @@ const SETTINGS_MAGIC: u32 = 0x5357_0001; // "SW" + version
 /// valid settings have been saved yet (e.g. first boot).
 pub fn load() -> Option<Settings> {
     let mut buf = [0u8; 8];
-    if !storage::read(0, SETTINGS_OFFSET, &mut buf) {
+    if !storage::wear_leveled_read(SETTINGS_OFFSET, &mut buf) {
         return None;
     }
     let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);

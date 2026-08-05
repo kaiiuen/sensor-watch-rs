@@ -189,20 +189,30 @@ const WEAR_ROWS: u32 = 8;
 /// The current wear-leveling row index, stored in a backup register.
 const WEAR_ROW_REG: u8 = 7;
 
-/// Writes data with simple wear leveling.
+/// A magic value written at the start of each wear-leveled row to mark it as
+/// the most recent valid entry.
+const WEAR_MAGIC: u32 = 0x574C_0001; // "WL" + version
+
+/// Writes data with log-structured wear leveling.
 ///
-/// The data is written to a rotating row (0..WEAR_ROWS). Each write moves to
-/// the next row, so writes are spread across the area instead of hammering
-/// one row. The current row index is persisted in an RTC backup register so
-/// it survives resets.
+/// The data is written to a rotating row (0..WEAR_ROWS) with a version-magic
+/// header. Each write moves to the next row, so writes are spread across the
+/// area instead of hammering one row. The current row index is persisted in an
+/// RTC backup register so it survives resets. On boot, the most recent valid
+/// row (matching the magic) is found by scanning, giving crash recovery.
 pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     let row = crate::watch::deepsleep::get_backup_data(WEAR_ROW_REG) % WEAR_ROWS;
 
-    // Erase the target row, then write to it.
+    // Erase the target row, then write the magic header and the data.
     if !erase(row) {
         return false;
     }
-    if !write(row, offset, buffer) {
+    let mut header = [0u8; 4];
+    header.copy_from_slice(&WEAR_MAGIC.to_le_bytes());
+    if !write(row, 0, &header) {
+        return false;
+    }
+    if !write(row, offset + 4, buffer) {
         return false;
     }
 
@@ -210,4 +220,56 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     let next = (row + 1) % WEAR_ROWS;
     crate::watch::deepsleep::store_backup_data(next, WEAR_ROW_REG);
     true
+}
+
+/// Reads data written with log-structured wear leveling.
+///
+/// Scans the rows for the most recent valid entry (matching the magic header)
+/// and reads the data from it. Returns true if a valid entry was found.
+pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
+    // Scan all rows for the most recent valid entry (highest row index with a
+    // valid magic, wrapping around from the last written row).
+    let last = crate::watch::deepsleep::get_backup_data(WEAR_ROW_REG) % WEAR_ROWS;
+    for i in 0..WEAR_ROWS {
+        // Search backwards from the last-written row.
+        let row = (last + WEAR_ROWS - i - 1) % WEAR_ROWS;
+        let mut header = [0u8; 4];
+        if read(row, 0, &mut header) && u32::from_le_bytes(header) == WEAR_MAGIC {
+            return read(row, offset + 4, buffer);
+        }
+    }
+    false
+}
+
+/// Writes a 32-bit word with SECDED ECC protection.
+///
+/// The data word is encoded with a 7-bit Hamming code and stored as 5 bytes
+/// (40 bits). On read, single-bit errors are corrected and double-bit errors
+/// are detected.
+pub fn ecc_write(row: u32, offset: u32, data: u32) -> bool {
+    let code = crate::watch::ecc::encode(data);
+    let mut buf = [0u8; 5];
+    buf[0] = (code & 0xFF) as u8;
+    buf[1] = ((code >> 8) & 0xFF) as u8;
+    buf[2] = ((code >> 16) & 0xFF) as u8;
+    buf[3] = ((code >> 24) & 0xFF) as u8;
+    buf[4] = ((code >> 32) & 0xFF) as u8;
+    write(row, offset, &buf)
+}
+
+/// Reads a 32-bit word with SECDED ECC protection.
+///
+/// Returns `(data, corrected)`: the data word and whether a single-bit error
+/// was corrected. A double-bit error returns `corrected = false` (corruption).
+pub fn ecc_read(row: u32, offset: u32) -> (u32, bool) {
+    let mut buf = [0u8; 5];
+    if !read(row, offset, &mut buf) {
+        return (0, false);
+    }
+    let code = (buf[0] as u64)
+        | ((buf[1] as u64) << 8)
+        | ((buf[2] as u64) << 16)
+        | ((buf[3] as u64) << 24)
+        | ((buf[4] as u64) << 32);
+    crate::watch::ecc::decode(code)
 }

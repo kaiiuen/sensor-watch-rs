@@ -517,6 +517,9 @@ pub static mut PENDING_EVENT: Event = Event::Tick;
 /// A fast-tick counter (128 Hz) used for long-press detection.
 pub static mut FAST_TICKS: u16 = 0;
 
+/// The serial command shell.
+pub static mut SHELL: watch::shell::Shell = watch::shell::Shell::new_static();
+
 /// Handles background tasks for all faces.
 fn handle_background_tasks() {
     unsafe {
@@ -1083,6 +1086,26 @@ pub fn store_settings() {
     save_settings();
 }
 
+/// Applies a crystal drift correction (parts per million) to the RTC.
+///
+/// The RTC frequency-correction register compensates for crystal drift. A
+/// positive value slows the clock; a negative value speeds it up. This is the
+/// same mechanism the finetune face uses, exposed here so the companion app or
+/// a calibration routine can set it.
+pub fn apply_drift_correction(ppm: i16) {
+    // The SAM L22 FREQCORR register: value 0-127 with a sign bit. Each step
+    // corrects roughly 0.95 ppm at 1 kHz. Clamp to the valid range.
+    let clamped = ppm.clamp(-127, 127);
+    let sign = if clamped < 0 { 1 } else { 0 };
+    let value = clamped.unsigned_abs();
+    rtc::freqcorr_write(value as i16, sign);
+}
+
+/// Returns the current drift correction in parts per million.
+pub fn get_drift_correction() -> i16 {
+    rtc::freqcorr_read()
+}
+
 /// Detects and enables the accelerometer on the 9-pin connector.
 ///
 /// Returns true if a LIS2DW is present. When present, the watch can use
@@ -1264,6 +1287,9 @@ pub fn app_setup() {
 
         watch::slcd::enable_display();
 
+        // Enable the debug UART for the serial shell (TX on A4, RX on A2).
+        watch::uart::enable_uart(Some(watch::extint::A4), Some(watch::extint::A2), 9600);
+
         // Detect an optional accelerometer on the 9-pin connector. If present,
         // tap detection and wake-on-motion are available to faces.
         let has_accel = accelerometer_begin();
@@ -1426,6 +1452,9 @@ pub fn app_loop() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
         }
 
+        // Poll the serial shell for incoming commands.
+        SHELL.poll();
+
         // Persist any settings a face may have changed.
         save_settings();
 
@@ -1493,6 +1522,8 @@ fn cb_alarm_fired() {
 /// The 1 Hz tick callback: wakes the CPU to render the current face.
 pub fn cb_tick() {
     unsafe {
+        // Monitor the RTC heartbeat (detect a frozen clock).
+        fault::check_heartbeat();
         PENDING_EVENT = Event::Tick;
     }
 }

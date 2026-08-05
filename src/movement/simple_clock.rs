@@ -18,6 +18,8 @@ pub struct SimpleClockFace {
     last_battery_check: u8,
     battery_low: bool,
     alarm_enabled: bool,
+    /// Seconds remaining to show seconds after a raise-to-wake tap.
+    raise_seconds_left: u8,
 }
 
 impl SimpleClockFace {
@@ -30,6 +32,7 @@ impl SimpleClockFace {
             last_battery_check: 0xFF,
             battery_low: false,
             alarm_enabled: false,
+            raise_seconds_left: 0,
         }
     }
 
@@ -71,7 +74,13 @@ impl WatchFace for SimpleClockFace {
 
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
         match event {
-            Event::Activate | Event::Tick => self.draw_clock(settings),
+            Event::Activate | Event::Tick => {
+                // Decrement the raise-to-wake seconds window.
+                if self.raise_seconds_left > 0 {
+                    self.raise_seconds_left -= 1;
+                }
+                self.draw_clock(settings);
+            }
             Event::Button(Button::Alarm, ButtonEvent::Up) => {
                 // Toggle the seconds display (power-saving).
                 let show = !settings.show_seconds();
@@ -85,6 +94,15 @@ impl WatchFace for SimpleClockFace {
                     watch::slcd::set_indicator(Indicator::Bell);
                 } else {
                     watch::slcd::clear_indicator(Indicator::Bell);
+                }
+            }
+            // Raise-to-wake: a tap temporarily shows seconds.
+            Event::SingleTap | Event::DoubleTap | Event::AccelerometerWake => {
+                if !settings.show_seconds() {
+                    self.raise_seconds_left = 5;
+                    // Wake at 1 Hz while the raise window is active.
+                    crate::movement::set_tick_rate(true);
+                    self.draw_clock(settings);
                 }
             }
             Event::BackgroundTask => {
@@ -112,7 +130,12 @@ impl SimpleClockFace {
         let date_time = rtc::get_date_time();
         let previous = self.previous_date_time;
         self.previous_date_time = date_time.to_reg();
-        let show_seconds = settings.show_seconds();
+        let show_seconds = settings.show_seconds() || self.raise_seconds_left > 0;
+
+        // When the raise-to-wake window expires, return to the power-saving rate.
+        if self.raise_seconds_left == 0 && !settings.show_seconds() {
+            crate::movement::set_tick_rate(false);
+        }
 
         // Check the battery voltage once a day.
         if date_time.day != self.last_battery_check {

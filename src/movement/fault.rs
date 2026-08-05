@@ -45,6 +45,8 @@ pub enum Fault {
     RtcLostTime = 6,
     /// The firmware image failed its CRC integrity check (bit-rot).
     CorruptImage = 7,
+    /// The 32 kHz crystal failed; the RTC fell back to the internal oscillator.
+    ClockFailure = 8,
 }
 
 /// Backup register indices for fault storage (registers 4-7 are free).
@@ -130,6 +132,37 @@ pub fn check_boot_throttle() {
     if count > MAX_BOOTS_IN_WINDOW {
         unsafe { SAFE_STATE = true };
     }
+}
+
+/// Checks the clock failure detector and records a fault if the crystal failed.
+///
+/// Called once at boot. If the CFD fired, the 32 kHz crystal is broken and the
+/// RTC is running on the internal oscillator; we record a `ClockFailure` fault
+/// so the user is informed the watch is keeping less-accurate time.
+pub fn check_clock_failure() {
+    if crate::watch::clock::cfd_fired() {
+        record_fault(Fault::ClockFailure);
+    }
+}
+
+/// Backup register for the last heartbeat timestamp.
+const REG_HEARTBEAT: u8 = 3;
+
+/// Monitors the RTC heartbeat (the ticking seconds).
+///
+/// Called on each tick. If the RTC seconds stop advancing (a hang or a frozen
+/// RTC), we record an `RtcLostTime` fault. The hardware watchdog still resets
+/// on a full hang; this adds a second layer that detects a frozen clock even
+/// when the CPU is alive.
+pub fn check_heartbeat() {
+    let now = crate::watch::rtc::get_date_time().to_reg();
+    let last = deepsleep::get_backup_data(REG_HEARTBEAT);
+    // If the last heartbeat is more than a few seconds behind, the RTC is not
+    // advancing (or was reset). Record a fault.
+    if last != 0 && now.wrapping_sub(last) > 5 {
+        record_fault(Fault::RtcLostTime);
+    }
+    deepsleep::store_backup_data(now, REG_HEARTBEAT);
 }
 
 /// Returns the reason the device last reset.

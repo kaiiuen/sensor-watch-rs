@@ -67,6 +67,28 @@ fn enable_rtc_apb() {
     mclk().apbamask().modify(|_, w| w.rtc_().set_bit());
 }
 
+/// Enables the Clock Failure Detector (CFD).
+///
+/// If the 32 kHz external crystal stops oscillating (a mechanical crack or
+/// thermal shock), the CFD detects the failure and switches the RTC time base
+/// to the internal OSCULP32K so the watch keeps running (slightly less
+/// accurately) instead of freezing. `swback` enables the automatic switchover.
+pub fn init_cfd() {
+    // Enable the CFD and automatic switch-back to the internal oscillator.
+    osc32kctrl().cfdctrl().modify(|_, w| {
+        w.cfden().set_bit();
+        w.swback().set_bit()
+    });
+}
+
+/// Returns true if the clock failure detector has fired (crystal lost).
+pub fn cfd_fired() -> bool {
+    // The CFD status is reflected in the OSC32KCTRL STATUS register's
+    // CLKFAIL bit. If set, the crystal has failed and the RTC is running
+    // on the internal oscillator.
+    osc32kctrl().status().read().clkfail().bit_is_set()
+}
+
 /// Initializes the clocks required by the RTC.
 ///
 /// This is called from `watch::rtc::init()` before the RTC is configured.
@@ -74,4 +96,7 @@ pub fn init() {
     init_xosc32k();
     init_rtc_source();
     enable_rtc_apb();
+    // Enable the clock failure detector so a broken crystal doesn't freeze
+    // the watch.
+    init_cfd();
 }
