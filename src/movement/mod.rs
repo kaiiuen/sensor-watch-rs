@@ -49,6 +49,7 @@ pub mod simple_calculator;
 pub mod simple_clock;
 pub mod simple_coin_flip;
 pub mod stats;
+pub mod stock_stopwatch;
 pub mod stopwatch;
 pub mod tachymeter;
 pub mod tally;
@@ -259,6 +260,10 @@ static mut RPN_CALCULATOR: rpn_calculator::RpnCalculatorFace =
 
 /// The static TOTP face instance.
 static mut TOTP: totp::TotpFace = totp::TotpFace::new_static();
+
+/// The static stock stopwatch face instance.
+static mut STOCK_STOPWATCH: stock_stopwatch::StockStopwatchFace =
+    stock_stopwatch::StockStopwatchFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -565,6 +570,7 @@ pub fn app_setup() {
             WATCH_FACES[52] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CALCULATOR));
             WATCH_FACES[53] = Some(&mut *core::ptr::addr_of_mut!(RPN_CALCULATOR));
             WATCH_FACES[54] = Some(&mut *core::ptr::addr_of_mut!(TOTP));
+            WATCH_FACES[55] = Some(&mut *core::ptr::addr_of_mut!(STOCK_STOPWATCH));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
