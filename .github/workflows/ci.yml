@@ -20,6 +20,13 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build firmware
         run: cargo build --target thumbv6m-none-eabi
+      - name: Build firmware (release)
+        run: cargo build --release --target thumbv6m-none-eabi
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensor-watch-elf
+          path: target/thumbv6m-none-eabi/release/sensor-watch
 
   clippy:
     name: Clippy

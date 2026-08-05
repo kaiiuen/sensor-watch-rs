@@ -11,12 +11,14 @@ it's used. It complements `ARCHITECTURE.md` (the high-level overview).
 | Symbol | Type | Purpose |
 |--------|------|---------|
 | `main()` | fn | The reset handler. Runs the boot sequence, then the event loop. |
+| `copy_ramfunc()` | fn | Copies the `.ramfunc` section from flash to RAM at boot. |
 | `#![no_std]` | attr | No standard library (bare-metal). |
 | `#![no_main]` | attr | No `main` symbol from std; we define our own entry. |
 | `#![allow(static_mut_refs)]` | attr | Allows access to `static mut` (used for global state). |
 
-**Boot sequence rationale:** each step depends on the previous. Interrupt
-priorities → clocks → RTC → watchdog → framework → faces → tick → loop.
+**Boot sequence rationale:** each step depends on the previous. RAM-copy →
+reset-reason → boot-throttle → interrupt priorities → clocks → RTC → watchdog →
+BOD33 → framework → faces → tick → loop.
 
 ---
 
@@ -28,7 +30,8 @@ priorities → clocks → RTC → watchdog → framework → faces → tick → 
 | `delay()` | fn | A crude blocking delay for the blink. |
 
 **Why reset-on-panic:** a sealed wearable must recover on its own. Blinking
-first gives a visible fault indicator; resetting recovers.
+first gives a visible fault indicator; resetting recovers. The release profile
+uses `panic = "abort"` to keep the binary small.
 
 ---
 
@@ -75,7 +78,7 @@ tick (1). Lower value = higher urgency on ARMv6-M.
 | `Callback` | type | A function pointer for callbacks. |
 | `init()` | fn | Configures the RTC in clock/calendar mode. |
 | `is_enabled()` | fn | Returns true if the RTC is enabled. |
-| `set_date_time()` | fn | Sets the clock. |
+| `set_date_time()` | fn | Sets the clock (double-sync for reliability). |
 | `get_date_time()` | fn | Reads the clock. |
 | `register_tick_callback()` | fn | 1 Hz tick callback. |
 | `register_periodic_callback()` | fn | Configurable tick (1-128 Hz). |
@@ -87,7 +90,7 @@ tick (1). Lower value = higher urgency on ARMv6-M.
 | `RTC()` | fn | The interrupt handler (tick/tamper/alarm dispatch). |
 
 **Why the RTC owns timekeeping:** it keeps counting in STANDBY, so the CPU can
-sleep while the RTC tracks elapsed time.
+sleep while the RTC tracks elapsed time. All register writes wait for `SYNCBUSY`.
 
 ---
 
@@ -153,6 +156,7 @@ visible while the CPU sleeps.
 |--------|------|---------|
 | `enable_leds()` | fn | Enable TCC0 PWM. |
 | `set_led_color()` | fn | Set red/green duty cycle. |
+| `set_led_color_rgb()` | fn | Set red/green/blue duty cycle. |
 | `set_led_red()` / `set_led_green()` / `set_led_off()` | fn | Presets. |
 | `set_invert_polarity()` | fn | Invert for common-anode (Red/Pro) boards. |
 | `is_enabled()` | fn | Is the TCC on. |
@@ -171,6 +175,7 @@ visible while the CPU sleeps.
 | `set_buzzer_period()` | fn | Set the tone period. |
 | `set_buzzer_on()` / `set_buzzer_off()` | fn | Output control. |
 | `play_note()` | fn | Play a note (blocking). |
+| `play_sequence()` | fn | Play a note sequence (non-blocking, TC3). |
 | `set_voltage()` | fn | Set buzzer voltage. |
 
 ---
@@ -182,12 +187,13 @@ visible while the CPU sleeps.
 | `ReferenceVoltage` | enum | INTREF, VCC/1.6, VCC/2, VCC. |
 | `enable_adc()` | fn | Enable the ADC. |
 | `get_analog_pin_level()` | fn | Read a pin. |
-| `get_vcc_voltage()` | fn | Battery voltage in mV. |
+| `get_vcc_voltage()` | fn | Battery voltage in mV (inverse scaling). |
 | `set_analog_num_samples()` | fn | Sample count. |
 | `set_analog_reference_voltage()` | fn | Reference selection. |
 
-**Why:** battery voltage is read against the internal 1.024 V reference (you
-can't compare VCC to itself).
+**Why inverse scaling:** the battery rail is measured against the internal
+reference, so the raw value *rises* as the battery weakens. The formula
+`V = 1.0 V * ADC_Max / ADC_Raw` corrects for this.
 
 ---
 
@@ -198,6 +204,7 @@ can't compare VCC to itself).
 | `enable_i2c()` | fn | Enable SERCOM1 I2C master. |
 | `send()` / `receive()` | fn | Raw transfers. |
 | `write8()` / `read8()` / `read16()` / `read24()` / `read32()` | fn | Register helpers. |
+| `pins_to_floating_before_sleep()` | fn | Float SDA/SCL to stop sensor leakage. |
 
 ---
 
@@ -224,11 +231,12 @@ can't compare VCC to itself).
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `read()` / `write()` / `erase()` | fn | Raw RWW EEPROM access. |
+| `read()` / `write()` / `erase()` | fn | Raw RWW EEPROM access. `write()`/`erase()` run from `.ramfunc`. |
 | `sync()` | fn | Wait for pending writes. |
 | `wear_leveled_write()` | fn | Write with wear leveling (rotates rows). |
 
 **Why wear leveling:** flash has limited write cycles; rotating extends life.
+**Why `.ramfunc`:** avoids the read-while-write bus stall.
 
 ---
 
@@ -239,6 +247,9 @@ can't compare VCC to itself).
 | `register_extwake_callback()` | fn | External wake on A2/A4/Alarm. |
 | `store_backup_data()` / `get_backup_data()` | fn | RTC backup registers. |
 | `enter_sleep_mode()` | fn | Enter STANDBY. |
+| `enter_standby()` | fn | SysTick-safe STANDBY (main-loop sleep). |
+| `init_bod33()` | fn | Configure the brown-out detector. |
+| `enter_backup_mode()` | fn | Enter the deepest sleep (BACKUP). |
 
 ---
 
@@ -260,8 +271,20 @@ hanging the CPU.
 |--------|------|---------|
 | `init()` | fn | Enable the WDT (~2s, always-on). |
 | `kick()` | fn | Reload the WDT. |
+| `kick_windowed()` | fn | Reload only from the main loop (windowed). |
 
 **Why:** catches hangs that the panic handler can't.
+
+---
+
+## `src/watch/crc.rs` — CRC-32 integrity
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `crc32()` | fn | Compute CRC-32 over a flash range. |
+| `check_firmware_integrity()` | fn | Compare the text CRC against the expected signature. |
+
+**Why:** detects flash bit-rot so a corrupt image can be caught.
 
 ---
 
@@ -285,14 +308,16 @@ hanging the CPU.
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `MOVEMENT_NUM_FACES` | const | Number of face slots (8). |
+| `MOVEMENT_NUM_FACES` | const | Number of face slots (98). |
 | `MOVEMENT_LONG_PRESS_TICKS` | const | Long-press threshold (64 fast ticks). |
-| `Settings` | struct | 32-bit packed user preferences. |
+| `MOVEMENT_REALLY_LONG_PRESS_TICKS` | const | Really-long-press threshold (192 fast ticks). |
+| `Settings` | struct | 32-bit packed user preferences, `#[repr(C, align(4))]`. |
 | `Button` | enum | Light, Mode, Alarm. |
-| `ButtonEvent` | enum | Down, Up, LongPress, LongUp. |
+| `ButtonEvent` | enum | Down, Up, LongPress, LongUp, ReallyLongPress. |
 | `Event` | enum | Activate, Tick, BackgroundTask, Button. |
-| `WatchFace` | trait | The face interface. |
+| `WatchFace` | trait | The face interface (setup/activate/loop_/resign + optional hooks). |
 | `MovementState` | struct | Global framework state. |
+| `ClockMode` | enum | 12H / 24H / 024H. |
 | `TIMEZONE_OFFSETS` | const | Timezone table (41 entries). |
 
 **Why a closed `Event` enum:** deterministic — every event is known and handled.
@@ -309,8 +334,9 @@ hanging the CPU.
 | `set_tick_rate()` | fn | 1 Hz vs 1/minute wake rate. |
 | `move_to_face()` / `move_to_next_face()` | fn | Face switching. |
 | `default_loop_handler()` | fn | Standard button behavior. |
-| `save_settings()` | fn | Persist settings. |
+| `save_settings()` / `store_settings()` | fn | Persist settings. |
 | `release_peripherals()` | fn | Disable unused peripherals. |
+| `get_local_date_time()` etc. | fn | Timezone-aware time accessors. |
 | `cb_tick()` | fn | 1 Hz tick callback. |
 | `cb_fast_tick()` | fn | 128 Hz fast tick (long-press). |
 | `cb_light_btn_interrupt()` etc. | fn | Button interrupt callbacks. |
@@ -322,7 +348,7 @@ hanging the CPU.
 | Symbol | Type | Purpose |
 |--------|------|---------|
 | `update()` | fn | Feed a raw pin reading, get a debounced event. |
-| `check_long_press()` | fn | Detect long-presses on the fast tick. |
+| `check_long_press()` | fn | Detect long/really-long presses on the fast tick. |
 
 **Why:** mechanical buttons bounce; debouncing filters spurious edges.
 
@@ -337,6 +363,7 @@ hanging the CPU.
 | `record_fault()` | fn | Record a fault in a backup register. |
 | `last_fault()` / `fault_count()` | fn | Read fault state. |
 | `check_reset_reason()` | fn | Read hardware reset cause at boot. |
+| `check_boot_throttle()` | fn | Detect a brown-out reboot loop. |
 | `signal_fault()` | fn | LED flash code. |
 
 ---
@@ -375,16 +402,24 @@ hanging the CPU.
 ## The watch faces
 
 Each face implements `WatchFace` with `setup`, `activate`, `loop_`, `resign`,
-and optionally `wants_background_task`.
+and optionally `wants_background_task` and `advise`.
+
+There are **98 registered faces**. Highlights:
 
 | Face | File | Purpose |
 |------|------|---------|
 | Simple clock | `simple_clock.rs` | Main clock, seconds toggle. |
 | Countdown | `countdown.rs` | Countdown timer. |
 | Alarm | `alarm.rs` | Alarms with settings. |
+| Advanced alarm | `advanced_alarm.rs` | 16 alarm slots with day modes, pitch, beeps. |
 | Counter | `counter.rs` | Tally counter. |
-| World clock | `world_clock.rs` | Timezone clock. |
+| World clock | `world_clock.rs` / `world_clock2.rs` | Timezone clocks. |
 | Diagnostics | `diagnostics.rs` | Device/settings/stats manager. |
+| Hydration | `hydration.rs` | Water intake tracker with log. |
+| Stopwatch | `stopwatch.rs` | Stopwatch. |
+| Timer | `timer.rs` | Multi-slot countdown timer. |
+| Moon phase | `moon_phase.rs` | Lunar phase. |
+| + 86 more | — | Games, calculators, astronomy, sensors, and more. |
 
 ---
 
@@ -395,6 +430,7 @@ and optionally `wants_background_task`.
 | `datetime.rs` | `DateTime` + pack/unpack. |
 | `settings.rs` | `Settings` bit-packing. |
 | `utility.rs` | Date/time math. |
+| `uf2.rs` | UF2 encoding (used by the build tool). |
 
 The `core` crate is host-testable (no hardware dependency), so its logic is
 covered by unit tests.

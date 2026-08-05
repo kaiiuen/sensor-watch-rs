@@ -17,11 +17,11 @@ rewrite in Rust.
 
 - **`src/watch/`** — the hardware abstraction layer (HAL). One module per
   peripheral (RTC, LCD, GPIO, buttons, LED, buzzer, ADC, I2C, SPI, UART,
-  storage, deep-sleep, watchdog, etc.).
+  storage, deep-sleep, watchdog, CRC, utility).
 - **`src/movement/`** — the watchface framework and the faces. The dispatcher
   (`mod.rs`) reacts to events; each face implements the `WatchFace` trait.
-- **`core/`** — pure logic (date math, settings bit-packing) that is
-  host-testable.
+- **`core/`** — pure logic (date math, settings bit-packing, UF2 encoding) that
+  is host-testable.
 - **`src/main.rs`** — the entry point and boot sequence.
 - **`src/panic.rs`** — the self-recovering panic handler.
 

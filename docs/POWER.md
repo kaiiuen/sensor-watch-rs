@@ -51,11 +51,18 @@ Interrupt fires
   └─► app_loop() reacts to ONE event
   └─► release_peripherals()
   └─► kick watchdog
-  └─► wfi() (STANDBY)
+  └─► enter_standby()  (SysTick-safe STANDBY)
 ```
 
 The CPU is active for **microseconds to a couple milliseconds** per event —
 just long enough to update the display or handle a button. Then it sleeps.
+
+### Why SysTick-safe standby?
+
+If the SysTick interrupt fires at the exact microsecond the CPU enters STANDBY
+while back-bias is enabled, the SAM L22 throws a Hard Fault. `enter_standby()`
+disables the SysTick interrupt immediately before `wfi()` and re-enables it
+right after waking, eliminating that race.
 
 ### The closed event set
 
@@ -84,9 +91,10 @@ This is controlled by the `show_seconds` setting and `set_tick_rate()`.
 
 ### 2. Peripheral auto-release
 
-After every `app_loop`, `release_peripherals()` disables ADC, I2C, and SPI.
-The LCD, RTC, and buttons stay on (they're needed). This ensures no face can
-leave a peripheral on to drain the battery.
+After every `app_loop`, `release_peripherals()` disables ADC, I2C, and SPI, and
+reconfigures the I2C pins to floating inputs. The LCD, RTC, and buttons stay on
+(they're needed). This ensures no face can leave a peripheral on to drain the
+battery, and no sensor board can backward-power itself through the I2C bus.
 
 ### 3. Zero-heap
 
@@ -98,6 +106,8 @@ leaks.
 
 The WDT resets the chip if the main loop hangs. This guarantees recovery and
 prevents a hang from causing a long active time (which would drain the battery).
+It is only refreshed from the main loop (windowed clearing), so a runaway
+interrupt loop cannot mask a hang.
 
 ### 5. Bounded waits
 
@@ -108,6 +118,12 @@ peripheral returns an error instead of hanging the CPU.
 
 - **RAM** (always-on in STANDBY) holds runtime state. No flash wear.
 - **Flash** holds only persistent settings, written rarely and wear-leveled.
+
+### 7. Brown-out protection
+
+BOD33 monitors VDD and interrupts before the rail falls below the CPU threshold.
+The boot-count throttle detects a brown-out reboot loop and drops the watch into
+a safe state (buzzer/LED disabled) until the battery is replaced.
 
 ---
 
@@ -136,9 +152,9 @@ this — a reaction is a handful of register writes.
 
 ### Flash (256 KB)
 
-- Release binary: ~68 KB (~27%)
+- Release binary: ~70 KB (~27%)
 - Each face: ~1-3 KB
-- Headroom: ~188 KB (dozens more faces)
+- Headroom: ~186 KB (dozens more faces)
 
 ### RAM (32 KB)
 
@@ -159,10 +175,14 @@ Every mechanism is designed so nothing goes rogue:
 |---------|---------|
 | CPU stays awake | Event-driven dispatcher, always sleeps after a reaction |
 | Peripheral left on | Auto-release after each reaction |
+| Sensor board leaks via I2C | I2C pins floated before sleep |
 | Memory grows | Zero-heap, static-only |
 | Software hangs | Watchdog resets the chip |
+| Interrupt loop masks a hang | Windowed watchdog clearing |
 | Peripheral hangs | Bounded waits return an error |
 | Flash wears out | Wear-leveled, write-verified storage |
+| Flash bit-rot | CRC-32 integrity check |
 | Settings lost | Persisted to flash, loaded on boot |
 | Silent failure | Fault system with LED codes |
+| Brown-out reboot loop | BOD33 + boot-count throttle |
 | Battery drain | Dynamic tick rate (hide seconds → wake 1/min) |

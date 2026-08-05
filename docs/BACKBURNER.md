@@ -86,3 +86,52 @@ worn. Before entering BACKUP, save state to flash; on wake, restore it.
 
 **Status:** Backburner. STANDBY is the primary mode (retains RAM + display).
 BACKUP would be an optional extreme-power-save feature.
+
+---
+
+## 6. SOS / Morse Code Watch Face
+
+A watch face that transmits preprogrammed codes (SOS, etc.) via the buzzer or
+LED. Navigation selects between preprogrammed codes using the standard button
+bindings.
+
+**Status:** Backburner. Would be a useful safety feature, but the buzzer can be
+disruptive and the LED-only variant is limited.
+
+---
+
+## 7. Battery Submenu in Diagnostics
+
+A battery submenu in the diagnostics/settings face that:
+
+- Lets the user select the installed battery type (CR2012, CR2016, CR2025,
+  CR2032, CR2050) with their capacities (55 / 90-100 / 150-170 / 220-225 /
+  330-350 mAh)
+- Shows the estimated percentage / days remaining from the measured voltage
+- Adjusts the battery-life calculation based on the selected battery
+
+**Status:** Backburner. Requires the battery voltage measurement to be reliable
+and a battery-type selection UI.
+
+---
+
+## 8. Diagnostics Expansion
+
+Expand the diagnostics face into a full task-manager + device-manager +
+storage-manager + services view, with categorized submenus (CPU, memory,
+storage, hardware info, software info, system, settings, stats) and breadcrumb
+navigation using the day/date indicators.
+
+**Status:** In progress. The diagnostics face exists; the full hierarchical menu
+and additional submenus (LED presets, buzzer voltage, battery, stats) are being
+refined.
+
+---
+
+## 9. Firmware Studio (Companion App)
+
+The end-goal companion app: a dedicated editor, debugger, and assembler that
+includes all source and documentation, lets you assemble watch faces, edit and
+debug the code, and produces the final `.uf2` firmware file.
+
+**Status:** Backburner. The firmware itself must be solid first.

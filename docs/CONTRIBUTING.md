@@ -34,12 +34,26 @@ The output ELF is at `target/thumbv6m-none-eabi/release/sensor-watch`.
 The `core` crate contains pure logic that can be tested on the host:
 
 ```sh
-cargo test -p sensor-watch-core
+cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 ```
 
-This runs the unit tests for date math, settings bit-packing, and DateTime
-pack/unpack. These tests give *proof* the logic is correct without needing the
-physical watch.
+(On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin`.)
+
+This runs the unit tests for date math, settings bit-packing, DateTime
+pack/unpack, and UF2 encoding. These tests give *proof* the logic is correct
+without needing the physical watch.
+
+## Building a UF2
+
+To produce a `.uf2` file for drag-and-drop flashing:
+
+```sh
+./build.sh
+```
+
+The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`. The script
+builds the release firmware, extracts the raw binary with `rust-objcopy`, and
+converts it to UF2 using the `uf2tool` binary (run on the host target).
 
 ## Linting
 
@@ -92,8 +106,10 @@ sensor-watch-rs/
    - `loop_()` — react to events, update the display
    - `resign()` — prepare to go off-screen
    - `wants_background_task()` — optional
+   - `advise()` — optional, called once per minute for all faces
 4. Add the module to `src/movement/mod.rs`.
 5. Add a `static` instance and register it in `app_setup()`.
+6. If you add a face, bump `MOVEMENT_NUM_FACES` in `types.rs` to match.
 
 ### Example skeleton
 
@@ -141,6 +157,10 @@ impl WatchFace for MyFace {
    `wait_until()`.
 7. **Document.** Every public item should have a doc comment explaining what and
    why.
+8. **Flash alignment.** Any struct persisted to flash should be
+   `#[repr(C, align(4))]`.
+9. **Flash writes from RAM.** Flash write/erase routines must be marked
+   `#[unsafe(link_section = ".ramfunc")]` to avoid the read-while-write stall.
 
 ---
 
