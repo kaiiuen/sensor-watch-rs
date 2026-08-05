@@ -54,6 +54,7 @@ pub mod repetition_minute;
 pub mod rpn_calculator;
 pub mod rpn_calculator_alt;
 pub mod sailing;
+pub mod set_time;
 pub mod ships_bell;
 pub mod simon;
 pub mod simple_calculator;
@@ -129,6 +130,9 @@ static mut MINUTE_REPEATER_DECIMAL: minute_repeater_decimal::MinuteRepeaterDecim
 /// The static day/night percentage face instance.
 static mut DAY_NIGHT_PERCENTAGE: day_night_percentage::DayNightPercentageFace =
     day_night_percentage::DayNightPercentageFace::new_static();
+
+/// The static set time face instance.
+static mut SET_TIME: set_time::SetTimeFace = set_time::SetTimeFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -669,6 +673,7 @@ pub fn app_setup() {
             WATCH_FACES[71] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK_BIN_LED));
             WATCH_FACES[72] = Some(&mut *core::ptr::addr_of_mut!(MINUTE_REPEATER_DECIMAL));
             WATCH_FACES[73] = Some(&mut *core::ptr::addr_of_mut!(DAY_NIGHT_PERCENTAGE));
+            WATCH_FACES[74] = Some(&mut *core::ptr::addr_of_mut!(SET_TIME));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
