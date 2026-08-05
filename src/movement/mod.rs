@@ -50,6 +50,7 @@ pub mod randonaut;
 pub mod ratemeter;
 pub mod repetition_minute;
 pub mod rpn_calculator;
+pub mod rpn_calculator_alt;
 pub mod sailing;
 pub mod ships_bell;
 pub mod simon;
@@ -319,6 +320,10 @@ static mut TEMPCHART: tempchart::TempchartFace = tempchart::TempchartFace::new_s
 
 /// The static dual timer face instance.
 static mut DUAL_TIMER: dual_timer::DualTimerFace = dual_timer::DualTimerFace::new_static();
+
+/// The static RPN calculator alt face instance.
+static mut RPN_CALCULATOR_ALT: rpn_calculator_alt::RpnCalculatorAltFace =
+    rpn_calculator_alt::RpnCalculatorAltFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -639,6 +644,7 @@ pub fn app_setup() {
             WATCH_FACES[66] = Some(&mut *core::ptr::addr_of_mut!(MORSECALC));
             WATCH_FACES[67] = Some(&mut *core::ptr::addr_of_mut!(TEMPCHART));
             WATCH_FACES[68] = Some(&mut *core::ptr::addr_of_mut!(DUAL_TIMER));
+            WATCH_FACES[69] = Some(&mut *core::ptr::addr_of_mut!(RPN_CALCULATOR_ALT));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
