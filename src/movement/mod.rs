@@ -39,6 +39,7 @@ pub mod probability;
 pub mod pulsometer;
 pub mod randonaut;
 pub mod ratemeter;
+pub mod repetition_minute;
 pub mod sailing;
 pub mod ships_bell;
 pub mod simon;
@@ -232,6 +233,10 @@ static mut ENDLESS_RUNNER: endless_runner::EndlessRunnerFace =
 
 /// The static geomancy face instance.
 static mut GEOMANCY: geomancy::GeomancyFace = geomancy::GeomancyFace::new_static();
+
+/// The static repetition minute face instance.
+static mut REPETITION_MINUTE: repetition_minute::RepetitionMinuteFace =
+    repetition_minute::RepetitionMinuteFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -532,6 +537,7 @@ pub fn app_setup() {
             WATCH_FACES[46] = Some(&mut *core::ptr::addr_of_mut!(HIGHER_LOWER_GAME));
             WATCH_FACES[47] = Some(&mut *core::ptr::addr_of_mut!(ENDLESS_RUNNER));
             WATCH_FACES[48] = Some(&mut *core::ptr::addr_of_mut!(GEOMANCY));
+            WATCH_FACES[49] = Some(&mut *core::ptr::addr_of_mut!(REPETITION_MINUTE));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
