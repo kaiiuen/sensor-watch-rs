@@ -31,6 +31,7 @@ pub mod flashlight;
 pub mod french_revolutionary;
 pub mod geomancy;
 pub mod habit;
+pub mod hello_there;
 pub mod higher_lower_game;
 pub mod interval;
 pub mod invaders;
@@ -158,6 +159,9 @@ static mut SET_TIME_HACKWATCH: set_time_hackwatch::SetTimeHackwatchFace =
 
 /// The static voltage face instance.
 static mut VOLTAGE: voltage::VoltageFace = voltage::VoltageFace::new_static();
+
+/// The static hello there face instance.
+static mut HELLO_THERE: hello_there::HelloThereFace = hello_there::HelloThereFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -705,6 +709,7 @@ pub fn app_setup() {
             WATCH_FACES[78] = Some(&mut *core::ptr::addr_of_mut!(NANOSEC));
             WATCH_FACES[79] = Some(&mut *core::ptr::addr_of_mut!(SET_TIME_HACKWATCH));
             WATCH_FACES[80] = Some(&mut *core::ptr::addr_of_mut!(VOLTAGE));
+            WATCH_FACES[81] = Some(&mut *core::ptr::addr_of_mut!(HELLO_THERE));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
