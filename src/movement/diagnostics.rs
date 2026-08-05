@@ -32,7 +32,7 @@ const MENU_ITEMS: [&str; 10] = [
 ];
 
 /// The test submenu rows.
-const TEST_ROWS: [&str; 7] = [
+const TEST_ROWS: [&str; 8] = [
     "BTN   ", // button test
     "LED   ", // LED test
     "BUZZER", // buzzer test
@@ -40,6 +40,7 @@ const TEST_ROWS: [&str; 7] = [
     "CPU   ", // CPU state test
     "RAM   ", // RAM usage
     "STORAG", // storage usage
+    "BENCH ", // benchmark / self-test
 ];
 
 /// The diagnostics face state.
@@ -492,9 +493,38 @@ impl DiagnosticsFace {
                 buf[7] = b'%';
                 slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
             }
+            7 => {
+                // Benchmark / self-test: verify ECC and CRC, then report.
+                let ecc_ok = ecc_self_test();
+                let crc_ok = crate::watch::crc::check_firmware_integrity();
+                let mut buf = [0u8; 11];
+                buf[0] = b'B';
+                buf[1] = b'E';
+                buf[2] = b'N';
+                buf[3] = b'C';
+                buf[4] = b'H';
+                buf[5] = if ecc_ok { b'Y' } else { b'N' };
+                buf[6] = b' ';
+                buf[7] = if crc_ok { b'Y' } else { b'N' };
+                slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+            }
             _ => {}
         }
     }
+}
+
+/// Runs a quick ECC self-test, returning true if the codec is correct.
+fn ecc_self_test() -> bool {
+    let data = 0xDEAD_BEEFu32;
+    let code = crate::watch::ecc::encode(data);
+    let (decoded, _) = crate::watch::ecc::decode(code);
+    if decoded != data {
+        return false;
+    }
+    // Single-bit correction.
+    let corrupted = code ^ (1 << 5);
+    let (decoded, corrected) = crate::watch::ecc::decode(corrupted);
+    decoded == data && corrected
 }
 
 /// Writes a signed value into the buffer at the given offset (right-aligned).
