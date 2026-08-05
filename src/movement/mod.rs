@@ -11,6 +11,7 @@ pub mod blinky;
 pub mod board;
 pub mod breathing;
 pub mod butterfly_game;
+pub mod character_set;
 pub mod close_enough;
 pub mod couch_to_5k;
 pub mod countdown;
@@ -162,6 +163,10 @@ static mut VOLTAGE: voltage::VoltageFace = voltage::VoltageFace::new_static();
 
 /// The static hello there face instance.
 static mut HELLO_THERE: hello_there::HelloThereFace = hello_there::HelloThereFace::new_static();
+
+/// The static character set face instance.
+static mut CHARACTER_SET: character_set::CharacterSetFace =
+    character_set::CharacterSetFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -710,6 +715,7 @@ pub fn app_setup() {
             WATCH_FACES[79] = Some(&mut *core::ptr::addr_of_mut!(SET_TIME_HACKWATCH));
             WATCH_FACES[80] = Some(&mut *core::ptr::addr_of_mut!(VOLTAGE));
             WATCH_FACES[81] = Some(&mut *core::ptr::addr_of_mut!(HELLO_THERE));
+            WATCH_FACES[82] = Some(&mut *core::ptr::addr_of_mut!(CHARACTER_SET));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
