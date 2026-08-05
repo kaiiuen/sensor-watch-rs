@@ -24,6 +24,7 @@ pub mod french_revolutionary;
 pub mod habit;
 pub mod kitchen_conversions;
 pub mod mars_time;
+pub mod menstrual_cycle;
 pub mod metronome;
 pub mod minimal_clock;
 pub mod moon_phase;
@@ -200,6 +201,10 @@ static mut TIME_LEFT: time_left::TimeLeftFace = time_left::TimeLeftFace::new_sta
 
 /// The static disc golf face instance.
 static mut DISCGOLF: discgolf::DiscgolfFace = discgolf::DiscgolfFace::new_static();
+
+/// The static menstrual cycle face instance.
+static mut MENSTRUAL_CYCLE: menstrual_cycle::MenstrualCycleFace =
+    menstrual_cycle::MenstrualCycleFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -493,6 +498,7 @@ pub fn app_setup() {
             WATCH_FACES[39] = Some(&mut *core::ptr::addr_of_mut!(DAY_ONE));
             WATCH_FACES[40] = Some(&mut *core::ptr::addr_of_mut!(TIME_LEFT));
             WATCH_FACES[41] = Some(&mut *core::ptr::addr_of_mut!(DISCGOLF));
+            WATCH_FACES[42] = Some(&mut *core::ptr::addr_of_mut!(MENSTRUAL_CYCLE));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
