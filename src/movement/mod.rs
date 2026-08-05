@@ -6,6 +6,7 @@
 
 pub mod activity;
 pub mod alarm;
+pub mod astronomy;
 pub mod blinky;
 pub mod board;
 pub mod breathing;
@@ -295,6 +296,9 @@ static mut PLANETARY_HOURS: planetary_hours::PlanetaryHoursFace =
 /// The static sunrise/sunset face instance.
 static mut SUNRISE_SUNSET: sunrise_sunset::SunriseSunsetFace =
     sunrise_sunset::SunriseSunsetFace::new_static();
+
+/// The static astronomy face instance.
+static mut ASTRONOMY: astronomy::AstronomyFace = astronomy::AstronomyFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -609,6 +613,7 @@ pub fn app_setup() {
             WATCH_FACES[60] = Some(&mut *core::ptr::addr_of_mut!(PLANETARY_TIME));
             WATCH_FACES[61] = Some(&mut *core::ptr::addr_of_mut!(PLANETARY_HOURS));
             WATCH_FACES[62] = Some(&mut *core::ptr::addr_of_mut!(SUNRISE_SUNSET));
+            WATCH_FACES[63] = Some(&mut *core::ptr::addr_of_mut!(ASTRONOMY));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
