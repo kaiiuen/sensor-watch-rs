@@ -44,6 +44,7 @@ pub mod toss_up;
 pub mod tuning_tones;
 pub mod types;
 pub mod wake;
+pub mod wareki;
 pub mod weeknumber;
 pub mod world_clock;
 
@@ -176,6 +177,9 @@ static mut WAKE: wake::WakeFace = wake::WakeFace::new_static();
 /// The static kitchen conversions face instance.
 static mut KITCHEN_CONVERSIONS: kitchen_conversions::KitchenConversionsFace =
     kitchen_conversions::KitchenConversionsFace::new_static();
+
+/// The static wareki face instance.
+static mut WAREKI: wareki::WarekiFace = wareki::WarekiFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -463,6 +467,7 @@ pub fn app_setup() {
             WATCH_FACES[33] = Some(&mut *core::ptr::addr_of_mut!(TUNING_TONES));
             WATCH_FACES[34] = Some(&mut *core::ptr::addr_of_mut!(WAKE));
             WATCH_FACES[35] = Some(&mut *core::ptr::addr_of_mut!(KITCHEN_CONVERSIONS));
+            WATCH_FACES[36] = Some(&mut *core::ptr::addr_of_mut!(WAREKI));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
