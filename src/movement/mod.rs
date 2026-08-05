@@ -44,6 +44,7 @@ pub mod repetition_minute;
 pub mod sailing;
 pub mod ships_bell;
 pub mod simon;
+pub mod simple_calculator;
 pub mod simple_clock;
 pub mod simple_coin_flip;
 pub mod stats;
@@ -245,6 +246,10 @@ static mut WYOSCAN: wyoscan::WyoscanFace = wyoscan::WyoscanFace::new_static();
 
 /// The static couch to 5k face instance.
 static mut COUCH_TO_5K: couch_to_5k::CouchTo5kFace = couch_to_5k::CouchTo5kFace::new_static();
+
+/// The static simple calculator face instance.
+static mut SIMPLE_CALCULATOR: simple_calculator::SimpleCalculatorFace =
+    simple_calculator::SimpleCalculatorFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -548,6 +553,7 @@ pub fn app_setup() {
             WATCH_FACES[49] = Some(&mut *core::ptr::addr_of_mut!(REPETITION_MINUTE));
             WATCH_FACES[50] = Some(&mut *core::ptr::addr_of_mut!(WYOSCAN));
             WATCH_FACES[51] = Some(&mut *core::ptr::addr_of_mut!(COUCH_TO_5K));
+            WATCH_FACES[52] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CALCULATOR));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
