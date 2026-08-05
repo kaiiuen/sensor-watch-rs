@@ -38,6 +38,7 @@ pub mod minimal_clock;
 pub mod moon_phase;
 pub mod periodic;
 pub mod persist;
+pub mod planetary_hours;
 pub mod planetary_time;
 pub mod probability;
 pub mod pulsometer;
@@ -285,6 +286,10 @@ static mut WORDLE: wordle::WordleFace = wordle::WordleFace::new_static();
 /// The static planetary time face instance.
 static mut PLANETARY_TIME: planetary_time::PlanetaryTimeFace =
     planetary_time::PlanetaryTimeFace::new_static();
+
+/// The static planetary hours face instance.
+static mut PLANETARY_HOURS: planetary_hours::PlanetaryHoursFace =
+    planetary_hours::PlanetaryHoursFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -597,6 +602,7 @@ pub fn app_setup() {
             WATCH_FACES[58] = Some(&mut *core::ptr::addr_of_mut!(TOTP_LFS));
             WATCH_FACES[59] = Some(&mut *core::ptr::addr_of_mut!(WORDLE));
             WATCH_FACES[60] = Some(&mut *core::ptr::addr_of_mut!(PLANETARY_TIME));
+            WATCH_FACES[61] = Some(&mut *core::ptr::addr_of_mut!(PLANETARY_HOURS));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
