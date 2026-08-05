@@ -8,7 +8,7 @@
 use crate::watch::buzzer::Note as BuzzerNote;
 
 /// Number of watch faces (set by the config; default to a small number for now).
-pub const MOVEMENT_NUM_FACES: usize = 89;
+pub const MOVEMENT_NUM_FACES: usize = 90;
 
 /// Long press threshold in fast ticks (128 Hz).
 pub const MOVEMENT_LONG_PRESS_TICKS: u16 = 64;

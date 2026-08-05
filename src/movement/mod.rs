@@ -46,6 +46,7 @@ pub mod mars_time;
 pub mod menstrual_cycle;
 pub mod metronome;
 pub mod minimal_clock;
+pub mod minmax;
 pub mod minute_repeater_decimal;
 pub mod moon_phase;
 pub mod morsecalc;
@@ -194,6 +195,9 @@ static mut LIS2DW_LOGGING: lis2dw_logging::Lis2dwLoggingFace =
 /// The static thermistor readout face instance.
 static mut THERMISTOR_READOUT: thermistor_readout::ThermistorReadoutFace =
     thermistor_readout::ThermistorReadoutFace::new_static();
+
+/// The static min/max face instance.
+static mut MINMAX: minmax::MinmaxFace = minmax::MinmaxFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -749,6 +753,7 @@ pub fn app_setup() {
             WATCH_FACES[86] = Some(&mut *core::ptr::addr_of_mut!(CHIRPY_DEMO));
             WATCH_FACES[87] = Some(&mut *core::ptr::addr_of_mut!(LIS2DW_LOGGING));
             WATCH_FACES[88] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_READOUT));
+            WATCH_FACES[89] = Some(&mut *core::ptr::addr_of_mut!(MINMAX));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
