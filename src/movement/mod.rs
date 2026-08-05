@@ -41,6 +41,7 @@ pub mod higher_lower_game;
 pub mod interval;
 pub mod invaders;
 pub mod kitchen_conversions;
+pub mod lis2dw_logging;
 pub mod mars_time;
 pub mod menstrual_cycle;
 pub mod metronome;
@@ -184,6 +185,10 @@ static mut FREQUENCY_CORRECTION: frequency_correction::FrequencyCorrectionFace =
 
 /// The static chirpy demo face instance.
 static mut CHIRPY_DEMO: chirpy_demo::ChirpyDemoFace = chirpy_demo::ChirpyDemoFace::new_static();
+
+/// The static LIS2DW logging face instance.
+static mut LIS2DW_LOGGING: lis2dw_logging::Lis2dwLoggingFace =
+    lis2dw_logging::Lis2dwLoggingFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -737,6 +742,7 @@ pub fn app_setup() {
             WATCH_FACES[84] = Some(&mut *core::ptr::addr_of_mut!(DEMO));
             WATCH_FACES[85] = Some(&mut *core::ptr::addr_of_mut!(FREQUENCY_CORRECTION));
             WATCH_FACES[86] = Some(&mut *core::ptr::addr_of_mut!(CHIRPY_DEMO));
+            WATCH_FACES[87] = Some(&mut *core::ptr::addr_of_mut!(LIS2DW_LOGGING));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
