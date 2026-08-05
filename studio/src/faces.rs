@@ -9,7 +9,6 @@ use std::path::Path;
 pub struct FaceInfo {
     pub index: usize,
     pub name: String,
-    pub file: String,
 }
 
 /// Scans the firmware's `app_setup()` for registered faces.
@@ -37,7 +36,6 @@ pub fn discover_faces() -> Vec<FaceInfo> {
                             faces.push(FaceInfo {
                                 index,
                                 name: name.clone(),
-                                file: format!("{name}.rs"),
                             });
                         }
                     }
@@ -69,7 +67,6 @@ mod tests {
                                 faces.push(FaceInfo {
                                     index,
                                     name: name.clone(),
-                                    file: format!("{name}.rs"),
                                 });
                             }
                         }

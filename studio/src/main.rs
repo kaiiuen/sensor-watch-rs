@@ -7,14 +7,17 @@
 
 mod build;
 mod debug;
+mod editor;
 mod faces;
 mod i18n;
+mod presets;
 mod theme;
 mod watch_display;
 mod watch_sim;
 
 use eframe::egui;
 use i18n::{tr, Key, Language};
+use presets::PresetManager;
 use theme::Theme;
 use watch_sim::CasioF91W;
 
@@ -44,6 +47,20 @@ struct StudioApp {
     watch: CasioF91W,
     /// The simulator's stopwatch accumulator (centiseconds).
     sim_last_tick: std::time::Instant,
+    /// The watch-face preset manager.
+    presets: PresetManager,
+    /// The currently selected face in the catalog.
+    selected_face: Option<usize>,
+    /// The currently selected face in the active preset.
+    selected_preset_face: Option<usize>,
+    /// The name for a new preset.
+    new_preset_name: String,
+    /// The editor's current face name.
+    editor_name: String,
+    /// The editor's current source.
+    editor_source: String,
+    /// The selected editor template.
+    editor_template: usize,
 }
 
 /// The navigation panels.
@@ -51,6 +68,7 @@ struct StudioApp {
 enum Panel {
     Dashboard,
     Faces,
+    Editor,
     Simulator,
     Build,
     Flash,
@@ -63,6 +81,7 @@ impl Panel {
         match self {
             Panel::Dashboard => tr(lang, Key::Dashboard),
             Panel::Faces => tr(lang, Key::WatchFaces),
+            Panel::Editor => "Editor",
             Panel::Simulator => "Simulator",
             Panel::Build => tr(lang, Key::Build),
             Panel::Flash => tr(lang, Key::Flash),
@@ -88,6 +107,13 @@ impl Default for StudioApp {
             log: debug::DebugLog::new(),
             watch: CasioF91W::new(),
             sim_last_tick: std::time::Instant::now(),
+            presets: PresetManager::new(),
+            selected_face: None,
+            selected_preset_face: None,
+            new_preset_name: String::new(),
+            editor_name: String::new(),
+            editor_source: String::new(),
+            editor_template: 0,
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -144,6 +170,7 @@ impl eframe::App for StudioApp {
                 for panel in [
                     Panel::Dashboard,
                     Panel::Faces,
+                    Panel::Editor,
                     Panel::Simulator,
                     Panel::Build,
                     Panel::Flash,
@@ -170,7 +197,8 @@ impl eframe::App for StudioApp {
         // The central panel.
         egui::CentralPanel::default().show(ctx, |ui| match self.current_panel {
             Panel::Dashboard => self.dashboard(ui),
-            Panel::Faces => self.faces(ui),
+            Panel::Faces => self.faces(ui, ctx),
+            Panel::Editor => self.editor(ui),
             Panel::Simulator => self.simulator(ui, ctx),
             Panel::Build => self.build(ui),
             Panel::Flash => self.flash(ui),
@@ -199,29 +227,187 @@ impl StudioApp {
         }
     }
 
-    /// The watch-faces panel: list and manage watch faces.
-    fn faces(&mut self, ui: &mut egui::Ui) {
+    /// The watch-faces panel: split layout with the simulator, catalog, and
+    /// the active preset, plus preset management sub-tabs.
+    fn faces(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.heading(tr(self.language, Key::WatchFaces));
         ui.separator();
-        ui.label(
-            tr(self.language, Key::FacesRegistered)
-                .replace("{count}", &self.face_list.len().to_string()),
-        );
-        ui.add_space(4.0);
-        egui::ScrollArea::vertical().show(ui, |ui| {
-            egui::Grid::new("faces_grid").striped(true).show(ui, |ui| {
-                ui.label(tr(self.language, Key::Index));
-                ui.label(tr(self.language, Key::Face));
-                ui.label(tr(self.language, Key::File));
-                ui.end_row();
-                for face in &self.face_list {
-                    ui.label(face.index.to_string());
-                    ui.label(&face.name);
-                    ui.label(&face.file);
-                    ui.end_row();
+
+        // Preset management sub-tabs along the top.
+        ui.horizontal(|ui| {
+            ui.label("Presets:");
+            for (i, preset) in self.presets.presets.iter().enumerate() {
+                if ui
+                    .selectable_label(self.presets.active == i, &preset.name)
+                    .clicked()
+                {
+                    self.presets.active = i;
+                }
+            }
+            if ui.button("+").clicked() {
+                self.presets.add_preset(&self.new_preset_name);
+                self.new_preset_name.clear();
+            }
+            if ui.button("Rename").clicked() {
+                let name = self.new_preset_name.clone();
+                if !name.is_empty() {
+                    self.presets.rename_active(&name);
+                    self.new_preset_name.clear();
+                }
+            }
+            if ui.button("Delete").clicked() {
+                self.presets.delete_active();
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("New preset name:");
+            ui.text_edit_singleline(&mut self.new_preset_name);
+        });
+        ui.separator();
+
+        // Split horizontally: simulator on the bottom, catalog+preset on top.
+        egui::TopBottomPanel::bottom("sim").show_inside(ui, |ui| {
+            self.simulator(ui, ctx);
+        });
+
+        // Top half: catalog (left) and active preset (right).
+        egui::SidePanel::left("catalog")
+            .resizable(true)
+            .default_width(ui.available_width() * 0.5)
+            .show_inside(ui, |ui| {
+                ui.heading("Catalog");
+                ui.separator();
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    for (i, face) in self.face_list.iter().enumerate() {
+                        let selected = self.selected_face == Some(i);
+                        if ui
+                            .selectable_label(selected, format!("{} — {}", face.index, face.name))
+                            .clicked()
+                        {
+                            self.selected_face = Some(i);
+                        }
+                    }
+                });
+            });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.heading("Active Preset");
+            ui.separator();
+            // Add selected catalog face to the preset.
+            if let Some(i) = self.selected_face {
+                let face = self.face_list[i].name.clone();
+                if ui.button(format!("Add {face} to preset")).clicked() {
+                    self.presets.add_face(&face);
+                    self.log.log(format!("Added {face} to preset"));
+                }
+            }
+            ui.add_space(4.0);
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                let faces = self.presets.active_faces();
+                for (i, face) in faces.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        let selected = self.selected_preset_face == Some(i);
+                        if ui.selectable_label(selected, face).clicked() {
+                            self.selected_preset_face = Some(i);
+                        }
+                        if ui.small_button("↑").clicked() {
+                            self.presets.move_face_up(i);
+                        }
+                        if ui.small_button("↓").clicked() {
+                            self.presets.move_face_down(i);
+                        }
+                        if ui.small_button("✕").clicked() {
+                            self.presets.remove_face(i);
+                        }
+                    });
                 }
             });
         });
+    }
+
+    /// The editor panel: create, edit, or delete watch faces.
+    fn editor(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Editor");
+        ui.separator();
+        ui.label("Create, edit, or delete watch faces.");
+        ui.add_space(8.0);
+
+        // Template selection.
+        ui.label("Template:");
+        for (i, t) in editor::TEMPLATES.iter().enumerate() {
+            if ui
+                .selectable_label(
+                    self.editor_template == i,
+                    format!("{} — {}", t.name, t.description),
+                )
+                .clicked()
+            {
+                self.editor_template = i;
+            }
+        }
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Face name (snake_case):");
+            ui.text_edit_singleline(&mut self.editor_name);
+            if ui.button("Generate from template").clicked() {
+                let name = self.editor_name.trim().to_string();
+                if !name.is_empty() {
+                    let source =
+                        editor::generate_face(&name, &editor::TEMPLATES[self.editor_template]);
+                    self.editor_source = source;
+                    self.log.log(format!("Generated {name} from template"));
+                }
+            }
+        });
+
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Save face").clicked() {
+                let name = self.editor_name.trim().to_string();
+                if !name.is_empty() && !self.editor_source.is_empty() {
+                    match editor::write_face(&name, &self.editor_source) {
+                        Ok(_) => {
+                            self.log.log(format!("Saved face {name}"));
+                            self.face_list = faces::discover_faces();
+                        }
+                        Err(e) => self.log.log(format!("Save failed: {e}")),
+                    }
+                }
+            }
+            if ui.button("Load face").clicked() {
+                let name = self.editor_name.trim().to_string();
+                if !name.is_empty() {
+                    match editor::read_face(&name) {
+                        Ok(src) => self.editor_source = src,
+                        Err(e) => self.log.log(format!("Load failed: {e}")),
+                    }
+                }
+            }
+            if ui.button("Delete face").clicked() {
+                let name = self.editor_name.trim().to_string();
+                if !name.is_empty() {
+                    match editor::delete_face(&name) {
+                        Ok(_) => {
+                            self.log.log(format!("Deleted face {name}"));
+                            self.face_list = faces::discover_faces();
+                        }
+                        Err(e) => self.log.log(format!("Delete failed: {e}")),
+                    }
+                }
+            }
+        });
+
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::TextEdit::multiline(&mut self.editor_source)
+                    .code_editor()
+                    .desired_rows(24)
+                    .desired_width(f32::INFINITY)
+                    .show(ui);
+            });
     }
 
     /// The build panel: assemble the firmware into a .uf2.
@@ -403,6 +589,33 @@ impl StudioApp {
         ui.add_space(8.0);
         ui.label(tr(self.language, Key::FirmwareProject));
         ui.label(build::FIRMWARE_DIR);
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Export");
+        ui.label("Export the full source code (firmware + app) to a folder.");
+        if ui.button("Export source").clicked() {
+            self.export_source();
+        }
+    }
+
+    /// Exports the source code to a folder.
+    fn export_source(&mut self) {
+        // Export the firmware + studio source to an "export" folder.
+        let export_dir = std::path::Path::new("export");
+        let _ = std::fs::create_dir_all(export_dir);
+        let result = copy_dir(std::path::Path::new("."), export_dir);
+        match result {
+            Ok(_) => {
+                self.status = format!("Exported source to {}", export_dir.display());
+                self.log
+                    .log(format!("Exported source to {}", export_dir.display()));
+            }
+            Err(e) => {
+                self.status = format!("Export failed: {e}");
+                self.log.log(format!("Export failed: {e}"));
+            }
+        }
     }
 
     /// Copies the built .uf2 to the watch's USB drive (if mounted).
@@ -449,4 +662,26 @@ fn main() -> eframe::Result<()> {
         options,
         Box::new(|_cc| Box::new(StudioApp::default())),
     )
+}
+
+/// Recursively copies a directory, skipping `target` and `.git`.
+fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if !dst.exists() {
+        std::fs::create_dir_all(dst)?;
+    }
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        if name == "target" || name == ".git" {
+            continue;
+        }
+        let dest = dst.join(&name);
+        if path.is_dir() {
+            copy_dir(&path, &dest)?;
+        } else {
+            std::fs::copy(&path, &dest)?;
+        }
+    }
+    Ok(())
 }

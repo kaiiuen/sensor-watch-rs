@@ -42,10 +42,6 @@ pub enum Key {
     LastBuild,
     NoBuildYet,
     // Faces
-    FacesRegistered,
-    Index,
-    Face,
-    File,
     // Build
     AssembleFirmware,
     BuildUf2,
@@ -84,10 +80,6 @@ pub fn tr(lang: Language, key: Key) -> &'static str {
             Key::FlashRam => "Flash: 256 KB  |  RAM: 32 KB  |  Faces: {faces}",
             Key::LastBuild => "Last build: {path}",
             Key::NoBuildYet => "No build yet. Go to the Build panel.",
-            Key::FacesRegistered => "{count} faces registered in the firmware.",
-            Key::Index => "Index",
-            Key::Face => "Face",
-            Key::File => "File",
             Key::AssembleFirmware => "Assemble the firmware and produce a .uf2 file.",
             Key::BuildUf2 => "Build .uf2",
             Key::Building => "Building...",
