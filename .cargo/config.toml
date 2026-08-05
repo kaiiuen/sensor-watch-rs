@@ -3,8 +3,10 @@
 target = "thumbv6m-none-eabi"
 
 [target.thumbv6m-none-eabi]
-# Use the rust-lld linker bundled with the toolchain
+# flip-link places the stack at the bottom of RAM so a stack overflow triggers
+# an immediate hard fault instead of silently corrupting data. It wraps the
+# rust-lld linker, so cargo still finds rust-lld through the toolchain.
 rustflags = [
     "-C", "link-arg=-Tlink.x",
-    "-C", "linker=rust-lld",
+    "-C", "linker=flip-link",
 ]
