@@ -38,6 +38,7 @@ pub mod stats;
 pub mod stopwatch;
 pub mod tachymeter;
 pub mod tally;
+pub mod tarot;
 pub mod timer;
 pub mod tomato;
 pub mod toss_up;
@@ -180,6 +181,9 @@ static mut KITCHEN_CONVERSIONS: kitchen_conversions::KitchenConversionsFace =
 
 /// The static wareki face instance.
 static mut WAREKI: wareki::WarekiFace = wareki::WarekiFace::new_static();
+
+/// The static tarot face instance.
+static mut TAROT: tarot::TarotFace = tarot::TarotFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -468,6 +472,7 @@ pub fn app_setup() {
             WATCH_FACES[34] = Some(&mut *core::ptr::addr_of_mut!(WAKE));
             WATCH_FACES[35] = Some(&mut *core::ptr::addr_of_mut!(KITCHEN_CONVERSIONS));
             WATCH_FACES[36] = Some(&mut *core::ptr::addr_of_mut!(WAREKI));
+            WATCH_FACES[37] = Some(&mut *core::ptr::addr_of_mut!(TAROT));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
