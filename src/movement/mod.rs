@@ -37,6 +37,7 @@ pub mod menstrual_cycle;
 pub mod metronome;
 pub mod minimal_clock;
 pub mod moon_phase;
+pub mod orrery;
 pub mod periodic;
 pub mod persist;
 pub mod planetary_hours;
@@ -299,6 +300,9 @@ static mut SUNRISE_SUNSET: sunrise_sunset::SunriseSunsetFace =
 
 /// The static astronomy face instance.
 static mut ASTRONOMY: astronomy::AstronomyFace = astronomy::AstronomyFace::new_static();
+
+/// The static orrery face instance.
+static mut ORRERY: orrery::OrreryFace = orrery::OrreryFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -614,6 +618,7 @@ pub fn app_setup() {
             WATCH_FACES[61] = Some(&mut *core::ptr::addr_of_mut!(PLANETARY_HOURS));
             WATCH_FACES[62] = Some(&mut *core::ptr::addr_of_mut!(SUNRISE_SUNSET));
             WATCH_FACES[63] = Some(&mut *core::ptr::addr_of_mut!(ASTRONOMY));
+            WATCH_FACES[64] = Some(&mut *core::ptr::addr_of_mut!(ORRERY));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
