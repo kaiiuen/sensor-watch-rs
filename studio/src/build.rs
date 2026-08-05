@@ -140,5 +140,9 @@ fn find_objcopy() -> Option<PathBuf> {
 /// Returns the path to the last-built `.uf2` file, if it exists.
 pub fn last_uf2() -> Option<PathBuf> {
     let p = Path::new(FIRMWARE_DIR).join(format!("target/{TARGET}/release/sensor-watch.uf2"));
-    if p.exists() { Some(p) } else { None }
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
 }
