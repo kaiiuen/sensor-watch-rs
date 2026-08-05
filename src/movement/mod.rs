@@ -6,6 +6,7 @@
 
 pub mod activity;
 pub mod alarm;
+pub mod alarm_thermometer;
 pub mod astronomy;
 pub mod beeps;
 pub mod blinky;
@@ -212,6 +213,10 @@ static mut THERMISTOR_LOGGING: thermistor_logging::ThermistorLoggingFace =
 /// The static thermistor testing face instance.
 static mut THERMISTOR_TESTING: thermistor_testing::ThermistorTestingFace =
     thermistor_testing::ThermistorTestingFace::new_static();
+
+/// The static alarm thermometer face instance.
+static mut ALARM_THERMOMETER: alarm_thermometer::AlarmThermometerFace =
+    alarm_thermometer::AlarmThermometerFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -771,6 +776,7 @@ pub fn app_setup() {
             WATCH_FACES[90] = Some(&mut *core::ptr::addr_of_mut!(LIGHTMETER));
             WATCH_FACES[91] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_LOGGING));
             WATCH_FACES[92] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_TESTING));
+            WATCH_FACES[93] = Some(&mut *core::ptr::addr_of_mut!(ALARM_THERMOMETER));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
