@@ -63,6 +63,7 @@ pub mod sunrise_sunset;
 pub mod tachymeter;
 pub mod tally;
 pub mod tarot;
+pub mod tempchart;
 pub mod time_left;
 pub mod timer;
 pub mod tomato;
@@ -311,6 +312,9 @@ static mut SOLSTICE: solstice::SolsticeFace = solstice::SolsticeFace::new_static
 
 /// The static morsecalc face instance.
 static mut MORSECALC: morsecalc::MorsecalcFace = morsecalc::MorsecalcFace::new_static();
+
+/// The static tempchart face instance.
+static mut TEMPCHART: tempchart::TempchartFace = tempchart::TempchartFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -629,6 +633,7 @@ pub fn app_setup() {
             WATCH_FACES[64] = Some(&mut *core::ptr::addr_of_mut!(ORRERY));
             WATCH_FACES[65] = Some(&mut *core::ptr::addr_of_mut!(SOLSTICE));
             WATCH_FACES[66] = Some(&mut *core::ptr::addr_of_mut!(MORSECALC));
+            WATCH_FACES[67] = Some(&mut *core::ptr::addr_of_mut!(TEMPCHART));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
