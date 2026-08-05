@@ -8,6 +8,7 @@ pub mod alarm;
 pub mod blinky;
 pub mod board;
 pub mod breathing;
+pub mod butterfly_game;
 pub mod close_enough;
 pub mod countdown;
 pub mod counter;
@@ -36,6 +37,7 @@ pub mod randonaut;
 pub mod ratemeter;
 pub mod sailing;
 pub mod ships_bell;
+pub mod simon;
 pub mod simple_clock;
 pub mod simple_coin_flip;
 pub mod stats;
@@ -205,6 +207,13 @@ static mut DISCGOLF: discgolf::DiscgolfFace = discgolf::DiscgolfFace::new_static
 /// The static menstrual cycle face instance.
 static mut MENSTRUAL_CYCLE: menstrual_cycle::MenstrualCycleFace =
     menstrual_cycle::MenstrualCycleFace::new_static();
+
+/// The static butterfly game face instance.
+static mut BUTTERFLY_GAME: butterfly_game::ButterflyGameFace =
+    butterfly_game::ButterflyGameFace::new_static();
+
+/// The static simon face instance.
+static mut SIMON: simon::SimonFace = simon::SimonFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -499,6 +508,8 @@ pub fn app_setup() {
             WATCH_FACES[40] = Some(&mut *core::ptr::addr_of_mut!(TIME_LEFT));
             WATCH_FACES[41] = Some(&mut *core::ptr::addr_of_mut!(DISCGOLF));
             WATCH_FACES[42] = Some(&mut *core::ptr::addr_of_mut!(MENSTRUAL_CYCLE));
+            WATCH_FACES[43] = Some(&mut *core::ptr::addr_of_mut!(BUTTERFLY_GAME));
+            WATCH_FACES[44] = Some(&mut *core::ptr::addr_of_mut!(SIMON));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
