@@ -82,6 +82,7 @@ pub mod tachymeter;
 pub mod tally;
 pub mod tarot;
 pub mod tempchart;
+pub mod thermistor_readout;
 pub mod time_left;
 pub mod timer;
 pub mod tomato;
@@ -189,6 +190,10 @@ static mut CHIRPY_DEMO: chirpy_demo::ChirpyDemoFace = chirpy_demo::ChirpyDemoFac
 /// The static LIS2DW logging face instance.
 static mut LIS2DW_LOGGING: lis2dw_logging::Lis2dwLoggingFace =
     lis2dw_logging::Lis2dwLoggingFace::new_static();
+
+/// The static thermistor readout face instance.
+static mut THERMISTOR_READOUT: thermistor_readout::ThermistorReadoutFace =
+    thermistor_readout::ThermistorReadoutFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -743,6 +748,7 @@ pub fn app_setup() {
             WATCH_FACES[85] = Some(&mut *core::ptr::addr_of_mut!(FREQUENCY_CORRECTION));
             WATCH_FACES[86] = Some(&mut *core::ptr::addr_of_mut!(CHIRPY_DEMO));
             WATCH_FACES[87] = Some(&mut *core::ptr::addr_of_mut!(LIS2DW_LOGGING));
+            WATCH_FACES[88] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_READOUT));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
