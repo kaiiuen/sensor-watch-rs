@@ -22,6 +22,7 @@ pub mod debounce;
 pub mod decimal_time;
 pub mod diagnostics;
 pub mod discgolf;
+pub mod dual_timer;
 pub mod endless_runner;
 pub mod fault;
 pub mod flashlight;
@@ -315,6 +316,9 @@ static mut MORSECALC: morsecalc::MorsecalcFace = morsecalc::MorsecalcFace::new_s
 
 /// The static tempchart face instance.
 static mut TEMPCHART: tempchart::TempchartFace = tempchart::TempchartFace::new_static();
+
+/// The static dual timer face instance.
+static mut DUAL_TIMER: dual_timer::DualTimerFace = dual_timer::DualTimerFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -634,6 +638,7 @@ pub fn app_setup() {
             WATCH_FACES[65] = Some(&mut *core::ptr::addr_of_mut!(SOLSTICE));
             WATCH_FACES[66] = Some(&mut *core::ptr::addr_of_mut!(MORSECALC));
             WATCH_FACES[67] = Some(&mut *core::ptr::addr_of_mut!(TEMPCHART));
+            WATCH_FACES[68] = Some(&mut *core::ptr::addr_of_mut!(DUAL_TIMER));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
