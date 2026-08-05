@@ -10,10 +10,13 @@ mod debug;
 mod faces;
 mod i18n;
 mod theme;
+mod watch_display;
+mod watch_sim;
 
 use eframe::egui;
 use i18n::{tr, Key, Language};
 use theme::Theme;
+use watch_sim::CasioF91W;
 
 /// The main application state.
 struct StudioApp {
@@ -37,6 +40,10 @@ struct StudioApp {
     theme: Theme,
     /// The debug log.
     log: debug::DebugLog,
+    /// The Casio F-91W simulator.
+    watch: CasioF91W,
+    /// The simulator's stopwatch accumulator (centiseconds).
+    sim_last_tick: std::time::Instant,
 }
 
 /// The navigation panels.
@@ -44,6 +51,7 @@ struct StudioApp {
 enum Panel {
     Dashboard,
     Faces,
+    Simulator,
     Build,
     Flash,
     Debug,
@@ -55,6 +63,7 @@ impl Panel {
         match self {
             Panel::Dashboard => tr(lang, Key::Dashboard),
             Panel::Faces => tr(lang, Key::WatchFaces),
+            Panel::Simulator => "Simulator",
             Panel::Build => tr(lang, Key::Build),
             Panel::Flash => tr(lang, Key::Flash),
             Panel::Debug => tr(lang, Key::DebugOutput),
@@ -77,6 +86,8 @@ impl Default for StudioApp {
             language: Language::English,
             theme: Theme::Dark,
             log: debug::DebugLog::new(),
+            watch: CasioF91W::new(),
+            sim_last_tick: std::time::Instant::now(),
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -133,6 +144,7 @@ impl eframe::App for StudioApp {
                 for panel in [
                     Panel::Dashboard,
                     Panel::Faces,
+                    Panel::Simulator,
                     Panel::Build,
                     Panel::Flash,
                     Panel::Debug,
@@ -159,6 +171,7 @@ impl eframe::App for StudioApp {
         egui::CentralPanel::default().show(ctx, |ui| match self.current_panel {
             Panel::Dashboard => self.dashboard(ui),
             Panel::Faces => self.faces(ui),
+            Panel::Simulator => self.simulator(ui, ctx),
             Panel::Build => self.build(ui),
             Panel::Flash => self.flash(ui),
             Panel::Debug => self.debug(ui),
@@ -285,6 +298,73 @@ impl StudioApp {
                     ));
                 }
             });
+    }
+
+    /// The simulator panel: render the watch and handle its buttons.
+    fn simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.heading("Simulator");
+        ui.separator();
+        ui.label("Casio F-91W simulator — try the watch before flashing.");
+        ui.add_space(8.0);
+
+        // Advance the stopwatch and button-A hold timer based on elapsed time.
+        let now = std::time::Instant::now();
+        let dt = now.duration_since(self.sim_last_tick);
+        self.sim_last_tick = now;
+        let cs = dt.as_millis() as u64 / 10;
+        self.watch.tick_stopwatch(cs);
+        self.watch.tick_button_a();
+
+        // Draw the watch body and display.
+        let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(360.0, 300.0), egui::Sense::hover());
+        let painter = ui.painter_at(rect);
+        // Watch body (dark rounded rectangle).
+        painter.rect_filled(rect, 16.0, egui::Color32::from_rgb(0x1a, 0x1a, 0x1a));
+        // Display area (light LCD).
+        let lcd = egui::Rect::from_min_size(
+            rect.min + egui::Vec2::new(20.0, 20.0),
+            egui::Vec2::new(rect.width() - 40.0, rect.height() - 60.0),
+        );
+        painter.rect_filled(lcd, 8.0, egui::Color32::from_rgb(0x2a, 0x30, 0x32));
+
+        // Update and draw the display.
+        self.watch.update_display();
+        watch_display::draw_display(&painter, lcd, &self.watch.display);
+
+        // Buttons.
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("L (light)").clicked() {
+                self.watch.button_l(true);
+            }
+            if ui.button("C (mode)").clicked() {
+                self.watch.button_c(true);
+            }
+            if ui.button("A (adjust)").clicked() {
+                self.watch.button_a(true);
+            }
+        });
+        ui.horizontal(|ui| {
+            if ui.button("Release L").clicked() {
+                self.watch.button_l(false);
+            }
+            if ui.button("Release A").clicked() {
+                self.watch.button_a(false);
+            }
+        });
+
+        ui.add_space(8.0);
+        ui.label(format!(
+            "Menu: {:?}  Action: {:?}",
+            self.watch.active_menu, self.watch.active_action
+        ));
+        ui.label(format!(
+            "Time mode: {:?}  Alarm: {}  Signal: {}",
+            self.watch.time_mode, self.watch.alarm_on_mark, self.watch.time_signal_on_mark
+        ));
+
+        // Request a repaint so the clock ticks.
+        ctx.request_repaint();
     }
 
     /// The settings panel: configure the app and the watch.
