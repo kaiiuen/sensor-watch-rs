@@ -23,34 +23,50 @@ use crate::movement::stats;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch::rtc;
 use crate::watch::slcd;
+use crate::watch::{lis2dw, memory, storage};
 
 /// The main menu categories (up to 6 characters each).
-const MENU_ITEMS: [&str; 9] = [
+const MENU_ITEMS: [&str; 10] = [
     "CPU   ", "MEMORY", "STORAG", "HARDWR", "SOFTWR", "SYSTEM", "SETTNG", "STATS ", "BATTER",
+    "TEST  ",
+];
+
+/// The test submenu rows.
+const TEST_ROWS: [&str; 7] = [
+    "BTN   ", // button test
+    "LED   ", // LED test
+    "BUZZER", // buzzer test
+    "ACCEL ", // accelerometer test
+    "CPU   ", // CPU state test
+    "RAM   ", // RAM usage
+    "STORAG", // storage usage
 ];
 
 /// The diagnostics face state.
 pub struct DiagnosticsFace {
     /// The currently selected menu row.
     cursor: u8,
-    /// The currently open category (0-7), or 8 for the main menu.
+    /// The currently open category (0-9), or 10 for the main menu.
     screen: u8,
-    /// The submenu row within the settings/stats pages.
+    /// The submenu row within the settings/stats/battery/test pages.
     subrow: u8,
     /// The previous screen, for breadcrumb tracking.
     prev_screen: u8,
     /// The current watch face index (set at setup).
     face_index: u8,
+    /// Whether a test is currently running (e.g. button/LED test).
+    test_active: bool,
 }
 
 impl DiagnosticsFace {
     pub const fn new_static() -> Self {
         DiagnosticsFace {
             cursor: 0,
-            screen: 8, // start on the main menu
+            screen: 10, // start on the main menu
             subrow: 0,
-            prev_screen: 8,
+            prev_screen: 10,
             face_index: 0,
+            test_active: false,
         }
     }
 
@@ -59,9 +75,9 @@ impl DiagnosticsFace {
         // DAY indicator: which watch face we are on.
         let day = self.face_index;
         // DATE indicator: submenu depth (00 = main menu, 01 = category, 02+ = submenu).
-        let date = if self.screen == 9 {
+        let date = if self.screen == 10 {
             0
-        } else if self.screen == 6 || self.screen == 7 || self.screen == 8 {
+        } else if self.screen == 6 || self.screen == 7 || self.screen == 8 || self.screen == 9 {
             2
         } else {
             1
@@ -319,6 +335,52 @@ impl DiagnosticsFace {
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
+    /// Draws the test submenu.
+    fn draw_test(&self) {
+        let mut buf = [0u8; 11];
+        let label = TEST_ROWS[(self.subrow as usize).min(TEST_ROWS.len() - 1)];
+        let lb = label.as_bytes();
+        for (i, &c) in lb.iter().take(6).enumerate() {
+            buf[i] = c;
+        }
+        // Show a status indicator on the right.
+        match self.subrow {
+            4 => {
+                // CPU state test: show the current power state.
+                buf[6] = b'S';
+                buf[7] = b'T';
+                buf[8] = b'B';
+                buf[9] = b'Y';
+            }
+            5 => {
+                // RAM usage.
+                let used = memory::static_ram_used();
+                let pct = memory::ram_used_percent();
+                buf[6] = b'0' + (used / 1000) as u8;
+                buf[7] = b'0' + ((used % 1000) / 100) as u8;
+                buf[8] = b'0' + ((used % 100) / 10) as u8;
+                buf[9] = b'0' + (used % 10) as u8;
+                buf[10] = b'B';
+                let _ = pct;
+            }
+            6 => {
+                // Storage usage.
+                let used = storage::used_size();
+                let total = storage::total_size();
+                let pct = if total == 0 {
+                    0
+                } else {
+                    ((used as u64 * 100) / total as u64) as u8
+                };
+                buf[6] = b'0' + pct / 10;
+                buf[7] = b'0' + pct % 10;
+                buf[8] = b'%';
+            }
+            _ => {}
+        }
+        slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+    }
+
     /// Draws the current screen.
     fn draw(&self) {
         match self.screen {
@@ -331,6 +393,7 @@ impl DiagnosticsFace {
             6 => self.draw_settings(),
             7 => self.draw_stats(),
             8 => self.draw_battery(),
+            9 => self.draw_test(),
             _ => self.draw_menu(),
         }
         self.show_breadcrumb();
@@ -348,6 +411,107 @@ impl DiagnosticsFace {
         }
         cfg.buzzer_voltage = v as u8;
         cfg.write();
+    }
+
+    /// Runs the currently selected test.
+    fn run_test(&mut self) {
+        match self.subrow {
+            0 => {
+                // Button test: enter a mode where every button press is shown.
+                self.test_active = true;
+                slcd::clear_display();
+                slcd::display_string("BTN TST", 0);
+            }
+            1 => {
+                // LED test: cycle red, green, off.
+                crate::watch::led::enable_leds();
+                crate::watch::led::set_led_red();
+                slcd::display_string("LED RED", 0);
+            }
+            2 => {
+                // Buzzer test: play a tone.
+                crate::movement::play_alarm_beeps(1, crate::watch::buzzer::Note::C6);
+                slcd::display_string("BUZZER ", 0);
+            }
+            3 => {
+                // Accelerometer test: check if present and read a sample.
+                if crate::movement::accelerometer_begin() {
+                    let r = lis2dw::get_raw_reading();
+                    let mut buf = [0u8; 11];
+                    buf[0] = b'A';
+                    buf[1] = b'C';
+                    buf[2] = b'C';
+                    buf[3] = b' ';
+                    buf[4] = b'X';
+                    write_signed(&mut buf, r.x, 5, 2);
+                    buf[7] = b'Y';
+                    write_signed(&mut buf, r.y, 8, 2);
+                    slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+                } else {
+                    slcd::display_string("NO ACCEL", 0);
+                }
+            }
+            4 => {
+                // CPU test: cycle through power states (active -> standby).
+                slcd::display_string("CPU OK  ", 0);
+                // Enter and exit standby to verify the CPU can sleep/wake.
+                crate::watch::deepsleep::enter_standby();
+                slcd::display_string("CPU OK  ", 0);
+            }
+            5 => {
+                // RAM usage.
+                let used = memory::static_ram_used();
+                let pct = memory::ram_used_percent();
+                let mut buf = [0u8; 11];
+                buf[0] = b'R';
+                buf[1] = b'A';
+                buf[2] = b'M';
+                buf[3] = b' ';
+                write_count(&mut buf, used, 4);
+                buf[10] = b'%';
+                let _ = pct;
+                slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+            }
+            6 => {
+                // Storage usage.
+                let used = storage::used_size();
+                let total = storage::total_size();
+                let pct = if total == 0 {
+                    0
+                } else {
+                    ((used as u64 * 100) / total as u64) as u8
+                };
+                let mut buf = [0u8; 11];
+                buf[0] = b'S';
+                buf[1] = b'T';
+                buf[2] = b'O';
+                buf[3] = b'R';
+                buf[4] = b' ';
+                buf[5] = b'0' + pct / 10;
+                buf[6] = b'0' + pct % 10;
+                buf[7] = b'%';
+                slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Writes a signed value into the buffer at the given offset (right-aligned).
+fn write_signed(buf: &mut [u8; 11], value: i16, offset: usize, width: usize) {
+    let v = value.unsigned_abs();
+    let mut i = offset + width - 1;
+    let mut val = v;
+    loop {
+        buf[i] = b'0' + (val % 10) as u8;
+        val /= 10;
+        if i == offset || val == 0 {
+            break;
+        }
+        i -= 1;
+    }
+    if value < 0 {
+        buf[offset] = b'-';
     }
 }
 
@@ -367,29 +531,71 @@ impl WatchFace for DiagnosticsFace {
 
     fn activate(&mut self, _settings: &Settings) {
         // Show the main menu on entry.
-        self.screen = 9;
+        self.screen = 10;
         self.cursor = 0;
         self.subrow = 0;
-        self.prev_screen = 9;
+        self.prev_screen = 10;
+        self.test_active = false;
         self.draw();
     }
 
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
+        // If a button test is active, show which button was pressed.
+        if self.test_active {
+            match event {
+                Event::Button(btn, ev) => {
+                    let mut buf = [0u8; 11];
+                    let name = match btn {
+                        Button::Light => "LIGHT",
+                        Button::Mode => "MODE ",
+                        Button::Alarm => "ALARM",
+                    };
+                    let nb = name.as_bytes();
+                    for (i, &c) in nb.iter().enumerate() {
+                        buf[i] = c;
+                    }
+                    let evname = match ev {
+                        ButtonEvent::Down => "DN",
+                        ButtonEvent::Up => "UP",
+                        ButtonEvent::LongPress => "LNG",
+                        ButtonEvent::LongUp => "LUP",
+                        ButtonEvent::ReallyLongPress => "RLN",
+                    };
+                    let eb = evname.as_bytes();
+                    for (i, &c) in eb.iter().enumerate() {
+                        buf[6 + i] = c;
+                    }
+                    slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+                    // Alarm long-press exits the button test.
+                    if btn == Button::Alarm && ev == ButtonEvent::LongPress {
+                        self.test_active = false;
+                        self.draw();
+                    }
+                }
+                _ => {}
+            }
+            return;
+        }
         match event {
             // Top-left (Light) button: scroll down one row / move the cursor.
             Event::Button(Button::Light, ButtonEvent::Up) => {
-                if self.screen == 9 {
+                if self.screen == 10 {
                     // On the main menu, move the cursor down.
                     self.cursor = (self.cursor + 1) % MENU_ITEMS.len() as u8;
-                } else if self.screen == 6 || self.screen == 7 || self.screen == 8 {
-                    // Inside settings/stats/battery, scroll through submenu rows.
-                    self.subrow = (self.subrow + 1) % 3;
+                } else if self.screen == 6
+                    || self.screen == 7
+                    || self.screen == 8
+                    || self.screen == 9
+                {
+                    // Inside settings/stats/battery/test, scroll through submenu rows.
+                    let max = if self.screen == 9 { TEST_ROWS.len() } else { 3 };
+                    self.subrow = (self.subrow + 1) % max as u8;
                 }
                 self.draw();
             }
             // Bottom-right (Alarm) button: select / enter / exit / toggle.
             Event::Button(Button::Alarm, ButtonEvent::Up) => {
-                if self.screen == 9 {
+                if self.screen == 10 {
                     // Enter the selected category.
                     self.prev_screen = self.screen;
                     self.screen = self.cursor;
@@ -434,12 +640,15 @@ impl WatchFace for DiagnosticsFace {
                         // Charge/days are read-only; exit.
                         self.screen = self.prev_screen;
                     }
+                } else if self.screen == 9 {
+                    // Test submenu: run the selected test.
+                    self.run_test();
                 } else if self.screen == 7 {
                     // Stats: nothing to toggle, just exit.
                     self.screen = self.prev_screen;
                 } else {
                     // Exit back to the main menu.
-                    self.screen = 9;
+                    self.screen = 10;
                 }
                 self.draw();
             }

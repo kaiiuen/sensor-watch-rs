@@ -13,6 +13,32 @@ const ROW_SIZE: u32 = 256;
 const PAGE_SIZE: u32 = 64;
 const RWWEE_PAGES: u32 = 128;
 
+/// Returns the total size of the RWW EEPROM area in bytes.
+pub fn total_size() -> u32 {
+    RWWEE_ADDR_END - RWWEE_ADDR_START
+}
+
+/// Returns the number of bytes currently used in the RWW EEPROM area.
+///
+/// A byte is "used" if it is not 0xFF (erased flash). This scans the whole
+/// area, so it is only suitable for a diagnostics readout.
+pub fn used_size() -> u32 {
+    let mut used = 0u32;
+    let mut buf = [0u8; 256];
+    let mut row = 0u32;
+    while row * ROW_SIZE < total_size() {
+        if read(row, 0, &mut buf) {
+            for &b in buf.iter() {
+                if b != 0xFF {
+                    used += 1;
+                }
+            }
+        }
+        row += 1;
+    }
+    used
+}
+
 /// The NVM memory array (Flash), accessed as 16-bit words.
 const NVM_MEMORY: *mut u16 = 0x0000_0000 as *mut u16;
 
