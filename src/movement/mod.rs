@@ -46,6 +46,7 @@ pub mod periodic;
 pub mod persist;
 pub mod planetary_hours;
 pub mod planetary_time;
+pub mod preferences;
 pub mod probability;
 pub mod pulsometer;
 pub mod randonaut;
@@ -133,6 +134,9 @@ static mut DAY_NIGHT_PERCENTAGE: day_night_percentage::DayNightPercentageFace =
 
 /// The static set time face instance.
 static mut SET_TIME: set_time::SetTimeFace = set_time::SetTimeFace::new_static();
+
+/// The static preferences face instance.
+static mut PREFERENCES: preferences::PreferencesFace = preferences::PreferencesFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -674,6 +678,7 @@ pub fn app_setup() {
             WATCH_FACES[72] = Some(&mut *core::ptr::addr_of_mut!(MINUTE_REPEATER_DECIMAL));
             WATCH_FACES[73] = Some(&mut *core::ptr::addr_of_mut!(DAY_NIGHT_PERCENTAGE));
             WATCH_FACES[74] = Some(&mut *core::ptr::addr_of_mut!(SET_TIME));
+            WATCH_FACES[75] = Some(&mut *core::ptr::addr_of_mut!(PREFERENCES));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
