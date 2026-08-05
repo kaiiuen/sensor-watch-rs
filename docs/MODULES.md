@@ -288,6 +288,26 @@ hanging the CPU.
 
 ---
 
+## `src/watch/ecc.rs` — SECDED error correction
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `encode()` | fn | Encode a 32-bit word with a 7-bit Hamming SECDED code. |
+| `decode()` | fn | Decode, correcting single-bit and detecting double-bit errors. |
+
+---
+
+## `src/watch/shell.rs` — Serial command shell
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `Shell` | struct | A minimal command interpreter over UART. |
+| `Shell::poll()` | fn | Read and process incoming commands. |
+
+Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
+
+---
+
 ## `src/watch/memory.rs` — Memory usage
 
 | Symbol | Type | Purpose |
@@ -406,12 +426,14 @@ hanging the CPU.
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `Fault` | enum | WatchdogReset, Panic, WakeTooLong, InvalidState, BatteryLow, RtcLostTime, CorruptImage. |
+| `Fault` | enum | WatchdogReset, Panic, WakeTooLong, InvalidState, BatteryLow, RtcLostTime, CorruptImage, ClockFailure. |
 | `ResetReason` | enum | PowerOn, Watchdog, Panic, Software. |
 | `record_fault()` | fn | Record a fault in a backup register. |
 | `last_fault()` / `fault_count()` | fn | Read fault state. |
 | `check_reset_reason()` | fn | Read hardware reset cause at boot. |
 | `check_boot_throttle()` | fn | Detect a brown-out reboot loop. |
+| `check_clock_failure()` | fn | Detect a broken 32 kHz crystal. |
+| `check_heartbeat()` | fn | Detect a frozen RTC (seconds not advancing). |
 | `signal_fault()` | fn | LED flash code. |
 
 ---

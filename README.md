@@ -97,7 +97,7 @@ cargo fmt --check
 
 - [x] Hardware abstraction layer (`src/watch/`): RTC, LCD, GPIO, buttons/EIC,
       LED, buzzer, ADC, I2C, SPI, UART, flash storage, deep-sleep, watchdog,
-      CRC, memory, LIS2DW, utility
+      CRC, ECC, memory, LIS2DW, serial shell, utility
 - [x] Watchface framework (`src/movement/`): event-driven dispatcher,
       zero-heap, fault system, debouncing, persistence, board config
 - [x] **111 watch faces**, covering all faces from the original reference repo
@@ -113,7 +113,10 @@ cargo fmt --check
 - [x] RTC compare-callback queue (software, indexed timeout slots)
 - [x] UF2 artifact generation
 - [x] Diagnostics hardware test submenu (buttons, LED, buzzer, accelerometer,
-      CPU states, RAM usage, storage usage)
+      CPU states, RAM usage, storage usage, benchmark self-test)
+- [x] Backburner features: clock failure detector, SECDED ECC, log-structured
+      wear leveling, serial shell, raise-to-wake, drift correction, heartbeat
+      monitor, dual-boot recovery halt
 
 ## Documentation
 

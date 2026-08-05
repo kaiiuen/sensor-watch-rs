@@ -377,17 +377,29 @@ Computes a CRC-32 over the firmware text region to detect flash bit-rot. A
 mismatch indicates a corrupt image, which the caller can surface as a fault and
 enter a safe recovery state.
 
-### 6.19 `watch/memory.rs` — Memory usage
+### 6.19 `watch/ecc.rs` — SECDED error correction
+
+Encodes each 32-bit data word with a 7-bit Hamming SECDED code (39 bits).
+`decode()` corrects any single-bit error and detects any double-bit error, so
+flash bit-rot is corrected on read rather than silently corrupting data.
+
+### 6.20 `watch/shell.rs` — Serial command shell
+
+A minimal command interpreter over the debug UART. Provides `time`,
+`settime YYMMDDHHMMSS`, and `help` commands. This is the foundation for clock
+calibration and the companion app.
+
+### 6.21 `watch/memory.rs` — Memory usage
 
 Reports RAM usage from the linker symbols (`.data` + `.bss`). Used by the
 diagnostics face to show the firmware's static RAM footprint.
 
-### 6.20 `watch/utility.rs` — Utility functions
+### 6.22 `watch/utility.rs` — Utility functions
 
 Date/time helpers: weekday, week number, leap year, UNIX time conversion,
 durations, 12-hour conversion, thermistor temperature.
 
-### 6.21 `watch/utz.rs` / `watch/zones.rs` — DST-aware timezones
+### 6.23 `watch/utz.rs` / `watch/zones.rs` — DST-aware timezones
 
 Port of the `utz` micro timezone library. `utz.rs` provides the DST rule
 engine (day-of-week math, rule unpacking, offset calculation); `zones.rs`
@@ -395,14 +407,14 @@ holds the 46-zone table with their offsets and DST rules. The movement layer
 uses these to compute the correct local time across daylight-saving
 transitions.
 
-### 6.21 `watch/lis2dw.rs` — LIS2DW accelerometer
+### 6.24 `watch/lis2dw.rs` — LIS2DW accelerometer
 
 Port of the C `lis2dw.c` driver. Talks to the LIS2DW12 accelerometer on the
 9-pin connector over I2C. Provides data-rate/mode/range configuration, raw
 reading, FIFO access, and tap/wake-on-motion detection. The movement layer
 uses this to offer tap detection and accelerometer wake to faces.
 
-### 6.22 `watch/rtc.rs` — compare-callback queue
+### 6.25 `watch/rtc.rs` — compare-callback queue
 
 A software analog of the Second Movement hardware compare-callback queue.
 Up to 8 indexed slots (`N_COMP_CB`) each hold a target time and callback; the
@@ -410,7 +422,7 @@ earliest pending slot is armed via the existing one-shot alarm. Faces can
 schedule indexed timeouts (button, LED, resign, sleep, minute) without
 keeping the CPU awake.
 
-### 6.23 `watch/storage.rs` — storage usage
+### 6.26 `watch/storage.rs` — storage usage
 
 Reports the RWW EEPROM area's total and used size. Used by the diagnostics
 face to show storage usage as a percentage.
