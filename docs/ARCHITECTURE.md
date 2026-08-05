@@ -382,6 +382,14 @@ enter a safe recovery state.
 Date/time helpers: weekday, week number, leap year, UNIX time conversion,
 durations, 12-hour conversion, thermistor temperature.
 
+### 6.20 `watch/utz.rs` / `watch/zones.rs` — DST-aware timezones
+
+Port of the `utz` micro timezone library. `utz.rs` provides the DST rule
+engine (day-of-week math, rule unpacking, offset calculation); `zones.rs`
+holds the 46-zone table with their offsets and DST rules. The movement layer
+uses these to compute the correct local time across daylight-saving
+transitions.
+
 ---
 
 ## 7. The `movement` module (Watchface Framework)
@@ -401,6 +409,8 @@ dispatches events.
   `wants_background_task()` and `advise()`)
 - `MovementState` — global framework state
 - `ClockMode` — 12H / 24H / 024H
+- `BuzzerPriority` — Button / Signal / Alarm
+- `MOVEMENT_SECONDARY_FACE_INDEX` — the start of the secondary face list
 - `TIMEZONE_OFFSETS` — the timezone table
 
 **Why a closed `Event` enum:** the CPU wakes only for one of these. A closed enum
@@ -414,11 +424,21 @@ The core of the framework:
 - `app_setup()` — register faces, buttons, alarms
 - `app_loop()` — react to the single pending event, then return
 - `set_tick_rate()` — switch between 1 Hz and 1/minute wake rates
-- `move_to_face()` / `move_to_next_face()` — face switching
-- `default_loop_handler()` — standard button behavior
+- `move_to_face()` / `move_to_next_face()` — face switching. If a secondary
+  face list is configured (`MOVEMENT_SECONDARY_FACE_INDEX`), rotation stays
+  within the current list, and Mode long-press jumps from face 0 to the
+  secondary list (or back to face 0).
+- `default_loop_handler()` — standard button behavior, including the secondary
+  list long-press jump and LED auto-off when `led_duration == 0`.
 - `schedule_background_task()` — schedule a future wakeup
 - `save_settings()` / `store_settings()` — persist settings to flash
 - `release_peripherals()` — disable unused peripherals after each reaction
+- DST-aware timezones via the `utz` library: `get_current_timezone_offset()` and
+  `get_current_timezone_offset_for_zone()` apply daylight-saving rules per
+  zone and date.
+- Buzzer priority: `play_note()` / `play_sequence()` / `play_alarm_beeps()`
+  enforce `BuzzerPriority` (button < signal < alarm) so a lower-priority sound
+  cannot interrupt a higher-priority one.
 - The full Second Movement API surface: `get_local_date_time()`,
   `get_utc_timestamp()`, `set_utc_date_time()`, `set_local_date_time()`,
   `set_timezone_index()`, `get_current_timezone_offset()`, `clock_mode_24h()`,
@@ -490,8 +510,8 @@ diagnostics face's battery submenu.
 Each face implements the `WatchFace` trait. Faces are `static` instances (no
 heap). They are pure state machines: they react to one event and return.
 
-There are **99 registered faces** (`MOVEMENT_NUM_FACES = 99`), covering all faces
-from the original reference repo plus new Second Movement faces. Highlights:
+There are **111 registered faces** (`MOVEMENT_NUM_FACES = 111`), covering all faces
+from the original reference repo plus the Second Movement faces. Highlights:
 
 - `simple_clock.rs` — the main clock (weekday, day, time; seconds toggle)
 - `countdown.rs` — a countdown timer (scheduled via RTC alarm)
@@ -502,7 +522,11 @@ from the original reference repo plus new Second Movement faces. Highlights:
 - `advanced_alarm.rs` — 16 alarm slots with day modes, pitch, and beep rounds
 - `hydration.rs` — water intake tracking with settings and a log
 - `sos.rs` — SOS / Morse code transmitter
-- Plus stopwatch, timer, moon phase, games, calculators, astronomy, and many more
+- `lander.rs` / `ping.rs` / `blackjack.rs` / `squash.rs` — games
+- `tide.rs` / `days_since.rs` / `baby_kicks.rs` — complications
+- `settings_face.rs` — unified settings
+- `ish.rs` / `solar_time.rs` / `ke_decimal_time.rs` / `beats.rs` — alternative clocks
+- Plus stopwatch, timer, moon phase, calculators, astronomy, and many more
 
 ---
 

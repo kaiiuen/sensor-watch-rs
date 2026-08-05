@@ -100,16 +100,19 @@ cargo fmt --check
       CRC, utility
 - [x] Watchface framework (`src/movement/`): event-driven dispatcher,
       zero-heap, fault system, debouncing, persistence, board config
-- [x] **99 watch faces**, covering all faces from the original reference repo
-      plus new Second Movement faces (advanced alarm, hydration, SOS, and more)
+- [x] **111 watch faces**, covering all faces from the original reference repo
+      and the Second Movement repo (advanced alarm, hydration, SOS, lander,
+      ping, blackjack, tide, days-since, settings, ISH, solar time, beats, and more)
 - [x] Hardware hardening: SysTick-safe standby, I2C pin floating, inverted
       battery ADC, BOD33, boot-count throttle, `.ramfunc` flash writes,
       `#[repr(C, align(4))]`, windowed watchdog, CRC-32 integrity check,
-      `panic = "abort"`
+      `panic = "abort"`, flip-link
+- [x] Second Movement features: DST-aware timezones (utz), primary/secondary
+      face lists, buzzer priority system
 - [x] UF2 artifact generation
-- [ ] Remaining Second Movement faces and features (DST zones, buzzer
-      priorities, accelerometer framework, primary/secondary face lists)
-- [ ] New faces & features (SOS/morse, battery submenu, diagnostics expansion)
+- [ ] Remaining Second Movement faces and features (accelerometer tap/motion
+      framework, RTC compare-callback queue)
+- [ ] New faces & features (diagnostics expansion, battery submenu refinements)
 
 ## Documentation
 

@@ -304,11 +304,23 @@ hanging the CPU.
 
 ---
 
+## `src/watch/utz.rs` / `watch/zones.rs` — DST timezones
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `dayofweek()` | fn | Day of week (Monday=1..Sunday=7). |
+| `is_leap_year()` | fn | Leap year check (year since 2000). |
+| `get_current_offset()` | fn | Effective offset applying DST rules. |
+| `unpack_zone()` | fn | Unpack a packed zone definition. |
+| `ZONE_RULES` / `ZONE_DEFNS` / `ZONE_NAMES` | const | The 46-zone DST table. |
+
+---
+
 ## `src/movement/types.rs` — Core types
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `MOVEMENT_NUM_FACES` | const | Number of face slots (99). |
+| `MOVEMENT_NUM_FACES` | const | Number of face slots (111). |
 | `MOVEMENT_LONG_PRESS_TICKS` | const | Long-press threshold (64 fast ticks). |
 | `MOVEMENT_REALLY_LONG_PRESS_TICKS` | const | Really-long-press threshold (192 fast ticks). |
 | `Settings` | struct | 32-bit packed user preferences, `#[repr(C, align(4))]`. |
@@ -318,6 +330,8 @@ hanging the CPU.
 | `WatchFace` | trait | The face interface (setup/activate/loop_/resign + optional hooks). |
 | `MovementState` | struct | Global framework state. |
 | `ClockMode` | enum | 12H / 24H / 024H. |
+| `BuzzerPriority` | enum | Button / Signal / Alarm. |
+| `MOVEMENT_SECONDARY_FACE_INDEX` | const | Start of the secondary face list. |
 | `TIMEZONE_OFFSETS` | const | Timezone table (41 entries). |
 
 **Why a closed `Event` enum:** deterministic — every event is known and handled.
@@ -415,7 +429,7 @@ hanging the CPU.
 Each face implements `WatchFace` with `setup`, `activate`, `loop_`, `resign`,
 and optionally `wants_background_task` and `advise`.
 
-There are **99 registered faces**. Highlights:
+There are **111 registered faces**. Highlights:
 
 | Face | File | Purpose |
 |------|------|---------|
@@ -428,10 +442,22 @@ There are **99 registered faces**. Highlights:
 | Diagnostics | `diagnostics.rs` | Device/settings/stats manager. |
 | Hydration | `hydration.rs` | Water intake tracker with log. |
 | SOS | `sos.rs` | Morse code transmitter. |
+| Lander | `lander.rs` | Lunar lander game. |
+| Ping | `ping.rs` | Pong-style game. |
+| Blackjack | `blackjack.rs` | Blackjack game. |
+| Squash | `squash.rs` | Squash game. |
+| Tide | `tide.rs` | Tide prediction. |
+| Days since | `days_since.rs` | Days-since counter. |
+| Baby kicks | `baby_kicks.rs` | Kick counter. |
+| Settings | `settings_face.rs` | Unified settings screens. |
+| ISH | `ish.rs` | Vague time. |
+| Solar time | `solar_time.rs` | Solar time. |
+| Kè decimal | `ke_decimal_time.rs` | Decimal time. |
+| Beats | `beats.rs` | Swatch Internet Time. |
 | Stopwatch | `stopwatch.rs` | Stopwatch. |
 | Timer | `timer.rs` | Multi-slot countdown timer. |
 | Moon phase | `moon_phase.rs` | Lunar phase. |
-| + 86 more | — | Games, calculators, astronomy, sensors, and more. |
+| + 74 more | — | Games, calculators, astronomy, sensors, and more. |
 
 ---
 
