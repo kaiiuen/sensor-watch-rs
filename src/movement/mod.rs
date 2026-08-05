@@ -16,6 +16,7 @@ pub mod couch_to_5k;
 pub mod countdown;
 pub mod counter;
 pub mod databank;
+pub mod day_night_percentage;
 pub mod day_one;
 pub mod deadline;
 pub mod debounce;
@@ -124,6 +125,10 @@ static mut SIMPLE_CLOCK_BIN_LED: simple_clock_bin_led::SimpleClockBinLedFace =
 /// The static minute repeater decimal face instance.
 static mut MINUTE_REPEATER_DECIMAL: minute_repeater_decimal::MinuteRepeaterDecimalFace =
     minute_repeater_decimal::MinuteRepeaterDecimalFace::new_static();
+
+/// The static day/night percentage face instance.
+static mut DAY_NIGHT_PERCENTAGE: day_night_percentage::DayNightPercentageFace =
+    day_night_percentage::DayNightPercentageFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -663,6 +668,7 @@ pub fn app_setup() {
             WATCH_FACES[70] = Some(&mut *core::ptr::addr_of_mut!(WORLD_CLOCK2));
             WATCH_FACES[71] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK_BIN_LED));
             WATCH_FACES[72] = Some(&mut *core::ptr::addr_of_mut!(MINUTE_REPEATER_DECIMAL));
+            WATCH_FACES[73] = Some(&mut *core::ptr::addr_of_mut!(DAY_NIGHT_PERCENTAGE));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
