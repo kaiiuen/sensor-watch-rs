@@ -55,6 +55,7 @@ pub mod simple_coin_flip;
 pub mod stats;
 pub mod stock_stopwatch;
 pub mod stopwatch;
+pub mod sunrise_sunset;
 pub mod tachymeter;
 pub mod tally;
 pub mod tarot;
@@ -290,6 +291,10 @@ static mut PLANETARY_TIME: planetary_time::PlanetaryTimeFace =
 /// The static planetary hours face instance.
 static mut PLANETARY_HOURS: planetary_hours::PlanetaryHoursFace =
     planetary_hours::PlanetaryHoursFace::new_static();
+
+/// The static sunrise/sunset face instance.
+static mut SUNRISE_SUNSET: sunrise_sunset::SunriseSunsetFace =
+    sunrise_sunset::SunriseSunsetFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -603,6 +608,7 @@ pub fn app_setup() {
             WATCH_FACES[59] = Some(&mut *core::ptr::addr_of_mut!(WORDLE));
             WATCH_FACES[60] = Some(&mut *core::ptr::addr_of_mut!(PLANETARY_TIME));
             WATCH_FACES[61] = Some(&mut *core::ptr::addr_of_mut!(PLANETARY_HOURS));
+            WATCH_FACES[62] = Some(&mut *core::ptr::addr_of_mut!(SUNRISE_SUNSET));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
