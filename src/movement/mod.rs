@@ -10,12 +10,15 @@ pub mod board;
 pub mod close_enough;
 pub mod countdown;
 pub mod counter;
+pub mod databank;
+pub mod deadline;
 pub mod debounce;
 pub mod decimal_time;
 pub mod diagnostics;
 pub mod fault;
 pub mod flashlight;
 pub mod french_revolutionary;
+pub mod habit;
 pub mod mars_time;
 pub mod metronome;
 pub mod minimal_clock;
@@ -33,6 +36,7 @@ pub mod stopwatch;
 pub mod tachymeter;
 pub mod tally;
 pub mod timer;
+pub mod tomato;
 pub mod toss_up;
 pub mod types;
 pub mod weeknumber;
@@ -138,6 +142,18 @@ static mut SIMPLE_COIN_FLIP: simple_coin_flip::SimpleCoinFlipFace =
 
 /// The static toss-up face instance.
 static mut TOSS_UP: toss_up::TossUpFace = toss_up::TossUpFace::new_static();
+
+/// The static databank face instance.
+static mut DATABANK: databank::DatabankFace = databank::DatabankFace::new_static();
+
+/// The static habit face instance.
+static mut HABIT: habit::HabitFace = habit::HabitFace::new_static();
+
+/// The static tomato face instance.
+static mut TOMATO: tomato::TomatoFace = tomato::TomatoFace::new_static();
+
+/// The static deadline face instance.
+static mut DEADLINE: deadline::DeadlineFace = deadline::DeadlineFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -416,6 +432,10 @@ pub fn app_setup() {
             WATCH_FACES[24] = Some(&mut *core::ptr::addr_of_mut!(PROBABILITY));
             WATCH_FACES[25] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_COIN_FLIP));
             WATCH_FACES[26] = Some(&mut *core::ptr::addr_of_mut!(TOSS_UP));
+            WATCH_FACES[27] = Some(&mut *core::ptr::addr_of_mut!(DATABANK));
+            WATCH_FACES[28] = Some(&mut *core::ptr::addr_of_mut!(HABIT));
+            WATCH_FACES[29] = Some(&mut *core::ptr::addr_of_mut!(TOMATO));
+            WATCH_FACES[30] = Some(&mut *core::ptr::addr_of_mut!(DEADLINE));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
