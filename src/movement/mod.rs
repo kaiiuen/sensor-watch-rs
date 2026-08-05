@@ -37,6 +37,7 @@ pub mod mars_time;
 pub mod menstrual_cycle;
 pub mod metronome;
 pub mod minimal_clock;
+pub mod minute_repeater_decimal;
 pub mod moon_phase;
 pub mod morsecalc;
 pub mod orrery;
@@ -119,6 +120,10 @@ static mut WORLD_CLOCK2: world_clock2::WorldClock2Face =
 /// The static simple clock bin LED face instance.
 static mut SIMPLE_CLOCK_BIN_LED: simple_clock_bin_led::SimpleClockBinLedFace =
     simple_clock_bin_led::SimpleClockBinLedFace::new_static();
+
+/// The static minute repeater decimal face instance.
+static mut MINUTE_REPEATER_DECIMAL: minute_repeater_decimal::MinuteRepeaterDecimalFace =
+    minute_repeater_decimal::MinuteRepeaterDecimalFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -657,6 +662,7 @@ pub fn app_setup() {
             WATCH_FACES[69] = Some(&mut *core::ptr::addr_of_mut!(RPN_CALCULATOR_ALT));
             WATCH_FACES[70] = Some(&mut *core::ptr::addr_of_mut!(WORLD_CLOCK2));
             WATCH_FACES[71] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK_BIN_LED));
+            WATCH_FACES[72] = Some(&mut *core::ptr::addr_of_mut!(MINUTE_REPEATER_DECIMAL));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
