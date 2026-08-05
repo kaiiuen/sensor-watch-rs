@@ -12,6 +12,7 @@ pub mod close_enough;
 pub mod countdown;
 pub mod counter;
 pub mod databank;
+pub mod day_one;
 pub mod deadline;
 pub mod debounce;
 pub mod decimal_time;
@@ -40,6 +41,7 @@ pub mod stopwatch;
 pub mod tachymeter;
 pub mod tally;
 pub mod tarot;
+pub mod time_left;
 pub mod timer;
 pub mod tomato;
 pub mod toss_up;
@@ -188,6 +190,12 @@ static mut TAROT: tarot::TarotFace = tarot::TarotFace::new_static();
 
 /// The static randonaut face instance.
 static mut RANDONAUT: randonaut::RandonautFace = randonaut::RandonautFace::new_static();
+
+/// The static day one face instance.
+static mut DAY_ONE: day_one::DayOneFace = day_one::DayOneFace::new_static();
+
+/// The static time left face instance.
+static mut TIME_LEFT: time_left::TimeLeftFace = time_left::TimeLeftFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -478,6 +486,8 @@ pub fn app_setup() {
             WATCH_FACES[36] = Some(&mut *core::ptr::addr_of_mut!(WAREKI));
             WATCH_FACES[37] = Some(&mut *core::ptr::addr_of_mut!(TAROT));
             WATCH_FACES[38] = Some(&mut *core::ptr::addr_of_mut!(RANDONAUT));
+            WATCH_FACES[39] = Some(&mut *core::ptr::addr_of_mut!(DAY_ONE));
+            WATCH_FACES[40] = Some(&mut *core::ptr::addr_of_mut!(TIME_LEFT));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
