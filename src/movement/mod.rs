@@ -7,6 +7,7 @@
 pub mod activity;
 pub mod alarm;
 pub mod astronomy;
+pub mod beeps;
 pub mod blinky;
 pub mod board;
 pub mod breathing;
@@ -167,6 +168,9 @@ static mut HELLO_THERE: hello_there::HelloThereFace = hello_there::HelloThereFac
 /// The static character set face instance.
 static mut CHARACTER_SET: character_set::CharacterSetFace =
     character_set::CharacterSetFace::new_static();
+
+/// The static beeps face instance.
+static mut BEEPS: beeps::BeepsFace = beeps::BeepsFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -716,6 +720,7 @@ pub fn app_setup() {
             WATCH_FACES[80] = Some(&mut *core::ptr::addr_of_mut!(VOLTAGE));
             WATCH_FACES[81] = Some(&mut *core::ptr::addr_of_mut!(HELLO_THERE));
             WATCH_FACES[82] = Some(&mut *core::ptr::addr_of_mut!(CHARACTER_SET));
+            WATCH_FACES[83] = Some(&mut *core::ptr::addr_of_mut!(BEEPS));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
