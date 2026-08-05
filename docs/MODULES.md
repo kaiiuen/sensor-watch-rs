@@ -288,6 +288,16 @@ hanging the CPU.
 
 ---
 
+## `src/watch/memory.rs` — Memory usage
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `total_ram()` | fn | Total RAM available (32 KB). |
+| `static_ram_used()` | fn | Static RAM used (`.data` + `.bss`). |
+| `ram_used_percent()` | fn | RAM usage as a percentage. |
+
+---
+
 ## `src/watch/utility.rs` — Utility
 
 | Symbol | Type | Purpose |

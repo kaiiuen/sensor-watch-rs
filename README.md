@@ -97,7 +97,7 @@ cargo fmt --check
 
 - [x] Hardware abstraction layer (`src/watch/`): RTC, LCD, GPIO, buttons/EIC,
       LED, buzzer, ADC, I2C, SPI, UART, flash storage, deep-sleep, watchdog,
-      CRC, utility
+      CRC, memory, LIS2DW, utility
 - [x] Watchface framework (`src/movement/`): event-driven dispatcher,
       zero-heap, fault system, debouncing, persistence, board config
 - [x] **111 watch faces**, covering all faces from the original reference repo
@@ -112,8 +112,8 @@ cargo fmt --check
 - [x] Accelerometer framework: LIS2DW driver, tap detection, motion wake
 - [x] RTC compare-callback queue (software, indexed timeout slots)
 - [x] UF2 artifact generation
-- [ ] Remaining Second Movement faces and features (none blocking)
-- [ ] New faces & features (diagnostics expansion, battery submenu refinements)
+- [x] Diagnostics hardware test submenu (buttons, LED, buzzer, accelerometer,
+      CPU states, RAM usage, storage usage)
 
 ## Documentation
 

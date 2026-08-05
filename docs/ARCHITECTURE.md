@@ -377,12 +377,17 @@ Computes a CRC-32 over the firmware text region to detect flash bit-rot. A
 mismatch indicates a corrupt image, which the caller can surface as a fault and
 enter a safe recovery state.
 
-### 6.19 `watch/utility.rs` — Utility functions
+### 6.19 `watch/memory.rs` — Memory usage
+
+Reports RAM usage from the linker symbols (`.data` + `.bss`). Used by the
+diagnostics face to show the firmware's static RAM footprint.
+
+### 6.20 `watch/utility.rs` — Utility functions
 
 Date/time helpers: weekday, week number, leap year, UNIX time conversion,
 durations, 12-hour conversion, thermistor temperature.
 
-### 6.20 `watch/utz.rs` / `watch/zones.rs` — DST-aware timezones
+### 6.21 `watch/utz.rs` / `watch/zones.rs` — DST-aware timezones
 
 Port of the `utz` micro timezone library. `utz.rs` provides the DST rule
 engine (day-of-week math, rule unpacking, offset calculation); `zones.rs`
@@ -404,6 +409,11 @@ Up to 8 indexed slots (`N_COMP_CB`) each hold a target time and callback; the
 earliest pending slot is armed via the existing one-shot alarm. Faces can
 schedule indexed timeouts (button, LED, resign, sleep, minute) without
 keeping the CPU awake.
+
+### 6.23 `watch/storage.rs` — storage usage
+
+Reports the RWW EEPROM area's total and used size. Used by the diagnostics
+face to show storage usage as a percentage.
 
 ---
 
