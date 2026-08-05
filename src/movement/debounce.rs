@@ -25,6 +25,8 @@ struct DebounceState {
     down_timestamp: u16,
     /// Whether a long-press has already been reported for this press.
     long_reported: bool,
+    /// Whether a really-long-press has already been reported for this press.
+    really_long_reported: bool,
 }
 
 impl DebounceState {
@@ -35,6 +37,7 @@ impl DebounceState {
             sample_count: 0,
             down_timestamp: 0,
             long_reported: false,
+            really_long_reported: false,
         }
     }
 }
@@ -82,6 +85,7 @@ pub fn update(button: Button, raw_level: bool) -> Option<Event> {
             // Rising edge: button pressed.
             state.down_timestamp = 1;
             state.long_reported = false;
+            state.really_long_reported = false;
             Some(Event::Button(button, ButtonEvent::Down))
         } else {
             // Falling edge: button released.
@@ -114,6 +118,14 @@ pub fn check_long_press(button: Button, fast_ticks: u16) -> Option<Event> {
         {
             state.long_reported = true;
             return Some(Event::Button(button, ButtonEvent::LongPress));
+        }
+        if state.stable_level
+            && !state.really_long_reported
+            && fast_ticks - state.down_timestamp
+                >= crate::movement::types::MOVEMENT_REALLY_LONG_PRESS_TICKS
+        {
+            state.really_long_reported = true;
+            return Some(Event::Button(button, ButtonEvent::ReallyLongPress));
         }
         None
     }

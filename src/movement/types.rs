@@ -8,10 +8,13 @@
 use crate::watch::buzzer::Note as BuzzerNote;
 
 /// Number of watch faces (set by the config; default to a small number for now).
-pub const MOVEMENT_NUM_FACES: usize = 96;
+pub const MOVEMENT_NUM_FACES: usize = 98;
 
 /// Long press threshold in fast ticks (128 Hz).
 pub const MOVEMENT_LONG_PRESS_TICKS: u16 = 64;
+
+/// Really-long-press threshold in fast ticks (128 Hz) = 1.5 s.
+pub const MOVEMENT_REALLY_LONG_PRESS_TICKS: u16 = 192;
 
 /// Global settings covering watch behavior, stored in RTC backup register 0.
 #[derive(Clone, Copy, Debug, Default)]
@@ -77,6 +80,29 @@ impl Settings {
         self.reg = (self.reg & !(0x1 << 28)) | ((v as u32) << 28);
     }
 
+    /// Button-press volume: false = soft, true = loud.
+    pub fn button_volume(self) -> bool {
+        (self.reg >> 29) & 0x1 != 0
+    }
+    /// Signal volume: false = soft, true = loud.
+    pub fn signal_volume(self) -> bool {
+        (self.reg >> 30) & 0x1 != 0
+    }
+    /// Alarm volume: false = soft, true = loud.
+    pub fn alarm_volume(self) -> bool {
+        (self.reg >> 31) & 0x1 != 0
+    }
+
+    pub fn set_button_volume(&mut self, v: bool) {
+        self.reg = (self.reg & !(0x1 << 29)) | ((v as u32) << 29);
+    }
+    pub fn set_signal_volume(&mut self, v: bool) {
+        self.reg = (self.reg & !(0x1 << 30)) | ((v as u32) << 30);
+    }
+    pub fn set_alarm_volume(&mut self, v: bool) {
+        self.reg = (self.reg & !(0x1 << 31)) | ((v as u32) << 31);
+    }
+
     pub fn set_button_should_sound(&mut self, v: bool) {
         self.reg = (self.reg & !0x1) | (v as u32);
     }
@@ -123,6 +149,14 @@ pub enum Button {
     Alarm,
 }
 
+/// The clock display mode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ClockMode {
+    H12,
+    H24,
+    H024,
+}
+
 /// A button press event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonEvent {
@@ -130,6 +164,7 @@ pub enum ButtonEvent {
     Up,
     LongPress,
     LongUp,
+    ReallyLongPress,
 }
 
 /// The closed set of events that wake the CPU.
@@ -171,6 +206,10 @@ pub trait WatchFace {
     fn wants_background_task(&mut self, _settings: &Settings) -> bool {
         false
     }
+    /// OPTIONAL: called once per minute for all faces (not just the active one)
+    /// so a face can advise the framework of its needs (alarms, background work,
+    /// DST sensitivity). Defaults to doing nothing.
+    fn advise(&mut self, _settings: &Settings) {}
 }
 
 /// Global movement state.

@@ -7,6 +7,7 @@
 pub mod accel_interrupt_count;
 pub mod accelerometer_data_acquisition;
 pub mod activity;
+pub mod advanced_alarm;
 pub mod alarm;
 pub mod alarm_thermometer;
 pub mod astronomy;
@@ -41,6 +42,7 @@ pub mod geomancy;
 pub mod habit;
 pub mod hello_there;
 pub mod higher_lower_game;
+pub mod hydration;
 pub mod interval;
 pub mod invaders;
 pub mod kitchen_conversions;
@@ -111,6 +113,7 @@ use crate::movement::types::*;
 use crate::watch;
 use crate::watch::buzzer::{self, Note as BuzzerNote};
 use crate::watch::rtc::{self, DateTime};
+use crate::watch::utility;
 
 /// The global movement state.
 pub static mut MOVEMENT_STATE: MovementState = MovementState::new_static();
@@ -129,6 +132,10 @@ static mut COUNTDOWN: countdown::CountdownFace = countdown::CountdownFace::new_s
 
 /// The static alarm face instance.
 static mut ALARM: alarm::AlarmFace = alarm::AlarmFace::new_static();
+
+/// The static advanced alarm face instance.
+static mut ADVANCED_ALARM: advanced_alarm::AdvancedAlarmFace =
+    advanced_alarm::AdvancedAlarmFace::new_static();
 
 /// The static counter face instance.
 static mut COUNTER: counter::CounterFace = counter::CounterFace::new_static();
@@ -401,6 +408,9 @@ static mut STOCK_STOPWATCH: stock_stopwatch::StockStopwatchFace =
 /// The static activity face instance.
 static mut ACTIVITY: activity::ActivityFace = activity::ActivityFace::new_static();
 
+/// The static hydration face instance.
+static mut HYDRATION: hydration::HydrationFace = hydration::HydrationFace::new_static();
+
 /// The static interval face instance.
 static mut INTERVAL: interval::IntervalFace = interval::IntervalFace::new_static();
 
@@ -456,6 +466,13 @@ pub static mut FAST_TICKS: u16 = 0;
 /// Handles background tasks for all faces.
 fn handle_background_tasks() {
     unsafe {
+        // First, give every face a chance to advise the framework of its needs
+        // (alarms, background work, DST sensitivity). This runs once per minute.
+        for face in WATCH_FACES.iter_mut() {
+            if let Some(face) = face.as_deref_mut() {
+                face.advise(&MOVEMENT_STATE.settings);
+            }
+        }
         for face in WATCH_FACES.iter_mut() {
             if let Some(face) = face.as_deref_mut()
                 && face.wants_background_task(&MOVEMENT_STATE.settings)
@@ -575,6 +592,12 @@ pub fn play_signal() {
     }
 }
 
+/// Plays a single note with the given priority (0 = button, 1 = signal, 2 = alarm).
+pub fn play_note(note: BuzzerNote, _priority: u8) {
+    buzzer::set_buzzer_period(crate::watch::buzzer::NOTE_PERIODS[note as usize] as u32);
+    buzzer::set_buzzer_on();
+}
+
 /// Plays the alarm.
 pub fn play_alarm() {
     play_alarm_beeps(5, BuzzerNote::C8);
@@ -596,6 +619,11 @@ pub fn play_alarm_beeps(rounds: u8, alarm_note: BuzzerNote) {
     buzzer::enable_buzzer();
 }
 
+/// Plays a note sequence (a pointer to (note, duration) pairs ending in 0).
+pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
+    buzzer::play_sequence(note_sequence, callback_on_end);
+}
+
 /// Claims a backup register (4-7).
 pub fn claim_backup_register() -> u8 {
     unsafe {
@@ -606,6 +634,263 @@ pub fn claim_backup_register() -> u8 {
         MOVEMENT_STATE.next_available_backup_register += 1;
         reg
     }
+}
+
+/// Returns the current UTC date/time (the RTC stores UTC; no offset applied).
+pub fn get_utc_date_time() -> DateTime {
+    rtc::get_date_time()
+}
+
+/// Returns the local date/time by applying the configured time zone offset.
+pub fn get_local_date_time() -> DateTime {
+    let utc = rtc::get_date_time();
+    let offset =
+        unsafe { TIMEZONE_OFFSETS[(MOVEMENT_STATE.settings.time_zone() as usize).min(40)] as i32 };
+    utility::date_time_convert_zone(utc, 0, (offset * 60) as u32)
+}
+
+/// Returns the date/time in the given zone index (minutes offset from UTC).
+pub fn get_date_time_in_zone(zone_index: u8) -> DateTime {
+    let utc = rtc::get_date_time();
+    let offset = TIMEZONE_OFFSETS[(zone_index as usize).min(40)] as i32;
+    utility::date_time_convert_zone(utc, 0, (offset * 60) as u32)
+}
+
+/// Returns the current UTC timestamp (seconds since 1970).
+pub fn get_utc_timestamp() -> u32 {
+    utility::date_time_to_unix_time(rtc::get_date_time(), 0)
+}
+
+/// Sets the UTC date/time and reschedules alarms.
+pub fn set_utc_date_time(date_time: DateTime) {
+    rtc::set_date_time(date_time);
+}
+
+/// Sets the local date/time (converts back to UTC using the configured zone).
+pub fn set_local_date_time(date_time: DateTime) {
+    unsafe {
+        let offset =
+            TIMEZONE_OFFSETS[(MOVEMENT_STATE.settings.time_zone() as usize).min(40)] as i32;
+        let utc = utility::date_time_convert_zone(date_time, (offset * 60) as u32, 0);
+        rtc::set_date_time(utc);
+    }
+}
+
+/// Sets the UTC timestamp (seconds since 1970).
+pub fn set_utc_timestamp(timestamp: u32) {
+    rtc::set_date_time(utility::date_time_from_unix_time(timestamp, 0));
+}
+
+/// Returns the current time zone index.
+pub fn get_timezone_index() -> u8 {
+    unsafe { MOVEMENT_STATE.settings.time_zone() }
+}
+
+/// Sets the time zone index and persists the setting.
+pub fn set_timezone_index(index: u8) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_time_zone(index);
+        save_settings();
+    }
+}
+
+/// Returns the current time zone offset (minutes) for the configured zone.
+pub fn get_current_timezone_offset() -> i32 {
+    unsafe { TIMEZONE_OFFSETS[(MOVEMENT_STATE.settings.time_zone() as usize).min(40)] as i32 }
+}
+
+/// Returns the time zone offset (minutes) for a given zone index.
+pub fn get_current_timezone_offset_for_zone(zone_index: u8) -> i32 {
+    TIMEZONE_OFFSETS[(zone_index as usize).min(40)] as i32
+}
+
+/// Returns the clock mode as a 12H/24H/024H enum.
+pub fn clock_mode_24h() -> ClockMode {
+    unsafe {
+        if MOVEMENT_STATE.settings.clock_mode_24h() {
+            if MOVEMENT_STATE.settings.clock_24h_leading_zero() {
+                ClockMode::H024
+            } else {
+                ClockMode::H24
+            }
+        } else {
+            ClockMode::H12
+        }
+    }
+}
+
+/// Sets the clock mode from a 12H/24H/024H enum.
+pub fn set_clock_mode_24h(mode: ClockMode) {
+    unsafe {
+        let (h24, leading_zero) = match mode {
+            ClockMode::H12 => (false, false),
+            ClockMode::H24 => (true, false),
+            ClockMode::H024 => (true, true),
+        };
+        MOVEMENT_STATE.settings.set_clock_mode_24h(h24);
+        MOVEMENT_STATE
+            .settings
+            .set_clock_24h_leading_zero(leading_zero);
+        save_settings();
+    }
+}
+
+/// Returns whether the button should sound.
+pub fn button_should_sound() -> bool {
+    unsafe { MOVEMENT_STATE.settings.button_should_sound() }
+}
+
+/// Sets whether the button should sound.
+pub fn set_button_should_sound(v: bool) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_button_should_sound(v);
+        save_settings();
+    }
+}
+
+/// Returns the button volume (false = soft, true = loud).
+pub fn button_volume() -> bool {
+    unsafe { MOVEMENT_STATE.settings.button_volume() }
+}
+
+/// Sets the button volume.
+pub fn set_button_volume(v: bool) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_button_volume(v);
+        save_settings();
+    }
+}
+
+/// Returns the signal volume (false = soft, true = loud).
+pub fn signal_volume() -> bool {
+    unsafe { MOVEMENT_STATE.settings.signal_volume() }
+}
+
+/// Sets the signal volume.
+pub fn set_signal_volume(v: bool) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_signal_volume(v);
+        save_settings();
+    }
+}
+
+/// Returns the alarm volume (false = soft, true = loud).
+pub fn alarm_volume() -> bool {
+    unsafe { MOVEMENT_STATE.settings.alarm_volume() }
+}
+
+/// Sets the alarm volume.
+pub fn set_alarm_volume(v: bool) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_alarm_volume(v);
+        save_settings();
+    }
+}
+
+/// Returns the fast-tick timeout (inactivity interval) setting.
+pub fn get_fast_tick_timeout() -> u8 {
+    unsafe { MOVEMENT_STATE.settings.to_interval() }
+}
+
+/// Sets the fast-tick timeout.
+pub fn set_fast_tick_timeout(v: u8) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_to_interval(v);
+        save_settings();
+    }
+}
+
+/// Returns the low-energy timeout setting.
+pub fn get_low_energy_timeout() -> u8 {
+    unsafe { MOVEMENT_STATE.settings.le_interval() }
+}
+
+/// Sets the low-energy timeout.
+pub fn set_low_energy_timeout(v: u8) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_le_interval(v);
+        save_settings();
+    }
+}
+
+/// Returns whether at least one alarm is enabled.
+pub fn alarm_enabled() -> bool {
+    unsafe { MOVEMENT_STATE.settings.alarm_enabled() }
+}
+
+/// Sets the global alarm-enabled flag.
+pub fn set_alarm_enabled(v: bool) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_alarm_enabled(v);
+        save_settings();
+    }
+}
+
+/// Returns the backlight dwell (LED duration) setting.
+pub fn get_backlight_dwell() -> u8 {
+    unsafe { MOVEMENT_STATE.settings.led_duration() }
+}
+
+/// Sets the backlight dwell.
+pub fn set_backlight_dwell(v: u8) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_led_duration(v);
+        save_settings();
+    }
+}
+
+/// Returns the backlight color.
+pub fn backlight_color() -> (u8, u8, u8) {
+    unsafe {
+        (
+            MOVEMENT_STATE.settings.led_red_color(),
+            MOVEMENT_STATE.settings.led_green_color(),
+            0,
+        )
+    }
+}
+
+/// Sets the backlight color.
+pub fn set_backlight_color(red: u8, green: u8, blue: u8) {
+    unsafe {
+        MOVEMENT_STATE.settings.set_led_red_color(red);
+        MOVEMENT_STATE.settings.set_led_green_color(green);
+        let _ = blue;
+        save_settings();
+    }
+}
+
+/// Forces the LED on with an arbitrary RGB color.
+pub fn force_led_on(red: u8, green: u8, blue: u8) {
+    watch::led::enable_leds();
+    watch::led::set_led_color_rgb(red, green, blue);
+}
+
+/// Forces the LED off.
+pub fn force_led_off() {
+    watch::led::disable_leds();
+}
+
+/// Requests a change in the tick frequency (power of two, 1-128 Hz).
+pub fn request_tick_frequency(freq: u8) {
+    if freq.is_power_of_two() && (1..=128).contains(&freq) {
+        set_tick_rate(freq != 1);
+    }
+}
+
+/// Requests the watch to enter sleep mode (low-energy).
+pub fn request_sleep() {
+    watch::deepsleep::enter_sleep_mode();
+}
+
+/// Requests the watch to wake from sleep.
+pub fn request_wake() {
+    // Waking is handled by the interrupt that woke us; nothing to do here.
+}
+
+/// Stores the current settings to flash.
+pub fn store_settings() {
+    save_settings();
 }
 
 /// App init: called once at boot.
@@ -792,6 +1077,8 @@ pub fn app_setup() {
                 ACCELEROMETER_DATA_ACQUISITION
             ));
             WATCH_FACES[95] = Some(&mut *core::ptr::addr_of_mut!(ACCEL_INTERRUPT_COUNT));
+            WATCH_FACES[96] = Some(&mut *core::ptr::addr_of_mut!(ADVANCED_ALARM));
+            WATCH_FACES[97] = Some(&mut *core::ptr::addr_of_mut!(HYDRATION));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
