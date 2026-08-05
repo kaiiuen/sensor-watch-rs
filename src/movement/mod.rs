@@ -61,6 +61,7 @@ pub mod timer;
 pub mod tomato;
 pub mod toss_up;
 pub mod totp;
+pub mod totp_lfs;
 pub mod tuning_tones;
 pub mod types;
 pub mod wake;
@@ -272,6 +273,9 @@ static mut ACTIVITY: activity::ActivityFace = activity::ActivityFace::new_static
 
 /// The static interval face instance.
 static mut INTERVAL: interval::IntervalFace = interval::IntervalFace::new_static();
+
+/// The static TOTP LFS face instance.
+static mut TOTP_LFS: totp_lfs::TotpFaceLfs = totp_lfs::TotpFaceLfs::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -581,6 +585,7 @@ pub fn app_setup() {
             WATCH_FACES[55] = Some(&mut *core::ptr::addr_of_mut!(STOCK_STOPWATCH));
             WATCH_FACES[56] = Some(&mut *core::ptr::addr_of_mut!(ACTIVITY));
             WATCH_FACES[57] = Some(&mut *core::ptr::addr_of_mut!(INTERVAL));
+            WATCH_FACES[58] = Some(&mut *core::ptr::addr_of_mut!(TOTP_LFS));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
