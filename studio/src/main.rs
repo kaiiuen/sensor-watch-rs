@@ -49,6 +49,8 @@ struct StudioApp {
     sim_last_tick: std::time::Instant,
     /// The SVG watch renderer.
     watch_renderer: watch_display::WatchRenderer,
+    /// The simulator display scale (0.5 - 2.0).
+    sim_scale: f32,
     /// The watch-face preset manager.
     presets: PresetManager,
     /// The currently selected face in the catalog.
@@ -110,6 +112,7 @@ impl Default for StudioApp {
             watch: CasioF91W::new(),
             sim_last_tick: std::time::Instant::now(),
             watch_renderer: watch_display::WatchRenderer::new(),
+            sim_scale: 1.0,
             presets: PresetManager::new(),
             selected_face: None,
             selected_preset_face: None,
@@ -268,10 +271,14 @@ impl StudioApp {
         });
         ui.separator();
 
-        // Split horizontally: simulator on the bottom, catalog+preset on top.
-        egui::TopBottomPanel::bottom("sim").show_inside(ui, |ui| {
-            self.simulator(ui, ctx);
-        });
+        // Split horizontally: simulator on the bottom (resizable), catalog+preset on top.
+        egui::TopBottomPanel::bottom("sim")
+            .resizable(true)
+            .default_height(ui.available_height() * 0.4)
+            .min_height(120.0)
+            .show_inside(ui, |ui| {
+                self.simulator(ui, ctx);
+            });
 
         // Top half: catalog (left) and active preset (right).
         egui::SidePanel::left("catalog")
@@ -313,13 +320,13 @@ impl StudioApp {
                         if ui.selectable_label(selected, face).clicked() {
                             self.selected_preset_face = Some(i);
                         }
-                        if ui.small_button("↑").clicked() {
+                        if ui.small_button("Up").clicked() {
                             self.presets.move_face_up(i);
                         }
-                        if ui.small_button("↓").clicked() {
+                        if ui.small_button("Dn").clicked() {
                             self.presets.move_face_down(i);
                         }
-                        if ui.small_button("✕").clicked() {
+                        if ui.small_button("Del").clicked() {
                             self.presets.remove_face(i);
                         }
                     });
@@ -491,10 +498,21 @@ impl StudioApp {
 
     /// The simulator panel: render the watch and handle its buttons.
     fn simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.heading("Simulator");
+        ui.horizontal(|ui| {
+            ui.heading("Simulator");
+            ui.separator();
+            // Adjustable size slider.
+            ui.label("Size:");
+            ui.add(
+                egui::Slider::new(&mut self.sim_scale, 0.4..=2.0)
+                    .step_by(0.1)
+                    .suffix("x"),
+            );
+            if ui.button("Reset").clicked() {
+                self.sim_scale = 1.0;
+            }
+        });
         ui.separator();
-        ui.label("Casio F-91W simulator — try the watch before flashing.");
-        ui.add_space(8.0);
 
         // Advance the stopwatch and button-A hold timer based on elapsed time.
         let now = std::time::Instant::now();
@@ -507,8 +525,12 @@ impl StudioApp {
         // Update the display state.
         self.watch.update_display();
 
-        // Render the watch SVG at a good size.
-        let size = [740u32, 655u32];
+        // Render the watch SVG at a size based on the scale.
+        let base = 740u32;
+        let size = [
+            (base as f32 * self.sim_scale) as u32,
+            (655.0 * self.sim_scale) as u32,
+        ];
         let texture = watch_display::render_to_texture(
             &mut self.watch_renderer,
             &self.watch.display,
@@ -516,8 +538,7 @@ impl StudioApp {
             ctx,
         );
         let aspect = 1480.0 / 1311.0;
-        let avail = ui.available_width();
-        let w = avail.min(560.0);
+        let w = size[0] as f32;
         let h = w / aspect;
         ui.image((texture.id(), egui::Vec2::new(w, h)));
 
