@@ -26,6 +26,7 @@ pub mod discgolf;
 pub mod dual_timer;
 pub mod endless_runner;
 pub mod fault;
+pub mod finetune;
 pub mod flashlight;
 pub mod french_revolutionary;
 pub mod geomancy;
@@ -137,6 +138,9 @@ static mut SET_TIME: set_time::SetTimeFace = set_time::SetTimeFace::new_static()
 
 /// The static preferences face instance.
 static mut PREFERENCES: preferences::PreferencesFace = preferences::PreferencesFace::new_static();
+
+/// The static finetune face instance.
+static mut FINETUNE: finetune::FinetuneFace = finetune::FinetuneFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -679,6 +683,7 @@ pub fn app_setup() {
             WATCH_FACES[73] = Some(&mut *core::ptr::addr_of_mut!(DAY_NIGHT_PERCENTAGE));
             WATCH_FACES[74] = Some(&mut *core::ptr::addr_of_mut!(SET_TIME));
             WATCH_FACES[75] = Some(&mut *core::ptr::addr_of_mut!(PREFERENCES));
+            WATCH_FACES[76] = Some(&mut *core::ptr::addr_of_mut!(FINETUNE));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
