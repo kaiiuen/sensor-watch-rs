@@ -60,6 +60,7 @@ pub mod wake;
 pub mod wareki;
 pub mod weeknumber;
 pub mod world_clock;
+pub mod wyoscan;
 
 use crate::movement::types::*;
 use crate::watch;
@@ -237,6 +238,9 @@ static mut GEOMANCY: geomancy::GeomancyFace = geomancy::GeomancyFace::new_static
 /// The static repetition minute face instance.
 static mut REPETITION_MINUTE: repetition_minute::RepetitionMinuteFace =
     repetition_minute::RepetitionMinuteFace::new_static();
+
+/// The static wyoscan face instance.
+static mut WYOSCAN: wyoscan::WyoscanFace = wyoscan::WyoscanFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -538,6 +542,7 @@ pub fn app_setup() {
             WATCH_FACES[47] = Some(&mut *core::ptr::addr_of_mut!(ENDLESS_RUNNER));
             WATCH_FACES[48] = Some(&mut *core::ptr::addr_of_mut!(GEOMANCY));
             WATCH_FACES[49] = Some(&mut *core::ptr::addr_of_mut!(REPETITION_MINUTE));
+            WATCH_FACES[50] = Some(&mut *core::ptr::addr_of_mut!(WYOSCAN));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
