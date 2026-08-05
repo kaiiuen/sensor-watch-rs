@@ -23,6 +23,7 @@ pub mod fault;
 pub mod flashlight;
 pub mod french_revolutionary;
 pub mod habit;
+pub mod invaders;
 pub mod kitchen_conversions;
 pub mod mars_time;
 pub mod menstrual_cycle;
@@ -214,6 +215,9 @@ static mut BUTTERFLY_GAME: butterfly_game::ButterflyGameFace =
 
 /// The static simon face instance.
 static mut SIMON: simon::SimonFace = simon::SimonFace::new_static();
+
+/// The static invaders face instance.
+static mut INVADERS: invaders::InvadersFace = invaders::InvadersFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -510,6 +514,7 @@ pub fn app_setup() {
             WATCH_FACES[42] = Some(&mut *core::ptr::addr_of_mut!(MENSTRUAL_CYCLE));
             WATCH_FACES[43] = Some(&mut *core::ptr::addr_of_mut!(BUTTERFLY_GAME));
             WATCH_FACES[44] = Some(&mut *core::ptr::addr_of_mut!(SIMON));
+            WATCH_FACES[45] = Some(&mut *core::ptr::addr_of_mut!(INVADERS));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
