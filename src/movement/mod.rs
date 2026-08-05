@@ -4,6 +4,7 @@
 //! resource: it wakes only to react to a single event, then immediately
 //! returns to STANDBY. All timekeeping is owned by the RTC, never by the CPU.
 
+pub mod accelerometer_data_acquisition;
 pub mod activity;
 pub mod alarm;
 pub mod alarm_thermometer;
@@ -217,6 +218,11 @@ static mut THERMISTOR_TESTING: thermistor_testing::ThermistorTestingFace =
 /// The static alarm thermometer face instance.
 static mut ALARM_THERMOMETER: alarm_thermometer::AlarmThermometerFace =
     alarm_thermometer::AlarmThermometerFace::new_static();
+
+/// The static accelerometer data acquisition face instance.
+static mut ACCELEROMETER_DATA_ACQUISITION:
+    accelerometer_data_acquisition::AccelerometerDataAcquisitionFace =
+    accelerometer_data_acquisition::AccelerometerDataAcquisitionFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -777,6 +783,9 @@ pub fn app_setup() {
             WATCH_FACES[91] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_LOGGING));
             WATCH_FACES[92] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_TESTING));
             WATCH_FACES[93] = Some(&mut *core::ptr::addr_of_mut!(ALARM_THERMOMETER));
+            WATCH_FACES[94] = Some(&mut *core::ptr::addr_of_mut!(
+                ACCELEROMETER_DATA_ACQUISITION
+            ));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
