@@ -83,6 +83,7 @@ pub mod totp;
 pub mod totp_lfs;
 pub mod tuning_tones;
 pub mod types;
+pub mod voltage;
 pub mod wake;
 pub mod wareki;
 pub mod weeknumber;
@@ -154,6 +155,9 @@ static mut NANOSEC: nanosec::NanosecFace = nanosec::NanosecFace::new_static();
 /// The static set time hackwatch face instance.
 static mut SET_TIME_HACKWATCH: set_time_hackwatch::SetTimeHackwatchFace =
     set_time_hackwatch::SetTimeHackwatchFace::new_static();
+
+/// The static voltage face instance.
+static mut VOLTAGE: voltage::VoltageFace = voltage::VoltageFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -700,6 +704,7 @@ pub fn app_setup() {
             WATCH_FACES[77] = Some(&mut *core::ptr::addr_of_mut!(SAVE_LOAD));
             WATCH_FACES[78] = Some(&mut *core::ptr::addr_of_mut!(NANOSEC));
             WATCH_FACES[79] = Some(&mut *core::ptr::addr_of_mut!(SET_TIME_HACKWATCH));
+            WATCH_FACES[80] = Some(&mut *core::ptr::addr_of_mut!(VOLTAGE));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
