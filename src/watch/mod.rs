@@ -21,7 +21,9 @@ pub mod storage;
 pub mod timeout;
 pub mod uart;
 pub mod utility;
+pub mod utz;
 pub mod wdt;
+pub mod zones;
 
 /// Initializes the hardware in dependency order.
 ///

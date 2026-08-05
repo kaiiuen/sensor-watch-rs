@@ -11,8 +11,11 @@ pub mod advanced_alarm;
 pub mod alarm;
 pub mod alarm_thermometer;
 pub mod astronomy;
+pub mod baby_kicks;
 pub mod battery;
+pub mod beats;
 pub mod beeps;
+pub mod blackjack;
 pub mod blinky;
 pub mod board;
 pub mod breathing;
@@ -26,6 +29,7 @@ pub mod counter;
 pub mod databank;
 pub mod day_night_percentage;
 pub mod day_one;
+pub mod days_since;
 pub mod deadline;
 pub mod debounce;
 pub mod decimal_time;
@@ -46,7 +50,10 @@ pub mod higher_lower_game;
 pub mod hydration;
 pub mod interval;
 pub mod invaders;
+pub mod ish;
+pub mod ke_decimal_time;
 pub mod kitchen_conversions;
+pub mod lander;
 pub mod lightmeter;
 pub mod lis2dw_logging;
 pub mod mars_time;
@@ -61,6 +68,7 @@ pub mod nanosec;
 pub mod orrery;
 pub mod periodic;
 pub mod persist;
+pub mod ping;
 pub mod planetary_hours;
 pub mod planetary_time;
 pub mod preferences;
@@ -75,14 +83,17 @@ pub mod sailing;
 pub mod save_load;
 pub mod set_time;
 pub mod set_time_hackwatch;
+pub mod settings_face;
 pub mod ships_bell;
 pub mod simon;
 pub mod simple_calculator;
 pub mod simple_clock;
 pub mod simple_clock_bin_led;
 pub mod simple_coin_flip;
+pub mod solar_time;
 pub mod solstice;
 pub mod sos;
+pub mod squash;
 pub mod stats;
 pub mod stock_stopwatch;
 pub mod stopwatch;
@@ -94,6 +105,7 @@ pub mod tempchart;
 pub mod thermistor_logging;
 pub mod thermistor_readout;
 pub mod thermistor_testing;
+pub mod tide;
 pub mod time_left;
 pub mod timer;
 pub mod tomato;
@@ -446,6 +458,30 @@ static mut SOLSTICE: solstice::SolsticeFace = solstice::SolsticeFace::new_static
 /// The static SOS face instance.
 static mut SOS: sos::SosFace = sos::SosFace::new_static();
 
+/// The static days since face instance.
+static mut DAYS_SINCE: days_since::DaysSinceFace = days_since::DaysSinceFace::new_static();
+
+/// The static tide face instance.
+static mut TIDE: tide::TideFace = tide::TideFace::new_static();
+
+/// The static blackjack face instance.
+static mut BLACKJACK: blackjack::BlackjackFace = blackjack::BlackjackFace::new_static();
+
+/// The static squash face instance.
+static mut SQUASH: squash::SquashFace = squash::SquashFace::new_static();
+
+/// The static lander face instance.
+static mut LANDER: lander::LanderFace = lander::LanderFace::new_static();
+
+/// The static ping face instance.
+static mut PING: ping::PingFace = ping::PingFace::new_static();
+
+/// The static baby kicks face instance.
+static mut BABY_KICKS: baby_kicks::BabyKicksFace = baby_kicks::BabyKicksFace::new_static();
+
+/// The static settings face instance.
+static mut SETTINGS_FACE: settings_face::SettingsFace = settings_face::SettingsFace::new_static();
+
 /// The static morsecalc face instance.
 static mut MORSECALC: morsecalc::MorsecalcFace = morsecalc::MorsecalcFace::new_static();
 
@@ -458,6 +494,19 @@ static mut DUAL_TIMER: dual_timer::DualTimerFace = dual_timer::DualTimerFace::ne
 /// The static RPN calculator alt face instance.
 static mut RPN_CALCULATOR_ALT: rpn_calculator_alt::RpnCalculatorAltFace =
     rpn_calculator_alt::RpnCalculatorAltFace::new_static();
+
+/// The static ISH (vague time) face instance.
+static mut ISH: ish::IshFace = ish::IshFace::new_static();
+
+/// The static solar time face instance.
+static mut SOLAR_TIME: solar_time::SolarTimeFace = solar_time::SolarTimeFace::new_static();
+
+/// The static Kè decimal time face instance.
+static mut KE_DECIMAL_TIME: ke_decimal_time::KeDecimalTimeFace =
+    ke_decimal_time::KeDecimalTimeFace::new_static();
+
+/// The static beats face instance.
+static mut BEATS: beats::BeatsFace = beats::BeatsFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -668,15 +717,14 @@ pub fn get_utc_date_time() -> DateTime {
 /// Returns the local date/time by applying the configured time zone offset.
 pub fn get_local_date_time() -> DateTime {
     let utc = rtc::get_date_time();
-    let offset =
-        unsafe { TIMEZONE_OFFSETS[(MOVEMENT_STATE.settings.time_zone() as usize).min(40)] as i32 };
+    let offset = get_current_timezone_offset();
     utility::date_time_convert_zone(utc, 0, (offset * 60) as u32)
 }
 
 /// Returns the date/time in the given zone index (minutes offset from UTC).
 pub fn get_date_time_in_zone(zone_index: u8) -> DateTime {
     let utc = rtc::get_date_time();
-    let offset = TIMEZONE_OFFSETS[(zone_index as usize).min(40)] as i32;
+    let offset = get_current_timezone_offset_for_zone(zone_index);
     utility::date_time_convert_zone(utc, 0, (offset * 60) as u32)
 }
 
@@ -692,12 +740,9 @@ pub fn set_utc_date_time(date_time: DateTime) {
 
 /// Sets the local date/time (converts back to UTC using the configured zone).
 pub fn set_local_date_time(date_time: DateTime) {
-    unsafe {
-        let offset =
-            TIMEZONE_OFFSETS[(MOVEMENT_STATE.settings.time_zone() as usize).min(40)] as i32;
-        let utc = utility::date_time_convert_zone(date_time, (offset * 60) as u32, 0);
-        rtc::set_date_time(utc);
-    }
+    let offset = get_current_timezone_offset();
+    let utc = utility::date_time_convert_zone(date_time, (offset * 60) as u32, 0);
+    rtc::set_date_time(utc);
 }
 
 /// Sets the UTC timestamp (seconds since 1970).
@@ -720,12 +765,56 @@ pub fn set_timezone_index(index: u8) {
 
 /// Returns the current time zone offset (minutes) for the configured zone.
 pub fn get_current_timezone_offset() -> i32 {
-    unsafe { TIMEZONE_OFFSETS[(MOVEMENT_STATE.settings.time_zone() as usize).min(40)] as i32 }
+    let idx = get_timezone_index();
+    get_current_timezone_offset_for_zone(idx)
 }
 
-/// Returns the time zone offset (minutes) for a given zone index.
+/// Returns the time zone offset (minutes) for a given zone index, applying DST.
 pub fn get_current_timezone_offset_for_zone(zone_index: u8) -> i32 {
-    TIMEZONE_OFFSETS[(zone_index as usize).min(40)] as i32
+    let idx = (zone_index as usize).min(watch::zones::NUM_ZONE_NAMES - 1);
+    let defn = &watch::zones::ZONE_DEFNS[idx];
+    if defn.rules_len == 0 {
+        // No DST rules: return the standard offset.
+        return defn.offset_inc_minutes as i32 * watch::utz::OFFSET_INCREMENT * 60;
+    }
+    // Compute the DST-aware offset for the current UTC time.
+    let utc = rtc::get_date_time();
+    let utc_ts = utility::date_time_to_unix_time(utc, 0);
+    let base_offset = defn.offset_inc_minutes as i32 * watch::utz::OFFSET_INCREMENT;
+    // Convert UTC to the zone's local time (using standard offset first).
+    let local = utility::date_time_from_unix_time(utc_ts, (base_offset * 60) as u32);
+    let udt = date_time_to_udate(local);
+    let mut zone = watch::utz::UZone {
+        name: "",
+        offset: watch::utz::UOffset {
+            hours: (base_offset / 60) as i8,
+            minutes: (base_offset % 60).unsigned_abs() as u8,
+        },
+        rules: &watch::zones::ZONE_RULES
+            [defn.rules_idx as usize..defn.rules_idx as usize + defn.rules_len as usize],
+        abrev_formatter: "",
+        src: core::ptr::null(),
+    };
+    let mut offset = watch::utz::UOffset::default();
+    watch::utz::get_current_offset(&mut zone, &udt, &mut offset);
+    (offset.hours as i32 * 60 + offset.minutes as i32) * 60
+}
+
+/// Converts a `DateTime` to the utz `UDateTime` format.
+fn date_time_to_udate(dt: DateTime) -> watch::utz::UDateTime {
+    watch::utz::UDateTime {
+        date: watch::utz::UDate {
+            year: dt.year,
+            month: dt.month,
+            dayofmonth: dt.day,
+            dayofweek: 0,
+        },
+        time: watch::utz::UTime {
+            hour: dt.hour,
+            minute: dt.minute,
+            second: dt.second,
+        },
+    }
 }
 
 /// Returns the clock mode as a 12H/24H/024H enum.
@@ -1109,6 +1198,18 @@ pub fn app_setup() {
             WATCH_FACES[96] = Some(&mut *core::ptr::addr_of_mut!(ADVANCED_ALARM));
             WATCH_FACES[97] = Some(&mut *core::ptr::addr_of_mut!(HYDRATION));
             WATCH_FACES[98] = Some(&mut *core::ptr::addr_of_mut!(SOS));
+            WATCH_FACES[99] = Some(&mut *core::ptr::addr_of_mut!(LANDER));
+            WATCH_FACES[100] = Some(&mut *core::ptr::addr_of_mut!(PING));
+            WATCH_FACES[101] = Some(&mut *core::ptr::addr_of_mut!(BABY_KICKS));
+            WATCH_FACES[102] = Some(&mut *core::ptr::addr_of_mut!(SETTINGS_FACE));
+            WATCH_FACES[103] = Some(&mut *core::ptr::addr_of_mut!(ISH));
+            WATCH_FACES[104] = Some(&mut *core::ptr::addr_of_mut!(SOLAR_TIME));
+            WATCH_FACES[105] = Some(&mut *core::ptr::addr_of_mut!(KE_DECIMAL_TIME));
+            WATCH_FACES[106] = Some(&mut *core::ptr::addr_of_mut!(BEATS));
+            WATCH_FACES[107] = Some(&mut *core::ptr::addr_of_mut!(DAYS_SINCE));
+            WATCH_FACES[108] = Some(&mut *core::ptr::addr_of_mut!(TIDE));
+            WATCH_FACES[109] = Some(&mut *core::ptr::addr_of_mut!(BLACKJACK));
+            WATCH_FACES[110] = Some(&mut *core::ptr::addr_of_mut!(SQUASH));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
