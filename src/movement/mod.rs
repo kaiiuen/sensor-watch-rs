@@ -1426,15 +1426,6 @@ pub fn app_loop() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
         }
 
-        // If a face enabled tap detection and a tap woke us, poll the
-        // accelerometer interrupt source and dispatch the tap event.
-        if matches!(
-            event,
-            Event::SingleTap | Event::DoubleTap | Event::AccelerometerWake
-        ) {
-            handle_accelerometer_event();
-        }
-
         // Persist any settings a face may have changed.
         save_settings();
 

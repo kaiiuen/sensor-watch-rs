@@ -193,6 +193,22 @@ impl AccelerometerDataAcquisitionFace {
     fn continue_reading(&mut self) {
         if self.reading_ticks > 0 {
             self.reading_ticks -= 1;
+            // Read a raw accelerometer sample and store it (if a sensor is
+            // present and there is flash room).
+            if crate::movement::accelerometer_begin() {
+                let r = crate::watch::lis2dw::get_raw_reading();
+                if self.next_available_page >= 0 {
+                    let mut buf = [0u8; 6];
+                    buf[0..2].copy_from_slice(&r.x.to_le_bytes());
+                    buf[2..4].copy_from_slice(&r.y.to_le_bytes());
+                    buf[4..6].copy_from_slice(&r.z.to_le_bytes());
+                    let row = (self.next_available_page / 256) as u32;
+                    let off = (self.next_available_page % 256) as u32;
+                    if crate::watch::storage::write(row, off, &buf) {
+                        self.next_available_page -= 6;
+                    }
+                }
+            }
             if self.reading_ticks == 0 {
                 self.mode = MODE_IDLE;
                 crate::movement::play_alarm_beeps(1, Note::C4);
