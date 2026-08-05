@@ -20,7 +20,10 @@ in a sealed, air-gapped system and must manage itself.
 ```
 kaiwentek/
 ├── sensor-watch/
-│   ├── sensor-watch-rs/          <- THIS project (the Rust rewrite)
+│   ├── sensor-watch-rs/          <- THIS project (firmware + companion app)
+│   │   ├── src/                  <- the firmware (Rust rewrite)
+│   │   ├── core/                 <- pure logic (UF2, date math, settings)
+│   │   └── studio/               <- Firmware Studio GUI companion app
 │   ├── sensor-watch-reference/   <- clone of the original C repo (reference only)
 │   └── second-movement-reference/<- clone of the Second Movement C repo (reference only)
 ```
@@ -29,6 +32,19 @@ The original C sources are kept purely as references for behavior, register maps
 and documentation. We do not modify them. The Rust rewrite is being merged with
 features from **Second Movement** (persistent settings, primary/secondary faces,
 DST-aware timezones, buzzer priorities, accelerometer support, and many new faces).
+
+## Firmware Studio (companion app)
+
+The `studio/` directory contains **Firmware Studio**, a GUI companion app that
+assembles the firmware into a `.uf2`, lists the watch faces, and flashes the
+watch. It reuses the `core` crate's pure logic (UF2 encoding, date math,
+settings).
+
+```
+cargo build -p sensor-watch-studio
+```
+
+See [`studio/README.md`](studio/README.md) for details.
 
 ## Hardware
 

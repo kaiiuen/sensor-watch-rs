@@ -1,0 +1,14 @@
+[package]
+name = "sensor-watch-studio"
+version = "0.1.0"
+edition = "2021"
+description = "Firmware Studio — a GUI companion app for the Sensor-Watch firmware"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+# GUI framework (pure Rust, cross-platform)
+eframe = "0.27"
+egui = "0.27"
+
+# Firmware logic (UF2 encoding, date math, settings) — reused from the firmware
+sensor-watch-core = { path = "../core" }

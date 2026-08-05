@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     ".",
     "core",
+    "studio",
 ]
 
 [package]
@@ -33,3 +34,7 @@ opt-level = "s"
 lto = true
 codegen-units = 1
 panic = "abort"
+
+# The host GUI app uses a normal optimization level (not size-optimized).
+[profile.release.package.sensor-watch-studio]
+opt-level = 2

@@ -1,6 +1,8 @@
 # Build configuration for the SAM L22 (Cortex-M0+)
-[build]
-target = "thumbv6m-none-eabi"
+#
+# NOTE: there is no global `target` here because the workspace also contains
+# the host-side `studio` GUI app. The firmware is built explicitly with
+# `--target thumbv6m-none-eabi` (see build.sh and CI).
 
 [target.thumbv6m-none-eabi]
 # flip-link places the stack at the bottom of RAM so a stack overflow triggers
