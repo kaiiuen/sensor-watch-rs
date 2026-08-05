@@ -84,6 +84,7 @@ pub mod tachymeter;
 pub mod tally;
 pub mod tarot;
 pub mod tempchart;
+pub mod thermistor_logging;
 pub mod thermistor_readout;
 pub mod time_left;
 pub mod timer;
@@ -202,6 +203,10 @@ static mut MINMAX: minmax::MinmaxFace = minmax::MinmaxFace::new_static();
 
 /// The static lightmeter face instance.
 static mut LIGHTMETER: lightmeter::LightmeterFace = lightmeter::LightmeterFace::new_static();
+
+/// The static thermistor logging face instance.
+static mut THERMISTOR_LOGGING: thermistor_logging::ThermistorLoggingFace =
+    thermistor_logging::ThermistorLoggingFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -759,6 +764,7 @@ pub fn app_setup() {
             WATCH_FACES[88] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_READOUT));
             WATCH_FACES[89] = Some(&mut *core::ptr::addr_of_mut!(MINMAX));
             WATCH_FACES[90] = Some(&mut *core::ptr::addr_of_mut!(LIGHTMETER));
+            WATCH_FACES[91] = Some(&mut *core::ptr::addr_of_mut!(THERMISTOR_LOGGING));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
