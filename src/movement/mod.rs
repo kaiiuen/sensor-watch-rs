@@ -57,6 +57,7 @@ pub mod time_left;
 pub mod timer;
 pub mod tomato;
 pub mod toss_up;
+pub mod totp;
 pub mod tuning_tones;
 pub mod types;
 pub mod wake;
@@ -255,6 +256,9 @@ static mut SIMPLE_CALCULATOR: simple_calculator::SimpleCalculatorFace =
 /// The static RPN calculator face instance.
 static mut RPN_CALCULATOR: rpn_calculator::RpnCalculatorFace =
     rpn_calculator::RpnCalculatorFace::new_static();
+
+/// The static TOTP face instance.
+static mut TOTP: totp::TotpFace = totp::TotpFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -560,6 +564,7 @@ pub fn app_setup() {
             WATCH_FACES[51] = Some(&mut *core::ptr::addr_of_mut!(COUCH_TO_5K));
             WATCH_FACES[52] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CALCULATOR));
             WATCH_FACES[53] = Some(&mut *core::ptr::addr_of_mut!(RPN_CALCULATOR));
+            WATCH_FACES[54] = Some(&mut *core::ptr::addr_of_mut!(TOTP));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
