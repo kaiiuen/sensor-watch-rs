@@ -43,6 +43,8 @@ pub enum Fault {
     BatteryLow = 5,
     /// The RTC lost time (crystal issue).
     RtcLostTime = 6,
+    /// The firmware image failed its CRC integrity check (bit-rot).
+    CorruptImage = 7,
 }
 
 /// Backup register indices for fault storage (registers 4-7 are free).

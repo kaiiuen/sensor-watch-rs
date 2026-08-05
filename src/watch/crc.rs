@@ -11,13 +11,12 @@ const TEXT_START: usize = 0x0000_2000;
 /// The end of the firmware text (the start of the RWW EEPROM area).
 const TEXT_END: usize = 0x0003_C000;
 
-/// A compile-time CRC-32 signature of the firmware text.
-///
-/// This is a placeholder that is intentionally not the real signature; a real
-/// build would embed a hash computed over the linked image. The runtime check
-/// treats a mismatch as a fault but does not block boot, so a false positive
-/// cannot brick the watch.
-const EXPECTED_CRC: u32 = 0x0000_0000;
+/// The storage row and offset where the firmware signature lives.
+const CRC_ROW: u32 = 1;
+const CRC_OFFSET: u32 = 0;
+
+/// A magic value written alongside the signature to detect valid stored data.
+const CRC_MAGIC: u32 = 0x4352_4301; // "CRC" + version
 
 /// Computes a CRC-32 (IEEE 802.3) over a byte range in flash.
 pub fn crc32(start: usize, end: usize) -> u32 {
@@ -36,11 +35,53 @@ pub fn crc32(start: usize, end: usize) -> u32 {
     !crc
 }
 
-/// Checks the firmware text against the expected signature.
+/// Computes the CRC-32 of the firmware text region.
+pub fn firmware_crc() -> u32 {
+    crc32(TEXT_START, TEXT_END)
+}
+
+/// Loads the stored firmware signature from flash.
 ///
-/// Returns true if the image is intact. A mismatch indicates bit-rot; the
-/// caller should surface a fault and enter a safe recovery state.
+/// Returns `Some(crc)` if a valid signature is present, or `None` if none has
+/// been stored yet (first boot after flashing).
+fn load_stored() -> Option<u32> {
+    let mut buf = [0u8; 8];
+    if !crate::watch::storage::read(CRC_ROW, CRC_OFFSET, &mut buf) {
+        return None;
+    }
+    let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
+    if magic != CRC_MAGIC {
+        return None;
+    }
+    Some(u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]))
+}
+
+/// Stores the firmware signature in flash.
+fn store(crc: u32) {
+    let mut buf = [0u8; 8];
+    buf[0..4].copy_from_slice(&CRC_MAGIC.to_le_bytes());
+    buf[4..8].copy_from_slice(&crc.to_le_bytes());
+    crate::watch::storage::wear_leveled_write(CRC_OFFSET, &buf);
+}
+
+/// Checks the firmware text against the stored signature.
+///
+/// On the first boot after a flash, no signature is stored yet, so we compute
+/// and store the current CRC. On subsequent boots we compare the live text
+/// against the stored signature. A mismatch indicates bit-rot; the caller
+/// should surface a fault and enter a safe recovery state.
+///
+/// Returns `true` if the image is intact (or on first boot), `false` if a
+/// mismatch was detected.
 pub fn check_firmware_integrity() -> bool {
-    let actual = crc32(TEXT_START, TEXT_END);
-    actual == EXPECTED_CRC
+    let actual = firmware_crc();
+
+    match load_stored() {
+        // First boot after flashing: store the signature and report intact.
+        None => {
+            store(actual);
+            true
+        }
+        Some(stored) => stored == actual,
+    }
 }

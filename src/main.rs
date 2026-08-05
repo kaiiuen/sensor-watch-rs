@@ -29,6 +29,13 @@ fn main() -> ! {
     // Detect a brown-out reboot loop and drop into the safe state if needed.
     movement::fault::check_boot_throttle();
 
+    // Check the firmware image for bit-rot. If it fails, record a fault so the
+    // user is informed; the watch still boots (a false positive must not brick
+    // the watch).
+    if !watch::crc::check_firmware_integrity() {
+        movement::fault::record_fault(movement::fault::Fault::CorruptImage);
+    }
+
     // Initialize the hardware in dependency order: interrupt priorities,
     // clocks, RTC, then the watchdog backstop.
     watch::init();

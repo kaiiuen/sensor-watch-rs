@@ -17,6 +17,7 @@
 //!   diagnostics menu (00 = main menu, 01 = category, 02 = submenu).
 
 use crate::movement;
+use crate::movement::battery;
 use crate::movement::board::{Board, BoardConfig};
 use crate::movement::stats;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
@@ -24,8 +25,8 @@ use crate::watch::rtc;
 use crate::watch::slcd;
 
 /// The main menu categories (up to 6 characters each).
-const MENU_ITEMS: [&str; 8] = [
-    "CPU   ", "MEMORY", "STORAG", "HARDWR", "SOFTWR", "SYSTEM", "SETTNG", "STATS ",
+const MENU_ITEMS: [&str; 9] = [
+    "CPU   ", "MEMORY", "STORAG", "HARDWR", "SOFTWR", "SYSTEM", "SETTNG", "STATS ", "BATTER",
 ];
 
 /// The diagnostics face state.
@@ -58,9 +59,9 @@ impl DiagnosticsFace {
         // DAY indicator: which watch face we are on.
         let day = self.face_index;
         // DATE indicator: submenu depth (00 = main menu, 01 = category, 02+ = submenu).
-        let date = if self.screen == 8 {
+        let date = if self.screen == 9 {
             0
-        } else if self.screen == 6 || self.screen == 7 {
+        } else if self.screen == 6 || self.screen == 7 || self.screen == 8 {
             2
         } else {
             1
@@ -268,6 +269,56 @@ impl DiagnosticsFace {
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
+    /// Draws the battery submenu.
+    fn draw_battery(&self) {
+        let mut buf = [0u8; 11];
+        match self.subrow {
+            0 => {
+                // Battery type selection.
+                let label = "TYPE  ";
+                let lb = label.as_bytes();
+                for (i, &c) in lb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                let name = battery::battery_type().name();
+                let nb = name.as_bytes();
+                for (i, &c) in nb.iter().take(6).enumerate() {
+                    buf[5 + i] = c;
+                }
+            }
+            1 => {
+                // Charge percentage.
+                let label = "CHARGE";
+                let lb = label.as_bytes();
+                for (i, &c) in lb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                crate::watch::adc::enable_adc();
+                let v = crate::watch::adc::get_vcc_voltage();
+                crate::watch::adc::disable_adc();
+                let pct = battery::charge_percent(v);
+                buf[6] = b'0' + pct / 10;
+                buf[7] = b'0' + pct % 10;
+                buf[8] = b'%';
+            }
+            2 => {
+                // Days remaining.
+                let label = "DAYS  ";
+                let lb = label.as_bytes();
+                for (i, &c) in lb.iter().enumerate() {
+                    buf[i] = c;
+                }
+                crate::watch::adc::enable_adc();
+                let v = crate::watch::adc::get_vcc_voltage();
+                crate::watch::adc::disable_adc();
+                let days = battery::days_remaining(v);
+                write_count(&mut buf, days, 6);
+            }
+            _ => {}
+        }
+        slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+    }
+
     /// Draws the current screen.
     fn draw(&self) {
         match self.screen {
@@ -279,6 +330,7 @@ impl DiagnosticsFace {
             5 => self.draw_system(),
             6 => self.draw_settings(),
             7 => self.draw_stats(),
+            8 => self.draw_battery(),
             _ => self.draw_menu(),
         }
         self.show_breadcrumb();
@@ -315,10 +367,10 @@ impl WatchFace for DiagnosticsFace {
 
     fn activate(&mut self, _settings: &Settings) {
         // Show the main menu on entry.
-        self.screen = 8;
+        self.screen = 9;
         self.cursor = 0;
         self.subrow = 0;
-        self.prev_screen = 8;
+        self.prev_screen = 9;
         self.draw();
     }
 
@@ -326,18 +378,18 @@ impl WatchFace for DiagnosticsFace {
         match event {
             // Top-left (Light) button: scroll down one row / move the cursor.
             Event::Button(Button::Light, ButtonEvent::Up) => {
-                if self.screen == 8 {
+                if self.screen == 9 {
                     // On the main menu, move the cursor down.
                     self.cursor = (self.cursor + 1) % MENU_ITEMS.len() as u8;
-                } else if self.screen == 6 || self.screen == 7 {
-                    // Inside settings/stats, scroll through submenu rows.
+                } else if self.screen == 6 || self.screen == 7 || self.screen == 8 {
+                    // Inside settings/stats/battery, scroll through submenu rows.
                     self.subrow = (self.subrow + 1) % 3;
                 }
                 self.draw();
             }
             // Bottom-right (Alarm) button: select / enter / exit / toggle.
             Event::Button(Button::Alarm, ButtonEvent::Up) => {
-                if self.screen == 8 {
+                if self.screen == 9 {
                     // Enter the selected category.
                     self.prev_screen = self.screen;
                     self.screen = self.cursor;
@@ -367,12 +419,27 @@ impl WatchFace for DiagnosticsFace {
                         }
                         _ => {}
                     }
+                } else if self.screen == 8 {
+                    // Battery: cycle the battery type.
+                    if self.subrow == 0 {
+                        let next = match battery::battery_type() {
+                            battery::BatteryType::Cr2012 => battery::BatteryType::Cr2016,
+                            battery::BatteryType::Cr2016 => battery::BatteryType::Cr2025,
+                            battery::BatteryType::Cr2025 => battery::BatteryType::Cr2032,
+                            battery::BatteryType::Cr2032 => battery::BatteryType::Cr2050,
+                            battery::BatteryType::Cr2050 => battery::BatteryType::Cr2012,
+                        };
+                        battery::set_battery_type(next);
+                    } else {
+                        // Charge/days are read-only; exit.
+                        self.screen = self.prev_screen;
+                    }
                 } else if self.screen == 7 {
                     // Stats: nothing to toggle, just exit.
                     self.screen = self.prev_screen;
                 } else {
                     // Exit back to the main menu.
-                    self.screen = 8;
+                    self.screen = 9;
                 }
                 self.draw();
             }

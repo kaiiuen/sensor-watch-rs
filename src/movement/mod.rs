@@ -11,6 +11,7 @@ pub mod advanced_alarm;
 pub mod alarm;
 pub mod alarm_thermometer;
 pub mod astronomy;
+pub mod battery;
 pub mod beeps;
 pub mod blinky;
 pub mod board;
@@ -81,6 +82,7 @@ pub mod simple_clock;
 pub mod simple_clock_bin_led;
 pub mod simple_coin_flip;
 pub mod solstice;
+pub mod sos;
 pub mod stats;
 pub mod stock_stopwatch;
 pub mod stopwatch;
@@ -441,6 +443,9 @@ static mut ORRERY: orrery::OrreryFace = orrery::OrreryFace::new_static();
 /// The static solstice face instance.
 static mut SOLSTICE: solstice::SolsticeFace = solstice::SolsticeFace::new_static();
 
+/// The static SOS face instance.
+static mut SOS: sos::SosFace = sos::SosFace::new_static();
+
 /// The static morsecalc face instance.
 static mut MORSECALC: morsecalc::MorsecalcFace = morsecalc::MorsecalcFace::new_static();
 
@@ -500,6 +505,11 @@ fn handle_scheduled_tasks() {
 
 /// Illuminates the LED.
 pub fn illuminate_led() {
+    // In the brown-out safe state, the LED is disabled to avoid the load that
+    // re-triggers the reboot loop.
+    if crate::movement::fault::in_safe_state() {
+        return;
+    }
     unsafe {
         let s = &MOVEMENT_STATE.settings;
         if s.led_duration() != 0b111 {
@@ -586,6 +596,11 @@ pub fn cancel_background_task_for_face(watch_face_index: usize) {
 
 /// Plays the signal tune.
 pub fn play_signal() {
+    // In the brown-out safe state, the buzzer is disabled to avoid re-triggering
+    // the reboot loop.
+    if crate::movement::fault::in_safe_state() {
+        return;
+    }
     unsafe {
         MOVEMENT_STATE.is_buzzing = true;
         buzzer::enable_buzzer();
@@ -594,6 +609,9 @@ pub fn play_signal() {
 
 /// Plays a single note with the given priority (0 = button, 1 = signal, 2 = alarm).
 pub fn play_note(note: BuzzerNote, _priority: u8) {
+    if crate::movement::fault::in_safe_state() {
+        return;
+    }
     buzzer::set_buzzer_period(crate::watch::buzzer::NOTE_PERIODS[note as usize] as u32);
     buzzer::set_buzzer_on();
 }
@@ -605,6 +623,9 @@ pub fn play_alarm() {
 
 /// Plays alarm beeps.
 pub fn play_alarm_beeps(rounds: u8, alarm_note: BuzzerNote) {
+    if crate::movement::fault::in_safe_state() {
+        return;
+    }
     let mut rounds = rounds;
     if rounds == 0 {
         rounds = 1;
@@ -621,6 +642,9 @@ pub fn play_alarm_beeps(rounds: u8, alarm_note: BuzzerNote) {
 
 /// Plays a note sequence (a pointer to (note, duration) pairs ending in 0).
 pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
+    if crate::movement::fault::in_safe_state() {
+        return;
+    }
     buzzer::play_sequence(note_sequence, callback_on_end);
 }
 
@@ -862,6 +886,11 @@ pub fn set_backlight_color(red: u8, green: u8, blue: u8) {
 
 /// Forces the LED on with an arbitrary RGB color.
 pub fn force_led_on(red: u8, green: u8, blue: u8) {
+    // In the brown-out safe state, the LED is dimmed to avoid the load that
+    // re-triggers the reboot loop.
+    if crate::movement::fault::in_safe_state() {
+        return;
+    }
     watch::led::enable_leds();
     watch::led::set_led_color_rgb(red, green, blue);
 }
@@ -1079,6 +1108,7 @@ pub fn app_setup() {
             WATCH_FACES[95] = Some(&mut *core::ptr::addr_of_mut!(ACCEL_INTERRUPT_COUNT));
             WATCH_FACES[96] = Some(&mut *core::ptr::addr_of_mut!(ADVANCED_ALARM));
             WATCH_FACES[97] = Some(&mut *core::ptr::addr_of_mut!(HYDRATION));
+            WATCH_FACES[98] = Some(&mut *core::ptr::addr_of_mut!(SOS));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
