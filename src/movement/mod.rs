@@ -42,6 +42,7 @@ pub mod minimal_clock;
 pub mod minute_repeater_decimal;
 pub mod moon_phase;
 pub mod morsecalc;
+pub mod nanosec;
 pub mod orrery;
 pub mod periodic;
 pub mod persist;
@@ -145,6 +146,9 @@ static mut FINETUNE: finetune::FinetuneFace = finetune::FinetuneFace::new_static
 
 /// The static save/load face instance.
 static mut SAVE_LOAD: save_load::SaveLoadFace = save_load::SaveLoadFace::new_static();
+
+/// The static nanosec face instance.
+static mut NANOSEC: nanosec::NanosecFace = nanosec::NanosecFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -689,6 +693,7 @@ pub fn app_setup() {
             WATCH_FACES[75] = Some(&mut *core::ptr::addr_of_mut!(PREFERENCES));
             WATCH_FACES[76] = Some(&mut *core::ptr::addr_of_mut!(FINETUNE));
             WATCH_FACES[77] = Some(&mut *core::ptr::addr_of_mut!(SAVE_LOAD));
+            WATCH_FACES[78] = Some(&mut *core::ptr::addr_of_mut!(NANOSEC));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
