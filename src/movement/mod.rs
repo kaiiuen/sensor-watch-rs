@@ -23,6 +23,7 @@ pub mod day_one;
 pub mod deadline;
 pub mod debounce;
 pub mod decimal_time;
+pub mod demo;
 pub mod diagnostics;
 pub mod discgolf;
 pub mod dual_timer;
@@ -171,6 +172,9 @@ static mut CHARACTER_SET: character_set::CharacterSetFace =
 
 /// The static beeps face instance.
 static mut BEEPS: beeps::BeepsFace = beeps::BeepsFace::new_static();
+
+/// The static demo face instance.
+static mut DEMO: demo::DemoFace = demo::DemoFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -721,6 +725,7 @@ pub fn app_setup() {
             WATCH_FACES[81] = Some(&mut *core::ptr::addr_of_mut!(HELLO_THERE));
             WATCH_FACES[82] = Some(&mut *core::ptr::addr_of_mut!(CHARACTER_SET));
             WATCH_FACES[83] = Some(&mut *core::ptr::addr_of_mut!(BEEPS));
+            WATCH_FACES[84] = Some(&mut *core::ptr::addr_of_mut!(DEMO));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
