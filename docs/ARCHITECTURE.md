@@ -390,6 +390,21 @@ holds the 46-zone table with their offsets and DST rules. The movement layer
 uses these to compute the correct local time across daylight-saving
 transitions.
 
+### 6.21 `watch/lis2dw.rs` — LIS2DW accelerometer
+
+Port of the C `lis2dw.c` driver. Talks to the LIS2DW12 accelerometer on the
+9-pin connector over I2C. Provides data-rate/mode/range configuration, raw
+reading, FIFO access, and tap/wake-on-motion detection. The movement layer
+uses this to offer tap detection and accelerometer wake to faces.
+
+### 6.22 `watch/rtc.rs` — compare-callback queue
+
+A software analog of the Second Movement hardware compare-callback queue.
+Up to 8 indexed slots (`N_COMP_CB`) each hold a target time and callback; the
+earliest pending slot is armed via the existing one-shot alarm. Faces can
+schedule indexed timeouts (button, LED, resign, sleep, minute) without
+keeping the CPU awake.
+
 ---
 
 ## 7. The `movement` module (Watchface Framework)
@@ -439,6 +454,11 @@ The core of the framework:
 - Buzzer priority: `play_note()` / `play_sequence()` / `play_alarm_beeps()`
   enforce `BuzzerPriority` (button < signal < alarm) so a lower-priority sound
   cannot interrupt a higher-priority one.
+- Accelerometer framework: `accelerometer_begin()`, `enable_tap_detection()`,
+  `disable_tap_detection()`, `handle_accelerometer_event()` route `SingleTap` /
+  `DoubleTap` / `AccelerometerWake` events to faces.
+- Indexed timeouts via the RTC compare queue: `register_timeout(TimeoutIndex,
+  DateTime)` / `disable_timeout(TimeoutIndex)`.
 - The full Second Movement API surface: `get_local_date_time()`,
   `get_utc_timestamp()`, `set_utc_date_time()`, `set_local_date_time()`,
   `set_timezone_index()`, `get_current_timezone_offset()`, `clock_mode_24h()`,

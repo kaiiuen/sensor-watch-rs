@@ -316,6 +316,30 @@ hanging the CPU.
 
 ---
 
+## `src/watch/lis2dw.rs` — LIS2DW accelerometer
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `begin()` | fn | Initialize the accelerometer. |
+| `get_raw_reading()` | fn | Read a raw 3-axis sample. |
+| `set_data_rate()` / `set_mode()` / `set_range()` | fn | Configuration. |
+| `configure_tap_threshold()` / `configure_tap_duration()` | fn | Tap detection. |
+| `enable_double_tap()` / `disable_double_tap()` | fn | Tap control. |
+| `get_interrupt_source()` | fn | Read the interrupt source register. |
+
+---
+
+## `src/watch/rtc.rs` — Compare-callback queue
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `N_COMP_CB` | const | Number of compare slots (8). |
+| `register_comp_callback()` | fn | Register a compare callback at a target time. |
+| `disable_comp_callback()` | fn | Disable a compare callback. |
+| `schedule_wakeup()` | fn | One-shot alarm wakeup. |
+
+---
+
 ## `src/movement/types.rs` — Core types
 
 | Symbol | Type | Purpose |

@@ -109,9 +109,10 @@ cargo fmt --check
       `panic = "abort"`, flip-link
 - [x] Second Movement features: DST-aware timezones (utz), primary/secondary
       face lists, buzzer priority system
+- [x] Accelerometer framework: LIS2DW driver, tap detection, motion wake
+- [x] RTC compare-callback queue (software, indexed timeout slots)
 - [x] UF2 artifact generation
-- [ ] Remaining Second Movement faces and features (accelerometer tap/motion
-      framework, RTC compare-callback queue)
+- [ ] Remaining Second Movement faces and features (none blocking)
 - [ ] New faces & features (diagnostics expansion, battery submenu refinements)
 
 ## Documentation
