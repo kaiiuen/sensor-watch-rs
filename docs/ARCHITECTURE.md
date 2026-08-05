@@ -429,7 +429,8 @@ dispatches events.
   backup register 0.
 - `Button` — Light, Mode, Alarm
 - `ButtonEvent` — Down, Up, LongPress, LongUp, ReallyLongPress
-- `Event` — the closed set of events: Activate, Tick, BackgroundTask, Button
+- `Event` — the closed set of events: Activate, Tick, BackgroundTask, Button,
+  SingleTap, DoubleTap, AccelerometerWake
 - `WatchFace` — the trait every face implements (with optional
   `wants_background_task()` and `advise()`)
 - `MovementState` — global framework state

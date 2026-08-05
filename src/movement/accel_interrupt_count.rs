@@ -70,6 +70,8 @@ impl WatchFace for AccelInterruptCountFace {
 
     fn activate(&mut self, _settings: &Settings) {
         self.is_setting = false;
+        // Enable tap detection so taps are counted.
+        movement::enable_tap_detection_if_available();
     }
 
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
@@ -114,6 +116,13 @@ impl WatchFace for AccelInterruptCountFace {
                     self.update_display();
                 }
                 Event::Activate | Event::Tick => self.update_display(),
+                // Count accelerometer taps while running.
+                Event::SingleTap | Event::DoubleTap => {
+                    if self.running {
+                        self.count = self.count.wrapping_add(1);
+                    }
+                    self.update_display();
+                }
                 Event::Button(Button::Alarm, ButtonEvent::LongPress) => {
                     if !self.running {
                         self.new_threshold = self.threshold;
@@ -126,7 +135,9 @@ impl WatchFace for AccelInterruptCountFace {
         }
     }
 
-    fn resign(&mut self, _settings: &mut Settings) {}
+    fn resign(&mut self, _settings: &mut Settings) {
+        movement::disable_tap_detection_if_available();
+    }
 
     fn wants_background_task(&mut self, _settings: &Settings) -> bool {
         false

@@ -233,7 +233,8 @@ pub fn init_bod33() {
 
 /// Enters Deep Sleep Mode (sleep mode with the LCD disabled).
 pub fn enter_deep_sleep_mode() {
-    // TODO: disable the LCD (requires the SLCD deinit).
+    // Disable the LCD to save power in deep sleep.
+    crate::watch::slcd::disable_display();
     enter_sleep_mode();
 }
 

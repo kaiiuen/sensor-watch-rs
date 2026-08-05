@@ -404,12 +404,15 @@ impl PingFace {
     }
 
     fn enable_tap_control(&mut self) {
-        // Tap detection is not ported to Rust; the paddle is controlled with
-        // the ALARM button only.
-        self.tap_control_on = false;
+        // Enable accelerometer tap detection so the paddle can be moved with a
+        // tap. Falls back to button control if no accelerometer is present.
+        self.tap_control_on = movement::enable_tap_detection_if_available();
     }
 
     fn disable_tap_control(&mut self) {
+        if self.tap_control_on {
+            movement::disable_tap_detection_if_available();
+        }
         self.tap_control_on = false;
     }
 
@@ -556,6 +559,13 @@ impl WatchFace for PingFace {
             Event::Button(Button::Alarm, ButtonEvent::Down) => {
                 if self.game.curr_screen == PingCurrScreen::Playing {
                     self.game.moving_from_tap = false;
+                    self.game.paddle_hit = true;
+                }
+            }
+            // A tap moves the paddle (if tap control is on).
+            Event::SingleTap | Event::DoubleTap => {
+                if self.tap_control_on && self.game.curr_screen == PingCurrScreen::Playing {
+                    self.game.moving_from_tap = true;
                     self.game.paddle_hit = true;
                 }
             }

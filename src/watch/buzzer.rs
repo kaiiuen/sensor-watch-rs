@@ -228,15 +228,29 @@ pub fn set_buzzer_off() {
 }
 
 /// Plays a note for a given duration (blocking).
-pub fn play_note(note: Note, _duration_ms: u16) {
+///
+/// The buzzer is driven on for `duration_ms` milliseconds, then off. This
+/// blocks the CPU for the duration, so it is only suitable for short, explicit
+/// tones (e.g. a single button beep).
+pub fn play_note(note: Note, duration_ms: u16) {
     if note == Note::Rest {
         set_buzzer_off();
-    } else {
-        set_buzzer_period(NOTE_PERIODS[note as usize] as u32);
-        set_buzzer_on();
+        return;
     }
-    // TODO: blocking delay is not yet ported; the caller should provide one.
+    set_buzzer_period(NOTE_PERIODS[note as usize] as u32);
+    set_buzzer_on();
+    delay_ms(duration_ms);
     set_buzzer_off();
+}
+
+/// A crude blocking millisecond delay.
+fn delay_ms(ms: u16) {
+    // Approximate: at 4 MHz, ~4000 cycles per ms. Each nop is one cycle.
+    for _ in 0..ms {
+        for _ in 0..4000 {
+            cortex_m::asm::nop();
+        }
+    }
 }
 
 // --- Non-blocking note sequences (TC3 timer) ---

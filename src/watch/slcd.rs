@@ -180,6 +180,12 @@ pub fn enable_display() {
     slcd().ctrla().modify(|_, w| w.enable().set_bit());
 }
 
+/// Disables the SLCD display to save power (e.g. before deep sleep).
+pub fn disable_display() {
+    slcd().ctrla().modify(|_, w| w.enable().clear_bit());
+    sync();
+}
+
 /// Initializes the SLCD peripheral (port of `_slcd_sync_init` + `SEGMENT_LCD_0_init`).
 fn init() {
     // Enable the SLCD APB clock (SLCD is on the APBC bus).

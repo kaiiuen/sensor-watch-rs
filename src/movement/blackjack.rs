@@ -482,7 +482,11 @@ impl WatchFace for BlackjackFace {
             }
             Event::Button(Button::Alarm, ButtonEvent::LongPress) => {
                 if self.game_state == GameState::TitleScreen {
-                    // Tap control is not supported in this port; no-op.
+                    // Toggle tap control.
+                    self.tap_control_on = movement::enable_tap_detection_if_available();
+                    if self.tap_control_on {
+                        slcd::set_indicator(Indicator::Signal);
+                    }
                 } else if self.game_state == GameState::WinRatio {
                     // Reset the win-lose ratio.
                     self.games_won = 0;
@@ -490,10 +494,21 @@ impl WatchFace for BlackjackFace {
                     slcd::display_string("  0Pct", 4);
                 }
             }
+            // A tap acts as a hit when tap control is on.
+            Event::SingleTap | Event::DoubleTap => {
+                if self.tap_control_on {
+                    self.handle_button_presses(self.tap_control_on, true);
+                }
+            }
             Event::BackgroundTask => {}
             _ => movement::default_loop_handler(event, settings),
         }
     }
 
-    fn resign(&mut self, _settings: &mut Settings) {}
+    fn resign(&mut self, _settings: &mut Settings) {
+        if self.tap_control_on {
+            movement::disable_tap_detection_if_available();
+        }
+        self.tap_control_on = false;
+    }
 }

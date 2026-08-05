@@ -1111,7 +1111,18 @@ pub fn enable_tap_detection_if_available() -> bool {
         watch::lis2dw::CTRL4_INT1_SINGLE_TAP | watch::lis2dw::CTRL4_INT1_DOUBLE_TAP,
     );
     watch::lis2dw::enable_interrupts();
+    // Route the accelerometer INT1 (on A4) to the EIC so a tap wakes the CPU.
+    watch::extint::register_interrupt_callback(
+        watch::extint::A4,
+        accelerometer_interrupt,
+        watch::extint::Trigger::Rising,
+    );
     true
+}
+
+/// The accelerometer INT1 interrupt handler.
+pub fn accelerometer_interrupt() {
+    handle_accelerometer_event();
 }
 
 /// Disables tap detection.

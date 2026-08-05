@@ -195,6 +195,8 @@ impl WatchFace for Lis2dwLoggingFace {
     fn activate(&mut self, _settings: &Settings) {
         self.display_index = 0;
         self.log_ticks = 0;
+        // Enable tap detection so interrupts are counted.
+        movement::enable_tap_detection_if_available();
     }
 
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
@@ -220,12 +222,20 @@ impl WatchFace for Lis2dwLoggingFace {
                 }
                 self.update_display(settings, false);
             }
+            // Count accelerometer taps as interrupts.
+            Event::SingleTap | Event::DoubleTap => {
+                self.interrupts[0] = self.interrupts[0].wrapping_add(1);
+                self.x_interrupts_this_hour = self.x_interrupts_this_hour.wrapping_add(1);
+                self.update_display(settings, true);
+            }
             Event::BackgroundTask => self.log_data(),
             _ => movement::default_loop_handler(event, settings),
         }
     }
 
-    fn resign(&mut self, _settings: &mut Settings) {}
+    fn resign(&mut self, _settings: &mut Settings) {
+        movement::disable_tap_detection_if_available();
+    }
 
     fn wants_background_task(&mut self, _settings: &Settings) -> bool {
         self.interrupts[2] = self.interrupts[1];

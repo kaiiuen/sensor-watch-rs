@@ -16,8 +16,8 @@ the firmware. It would:
 - Edit, debug, and assemble the code
 - Produce the final `.uf2` firmware file
 
-**Status:** Backburner. This is the end-goal app. The firmware itself must be
-solid first.
+**Status:** Backburner. This is the end-goal app. The firmware itself is now
+solid; the app is the next major project.
 
 ---
 
@@ -46,12 +46,6 @@ The build time is baked into the `.uf2` at compile time. Unless the `.uf2` is
 compiled **on demand** by the end user (right before flashing), the build time
 is stale by the time it's flashed. So build-time calibration is unreliable.
 
-### The viable version
-
-The program could generate a **blank file** (or a tiny marker) that, when the
-watch detects it, resets the clock to the current minute. The watch reads it on
-the next minute boundary and sets the time precisely.
-
 **Status:** Backburner. Requires the USB/serial shell to be implemented first
 (the watch needs a way to receive the file from the PC).
 
@@ -75,7 +69,9 @@ hide them again. Requires an accelerometer on the 9-pin connector (optional
 hardware).
 
 **Status:** Backburner. The base watch has no accelerometer. The manual seconds
-toggle (bottom-right button) works on all boards.
+toggle (bottom-right button) works on all boards. The accelerometer driver and
+tap framework are now in place, so this is feasible if an accelerometer is
+installed.
 
 ---
 
@@ -89,49 +85,77 @@ BACKUP would be an optional extreme-power-save feature.
 
 ---
 
-## 6. SOS / Morse Code Watch Face
+## 6. Watchdog / Heartbeat Survival
 
-A watch face that transmits preprogrammed codes (SOS, etc.) via the buzzer or
-LED. Navigation selects between preprogrammed codes using the standard button
-bindings.
+A design where the watch tracks its own uptime or status via a heartbeat from
+the RTC's ticking seconds. If the seconds stop updating (a hang), the watchdog
+restarts the watch. The goal is to guarantee the watch always recovers from a
+freeze, since software freezes are almost always the cause.
 
-**Status:** Backburner. Would be a useful safety feature, but the buzzer can be
-disruptive and the LED-only variant is limited.
-
----
-
-## 7. Battery Submenu in Diagnostics
-
-A battery submenu in the diagnostics/settings face that:
-
-- Lets the user select the installed battery type (CR2012, CR2016, CR2025,
-  CR2032, CR2050) with their capacities (55 / 90-100 / 150-170 / 220-225 /
-  330-350 mAh)
-- Shows the estimated percentage / days remaining from the measured voltage
-- Adjusts the battery-life calculation based on the selected battery
-
-**Status:** Backburner. Requires the battery voltage measurement to be reliable
-and a battery-type selection UI.
+**Status:** Backburner. The hardware watchdog already resets on a hang; a
+software heartbeat would add a second layer of detection and reporting.
 
 ---
 
-## 8. Diagnostics Expansion
+## 7. Dual-Boot / Self-Healing Partitioning
 
-Expand the diagnostics face into a full task-manager + device-manager +
-storage-manager + services view, with categorized submenus (CPU, memory,
-storage, hardware info, software info, system, settings, stats) and breadcrumb
-navigation using the day/date indicators.
+Split the 256 KB flash into a minimal protected Golden Image bootloader and an
+Application slot. If the application fails its CRC check (bit-rot), the Golden
+Image forces the watch into a safe recovery display instead of hard-crashing.
 
-**Status:** In progress. The diagnostics face exists; the full hierarchical menu
-and additional submenus (LED presets, buzzer voltage, battery, stats) are being
-refined.
+**Status:** Backburner. The CRC-32 integrity check is implemented; the dual-boot
+partitioning and recovery image are not.
 
 ---
 
-## 9. Firmware Studio (Companion App)
+## 8. Log-Structured Wear Leveling + ECC
 
-The end-goal companion app: a dedicated editor, debugger, and assembler that
-includes all source and documentation, lets you assemble watch faces, edit and
-debug the code, and produces the final `.uf2` firmware file.
+Replace the simple 8-row rotation with a log-structured ring buffer across the
+whole 8 KB EEPROM area, and add SECDED (single-error-correct,
+double-error-detect) Hamming codes to every 32-bit chunk to correct bit errors
+in flash.
 
-**Status:** Backburner. The firmware itself must be solid first.
+**Status:** Backburner. The simple wear leveling and write-verify are
+implemented; the log-structured ring and ECC are not.
+
+---
+
+## 9. Clock Failure Detector (CFD)
+
+Enable the SAM L22's hardware Clock Failure Detector. If the 32 kHz crystal
+stops, the CFD switches the time base to the internal OSCULP32K and the watch
+falls back to a slightly less accurate clock instead of freezing.
+
+**Status:** Backburner. The RTC relies on the external crystal; the CFD fallback
+is not yet wired.
+
+---
+
+## 10. USB / Serial Shell
+
+A USB or serial command shell so the watch can receive files and commands from
+a PC. This is a prerequisite for clock calibration and for the companion app.
+
+**Status:** Backburner. Required for clock calibration and deeper PC
+integration.
+
+---
+
+## 11. BLE / Companion Connectivity
+
+Bluetooth Low Energy connectivity for configuration and data transfer with a
+phone or computer.
+
+**Status:** Backburner. The Sensor Watch hardware does not include BLE; it would
+require an external module on the 9-pin connector.
+
+---
+
+## 12. Benchmarks, Fuzzing, and Structured Logging
+
+- Performance benchmarks for interrupt latency and power consumption.
+- Fuzz testing for button events and RTC input.
+- `defmt`/RTT structured logging for debugging without breaking real-time
+  behavior.
+
+**Status:** Backburner. Nice-to-have tooling once the firmware is feature-complete.

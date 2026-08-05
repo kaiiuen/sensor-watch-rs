@@ -72,6 +72,8 @@ The CPU wakes only for one of these:
 - `Tick` — the RTC ticked
 - `BackgroundTask` — a scheduled task is due
 - `Button(button, event)` — a button was pressed
+- `SingleTap` / `DoubleTap` — the accelerometer detected a tap
+- `AccelerometerWake` — the accelerometer detected motion
 
 A **closed enum** means every event is known and handled. No ambiguity.
 
