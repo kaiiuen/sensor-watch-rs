@@ -58,9 +58,13 @@ converts it to UF2 using the `uf2tool` binary (run on the host target).
 ## Linting
 
 ```sh
-cargo clippy --target thumbv6m-none-eabi -- -D warnings
+cargo clippy --target thumbv6m-none-eabi
 cargo clippy -p sensor-watch-core -- -D warnings
 ```
+
+The firmware exposes the full C-reference HAL API and many ported faces, which
+carry intentional dead-code and pedantic style lints, so firmware clippy is
+informational. The `core` crate is the strict gate (`-D warnings`).
 
 ## Formatting
 

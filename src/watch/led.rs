@@ -4,9 +4,9 @@
 //! `watch_private.c`. The LEDs are driven by TCC0 in normal PWM mode.
 
 use crate::watch::gpio::{self, Direction, Function, Pin};
+use atsaml22j::tcc0::RegisterBlock as Tcc0;
 use atsaml22j::tcc0::ctrla::Prescalerselect;
 use atsaml22j::tcc0::wave::Wavegenselect;
-use atsaml22j::tcc0::RegisterBlock as Tcc0;
 
 /// LED pins and TCC channels (OSO-SWAT-A1-05 board, red/green edition).
 const RED: Pin = Pin(0, 20); // PA20

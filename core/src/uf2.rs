@@ -31,7 +31,7 @@ const TOTAL_BLOCK_SIZE: usize = 512;
 /// `image` is the raw binary firmware (e.g. the contents of the `.bin` file
 /// extracted from the ELF). Returns the UF2 data as a `Vec<u8>`.
 pub fn convert_to_uf2(image: &[u8]) -> Vec<u8> {
-    let num_blocks = (image.len() + BLOCK_SIZE - 1) / BLOCK_SIZE;
+    let num_blocks = image.len().div_ceil(BLOCK_SIZE);
     let mut out = Vec::with_capacity(num_blocks * TOTAL_BLOCK_SIZE);
 
     for blockno in 0..num_blocks {
@@ -53,11 +53,11 @@ pub fn convert_to_uf2(image: &[u8]) -> Vec<u8> {
 
         // Payload (padded to 256 bytes).
         out.extend_from_slice(chunk);
-        out.extend(core::iter::repeat(0u8).take(BLOCK_SIZE - chunk.len()));
+        out.resize(out.len() + (BLOCK_SIZE - chunk.len()), 0);
 
         // Padding to 512 bytes total, then the end magic.
         let padding = TOTAL_BLOCK_SIZE - 32 - BLOCK_SIZE - 4;
-        out.extend(core::iter::repeat(0u8).take(padding));
+        out.resize(out.len() + padding, 0);
         out.extend_from_slice(&UF2_MAGIC_END.to_le_bytes());
     }
 

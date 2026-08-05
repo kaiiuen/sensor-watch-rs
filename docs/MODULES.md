@@ -308,7 +308,7 @@ hanging the CPU.
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `MOVEMENT_NUM_FACES` | const | Number of face slots (98). |
+| `MOVEMENT_NUM_FACES` | const | Number of face slots (99). |
 | `MOVEMENT_LONG_PRESS_TICKS` | const | Long-press threshold (64 fast ticks). |
 | `MOVEMENT_REALLY_LONG_PRESS_TICKS` | const | Really-long-press threshold (192 fast ticks). |
 | `Settings` | struct | 32-bit packed user preferences, `#[repr(C, align(4))]`. |
@@ -358,7 +358,7 @@ hanging the CPU.
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `Fault` | enum | WatchdogReset, Panic, WakeTooLong, InvalidState, BatteryLow, RtcLostTime. |
+| `Fault` | enum | WatchdogReset, Panic, WakeTooLong, InvalidState, BatteryLow, RtcLostTime, CorruptImage. |
 | `ResetReason` | enum | PowerOn, Watchdog, Panic, Software. |
 | `record_fault()` | fn | Record a fault in a backup register. |
 | `last_fault()` / `fault_count()` | fn | Read fault state. |
@@ -399,12 +399,23 @@ hanging the CPU.
 
 ---
 
+## `src/movement/battery.rs` — Battery config
+
+| Symbol | Type | Purpose |
+|--------|------|---------|
+| `BatteryType` | enum | CR2012, CR2016, CR2025, CR2032, CR2050. |
+| `battery_type()` / `set_battery_type()` | fn | Read/write the configured battery type. |
+| `charge_percent()` | fn | Estimate remaining charge from voltage. |
+| `days_remaining()` | fn | Estimate days of life from voltage + capacity. |
+
+---
+
 ## The watch faces
 
 Each face implements `WatchFace` with `setup`, `activate`, `loop_`, `resign`,
 and optionally `wants_background_task` and `advise`.
 
-There are **98 registered faces**. Highlights:
+There are **99 registered faces**. Highlights:
 
 | Face | File | Purpose |
 |------|------|---------|
@@ -416,6 +427,7 @@ There are **98 registered faces**. Highlights:
 | World clock | `world_clock.rs` / `world_clock2.rs` | Timezone clocks. |
 | Diagnostics | `diagnostics.rs` | Device/settings/stats manager. |
 | Hydration | `hydration.rs` | Water intake tracker with log. |
+| SOS | `sos.rs` | Morse code transmitter. |
 | Stopwatch | `stopwatch.rs` | Stopwatch. |
 | Timer | `timer.rs` | Multi-slot countdown timer. |
 | Moon phase | `moon_phase.rs` | Lunar phase. |

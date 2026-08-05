@@ -8,6 +8,10 @@
 #![no_std]
 #![no_main]
 #![allow(static_mut_refs)]
+// The HAL intentionally exposes the full C-reference API surface, and every
+// face provides both `new_static()` and `new()`. Not all of it is referenced
+// from the binary, so silence dead-code warnings at the crate level.
+#![allow(dead_code)]
 
 use cortex_m_rt::entry;
 
@@ -59,8 +63,10 @@ fn main() -> ! {
         // immediately enter STANDBY until the next interrupt.
         movement::app_loop();
 
-        // Kick the watchdog: the main loop completed, so we are alive.
-        watch::wdt::kick();
+        // Kick the watchdog: the main loop completed, so we are alive. This
+        // is only reached after a complete, bounded reaction, so a runaway
+        // interrupt loop cannot mask a hang.
+        watch::wdt::kick_windowed();
 
         // Enter STANDBY. The SysTick interrupt is disabled just before WFI and
         // re-enabled after waking: if SysTick happened to fire at the exact

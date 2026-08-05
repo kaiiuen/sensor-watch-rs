@@ -444,7 +444,7 @@ presses.
 A central "authoritarian watchdog" that tracks system health:
 
 - `Fault` enum — WatchdogReset, Panic, WakeTooLong, InvalidState, BatteryLow,
-  RtcLostTime
+  RtcLostTime, CorruptImage
 - `record_fault()` / `last_fault()` / `fault_count()` — stored in backup registers
 - `ResetReason` — why the device last reset
 - `check_reset_reason()` — reads the hardware reset cause at boot
@@ -479,12 +479,18 @@ face) without recompiling.
 Tracks button presses per button and buzzer rings, stored in backup registers so
 they survive reset.
 
-### 7.8 The watch faces
+### 7.8 `movement/battery.rs` — Battery configuration
+
+Stores the installed battery type (CR2012/2016/2025/2032/2050) and estimates the
+remaining charge and days of life from the measured voltage. Configured from the
+diagnostics face's battery submenu.
+
+### 7.9 The watch faces
 
 Each face implements the `WatchFace` trait. Faces are `static` instances (no
 heap). They are pure state machines: they react to one event and return.
 
-There are **98 registered faces** (`MOVEMENT_NUM_FACES = 98`), covering all faces
+There are **99 registered faces** (`MOVEMENT_NUM_FACES = 99`), covering all faces
 from the original reference repo plus new Second Movement faces. Highlights:
 
 - `simple_clock.rs` — the main clock (weekday, day, time; seconds toggle)
@@ -495,6 +501,7 @@ from the original reference repo plus new Second Movement faces. Highlights:
 - `diagnostics.rs` — a task/device/storage manager with a hierarchical menu
 - `advanced_alarm.rs` — 16 alarm slots with day modes, pitch, and beep rounds
 - `hydration.rs` — water intake tracking with settings and a log
+- `sos.rs` — SOS / Morse code transmitter
 - Plus stopwatch, timer, moon phase, games, calculators, astronomy, and many more
 
 ---

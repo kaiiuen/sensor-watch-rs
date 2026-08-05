@@ -100,8 +100,8 @@ cargo fmt --check
       CRC, utility
 - [x] Watchface framework (`src/movement/`): event-driven dispatcher,
       zero-heap, fault system, debouncing, persistence, board config
-- [x] **98 watch faces**, covering all faces from the original reference repo
-      plus new Second Movement faces (advanced alarm, hydration, and more)
+- [x] **99 watch faces**, covering all faces from the original reference repo
+      plus new Second Movement faces (advanced alarm, hydration, SOS, and more)
 - [x] Hardware hardening: SysTick-safe standby, I2C pin floating, inverted
       battery ADC, BOD33, boot-count throttle, `.ramfunc` flash writes,
       `#[repr(C, align(4))]`, windowed watchdog, CRC-32 integrity check,
