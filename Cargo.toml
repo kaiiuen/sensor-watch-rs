@@ -5,6 +5,9 @@ members = [
     "core",
     "studio",
 ]
+# `cargo build` / `cargo run` at the root operate on the GUI app by default.
+# The firmware is built explicitly with `--target thumbv6m-none-eabi`.
+default-members = ["studio"]
 
 [package]
 name = "sensor-watch"
