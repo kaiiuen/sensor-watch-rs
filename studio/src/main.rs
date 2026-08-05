@@ -47,6 +47,8 @@ struct StudioApp {
     watch: CasioF91W,
     /// The simulator's stopwatch accumulator (centiseconds).
     sim_last_tick: std::time::Instant,
+    /// The SVG watch renderer.
+    watch_renderer: watch_display::WatchRenderer,
     /// The watch-face preset manager.
     presets: PresetManager,
     /// The currently selected face in the catalog.
@@ -107,6 +109,7 @@ impl Default for StudioApp {
             log: debug::DebugLog::new(),
             watch: CasioF91W::new(),
             sim_last_tick: std::time::Instant::now(),
+            watch_renderer: watch_display::WatchRenderer::new(),
             presets: PresetManager::new(),
             selected_face: None,
             selected_preset_face: None,
@@ -501,21 +504,22 @@ impl StudioApp {
         self.watch.tick_stopwatch(cs);
         self.watch.tick_button_a();
 
-        // Draw the watch body and display.
-        let (rect, _) = ui.allocate_exact_size(egui::Vec2::new(360.0, 300.0), egui::Sense::hover());
-        let painter = ui.painter_at(rect);
-        // Watch body (dark rounded rectangle).
-        painter.rect_filled(rect, 16.0, egui::Color32::from_rgb(0x1a, 0x1a, 0x1a));
-        // Display area (light LCD).
-        let lcd = egui::Rect::from_min_size(
-            rect.min + egui::Vec2::new(20.0, 20.0),
-            egui::Vec2::new(rect.width() - 40.0, rect.height() - 60.0),
-        );
-        painter.rect_filled(lcd, 8.0, egui::Color32::from_rgb(0x2a, 0x30, 0x32));
-
-        // Update and draw the display.
+        // Update the display state.
         self.watch.update_display();
-        watch_display::draw_display(&painter, lcd, &self.watch.display);
+
+        // Render the watch SVG at a good size.
+        let size = [740u32, 655u32];
+        let texture = watch_display::render_to_texture(
+            &mut self.watch_renderer,
+            &self.watch.display,
+            size,
+            ctx,
+        );
+        let aspect = 1480.0 / 1311.0;
+        let avail = ui.available_width();
+        let w = avail.min(560.0);
+        let h = w / aspect;
+        ui.image((texture.id(), egui::Vec2::new(w, h)));
 
         // Buttons.
         ui.add_space(8.0);

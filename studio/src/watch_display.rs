@@ -1,214 +1,221 @@
 //! Casio F-91W digital display renderer.
 //!
-//! Draws the watch's LCD using egui's painter: a monochrome (white-on-dark)
-//! 7-segment display with the same layout as the real F-91W. Each digit is
-//! drawn as 7 segments (A-G), plus the special 8/9-segment mode displays.
+//! Renders the actual F-91W SVG (a 1:1 replica of the online simulator) using
+//! `usvg` + `resvg`. Each segment/indicator is toggled on/off by injecting an
+//! `opacity` attribute into the SVG source before rendering — exactly like the
+//! JS `displayScreen` sets `el.style.opacity`.
 
-use eframe::egui::{self, Color32, Pos2, Rect, Stroke, Vec2};
+use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
 use super::watch_sim::Display;
 
-/// The segment bit layout for each character (7-segment).
-/// Bits: 0=A, 1=B, 2=C, 3=D, 4=E, 5=F, 6=G.
-fn char_segments(c: char) -> u8 {
-    match c {
-        '0' => 0b1111110,
-        '1' => 0b0110000,
-        '2' => 0b1101101,
-        '3' => 0b1111001,
-        '4' => 0b0110011,
-        '5' => 0b1011011,
-        '6' => 0b1011111,
-        '7' => 0b1110000,
-        '8' => 0b1111111,
-        '9' => 0b1111011,
-        'A' => 0b1110111,
-        'C' => 0b1001110,
-        'E' => 0b1001111,
-        'F' => 0b1000111,
-        'H' => 0b0110111,
-        'I' => 0b0110000,
-        'L' => 0b0001110,
-        'O' => 0b1111110,
-        'S' => 0b1011011,
-        'U' => 0b0111110,
-        ' ' => 0,
-        _ => 0,
-    }
+/// The SVG source, embedded at compile time.
+const WATCH_SVG: &str = include_str!("../assets/watch.svg");
+
+/// A parsed, renderable watch.
+pub struct WatchRenderer {
+    /// The parsed SVG tree (rebuilt each render from the modified source).
+    tree: usvg::Tree,
 }
 
-/// Draws a single 7-segment digit at the given position.
-fn draw_digit(
-    painter: &egui::Painter,
-    origin: Pos2,
-    size: Vec2,
-    c: char,
-    on: Color32,
-    off: Color32,
-) {
-    let seg = char_segments(c);
-    let w = size.x;
-    let h = size.y;
-    let thick = (w * 0.18).max(2.0);
-    let thin = thick * 0.6;
+impl WatchRenderer {
+    /// Parses the embedded SVG.
+    pub fn new() -> Self {
+        let opt = usvg::Options::default();
+        let tree = usvg::Tree::from_str(WATCH_SVG, &opt).expect("failed to parse watch SVG");
+        WatchRenderer { tree }
+    }
 
-    // Segment geometry (A top, B top-right, C bottom-right, D bottom,
-    // E bottom-left, F top-left, G middle).
-    let segs: [(usize, Vec2, Vec2); 7] = [
-        // A: top horizontal
-        (0, Vec2::new(thin, 0.0), Vec2::new(w - thin, 0.0)),
-        // B: top-right vertical
-        (1, Vec2::new(w, thin), Vec2::new(w, h / 2.0 - thin)),
-        // C: bottom-right vertical
-        (2, Vec2::new(w, h / 2.0 + thin), Vec2::new(w, h - thin)),
-        // D: bottom horizontal
-        (3, Vec2::new(thin, h), Vec2::new(w - thin, h)),
-        // E: bottom-left vertical
-        (4, Vec2::new(0.0, h / 2.0 + thin), Vec2::new(0.0, h - thin)),
-        // F: top-left vertical
-        (5, Vec2::new(0.0, thin), Vec2::new(0.0, h / 2.0 - thin)),
-        // G: middle horizontal
-        (6, Vec2::new(thin, h / 2.0), Vec2::new(w - thin, h / 2.0)),
-    ];
+    /// Renders the watch with the given display state into a ColorImage.
+    pub fn render(&mut self, display: &Display, size: [u32; 2]) -> ColorImage {
+        // Build the SVG source with the display state applied.
+        let svg = apply_display_to_svg(WATCH_SVG, display);
 
-    for (bit, start, end) in segs {
-        let color = if seg & (1 << bit) != 0 { on } else { off };
-        let thickness = if bit == 0 || bit == 3 || bit == 6 {
-            thick
-        } else {
-            thin
-        };
-        painter.line_segment(
-            [origin + start, origin + end],
-            Stroke::new(thickness, color),
+        // Re-parse and render.
+        let opt = usvg::Options::default();
+        let tree = usvg::Tree::from_str(&svg, &opt).expect("failed to re-parse watch SVG");
+        self.tree = tree;
+
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(size[0], size[1]).expect("pixmap");
+        let transform = resvg::tiny_skia::Transform::from_scale(
+            size[0] as f32 / 1480.0,
+            size[1] as f32 / 1311.0,
         );
+        resvg::render(&self.tree, transform, &mut pixmap.as_mut());
+
+        let data = pixmap.data();
+        let mut rgba = Vec::with_capacity(data.len());
+        for px in data.chunks(4) {
+            rgba.extend_from_slice(&[px[0], px[1], px[2], px[3]]);
+        }
+        ColorImage::from_rgba_unmultiplied([size[0] as usize, size[1] as usize], &rgba)
     }
 }
 
-/// Draws the full F-91W display.
-pub fn draw_display(painter: &egui::Painter, rect: Rect, display: &Display) {
-    let on = Color32::from_rgb(0x30, 0x42, 0x46); // the LCD "on" color
-    let off = Color32::from_rgb(0x20, 0x28, 0x2a); // faint off segments
-    if display.light {
-        // Backlight: brighten the whole display.
+/// Injects `opacity` attributes into the SVG source for each segment/indicator.
+fn apply_display_to_svg(svg: &str, d: &Display) -> String {
+    let mut out = String::with_capacity(svg.len() + 512);
+    let mut rest = svg;
+    // Process the SVG element by element, looking for `id="..."`.
+    while let Some(pos) = rest.find("id=\"") {
+        // Copy everything up to the id.
+        out.push_str(&rest[..pos]);
+        rest = &rest[pos..];
+        // Read the id value.
+        let id_start = 4; // after `id="`
+        let id_end = rest[id_start..]
+            .find('"')
+            .map(|e| id_start + e)
+            .unwrap_or(0);
+        let id = &rest[4..id_end];
+        // Determine the opacity for this id.
+        let opacity = element_opacity(id, d);
+        // Copy the id attribute and the rest of the tag.
+        // We need to find the end of the opening tag (`>` or `/>`).
+        let tag_end = rest[id_end + 1..]
+            .find('>')
+            .map(|e| id_end + 1 + e)
+            .unwrap_or(rest.len());
+        let tag = &rest[..tag_end + 1];
+        // Insert opacity into the tag if it's an element with this id.
+        if let Some(op) = opacity {
+            // Remove any existing `opacity="..."` attribute, then insert ours
+            // before the closing `>` (or `/>`) of the tag.
+            let cleaned = remove_opacity_attr(tag);
+            // Find the closing: either `/>` (self-closing) or `>`.
+            if let Some(slash) = cleaned.rfind("/>") {
+                out.push_str(&cleaned[..slash]);
+                out.push_str(&format!(" opacity=\"{op}\""));
+                out.push_str(&cleaned[slash..]);
+            } else if let Some(gt) = cleaned.rfind('>') {
+                out.push_str(&cleaned[..gt]);
+                out.push_str(&format!(" opacity=\"{op}\""));
+                out.push_str(&cleaned[gt..]);
+            } else {
+                out.push_str(&cleaned);
+            }
+        } else {
+            out.push_str(tag);
+        }
+        rest = &rest[tag_end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Removes an existing `opacity="..."` attribute from a tag.
+fn remove_opacity_attr(tag: &str) -> String {
+    let mut out = String::with_capacity(tag.len());
+    let mut rest = tag;
+    while let Some(pos) = rest.find("opacity=\"") {
+        out.push_str(&rest[..pos]);
+        rest = &rest[pos + "opacity=\"".len()..];
+        let end = rest.find('"').unwrap_or(rest.len());
+        rest = &rest[end + 1..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Returns the opacity (0.0 or 1.0) for an element ID, or None if not a segment.
+fn element_opacity(id: &str, d: &Display) -> Option<f32> {
+    // Indicator elements.
+    match id {
+        "alarmOnMark" => return Some(if d.alarm_on_mark { 1.0 } else { 0.0 }),
+        "timeSignalOnMark" => return Some(if d.time_signal_on_mark { 1.0 } else { 0.0 }),
+        "timeMode24" => return Some(if d.time_mode_24 { 1.0 } else { 0.0 }),
+        "timeMode12" => return Some(if d.time_mode_12 { 1.0 } else { 0.0 }),
+        "lap" => return Some(if d.lap { 1.0 } else { 0.0 }),
+        "dot-top" | "dot-bottom" => return Some(if d.dots { 1.0 } else { 0.0 }),
+        "light" => return Some(if d.light { 0.4 } else { 0.0 }),
+        _ => {}
     }
 
-    let w = rect.width();
-    let h = rect.height();
-    let origin = rect.min;
+    // Segment displays: id like "second_1_G".
+    let (display_id, segment) = match id.rsplit_once('_') {
+        Some((d, s)) if s.len() == 1 => (d, s),
+        _ => return None,
+    };
+    let c = match display_id {
+        "mode_2" => d.mode_2,
+        "mode_1" => d.mode_1,
+        "day_2" => d.day_2,
+        "day_1" => d.day_1,
+        "hour_2" => d.hour_2,
+        "hour_1" => d.hour_1,
+        "minute_2" => d.minute_2,
+        "minute_1" => d.minute_1,
+        "second_2" => d.second_2,
+        "second_1" => d.second_1,
+        _ => return None,
+    };
+    let segments = char_segments(display_id, c);
+    Some(if segments.contains(&segment) {
+        1.0
+    } else {
+        0.0
+    })
+}
 
-    // Digit size for the main time (hours/minutes/seconds).
-    let digit_w = w * 0.11;
-    let digit_h = h * 0.30;
+/// Returns the set of on-segments for a character on a given display.
+fn char_segments(display_id: &str, c: char) -> Vec<&'static str> {
+    let seven: Vec<&str> = match c {
+        '0' => vec!["A", "B", "C", "D", "E", "F"],
+        '1' => vec!["B", "C"],
+        '2' => vec!["A", "B", "D", "E", "G"],
+        '3' => vec!["A", "B", "C", "D", "G"],
+        '4' => vec!["B", "C", "F", "G"],
+        '5' => vec!["A", "C", "D", "F", "G"],
+        '6' => vec!["A", "C", "D", "E", "F", "G"],
+        '7' => vec!["A", "B", "C"],
+        '8' => vec!["A", "B", "C", "D", "E", "F", "G"],
+        '9' => vec!["A", "B", "C", "D", "F", "G"],
+        'A' => vec!["A", "B", "C", "E", "F", "G"],
+        'C' => vec!["A", "D", "E", "F"],
+        'E' => vec!["A", "D", "E", "F", "G"],
+        'F' => vec!["A", "E", "F", "G"],
+        'H' => vec!["B", "C", "E", "F", "G"],
+        'I' => vec!["B", "C"],
+        'L' => vec!["D", "E", "F"],
+        'O' => vec!["A", "B", "C", "D", "E", "F"],
+        'S' => vec!["A", "C", "D", "F", "G"],
+        'U' => vec!["B", "C", "D", "E", "F"],
+        ' ' => vec![],
+        _ => vec![],
+    };
 
-    // Layout positions (approximate the real F-91W).
-    // Row 1: mode (day letters) + day.
-    // Row 2: hours : minutes : seconds.
-    let row1_y = origin.y + h * 0.08;
-    let row2_y = origin.y + h * 0.45;
-
-    // Mode letters (2 chars, 9/8-segment) at top-left.
-    let mode_x = origin.x + w * 0.06;
-    draw_digit(
-        painter,
-        Pos2::new(mode_x, row1_y),
-        Vec2::new(digit_w * 0.7, digit_h * 0.5),
-        display.mode_2,
-        on,
-        off,
-    );
-    draw_digit(
-        painter,
-        Pos2::new(mode_x + digit_w * 0.75, row1_y),
-        Vec2::new(digit_w * 0.7, digit_h * 0.5),
-        display.mode_1,
-        on,
-        off,
-    );
-
-    // Day (2 digits) at top-right.
-    let day_x = origin.x + w * 0.70;
-    draw_digit(
-        painter,
-        Pos2::new(day_x, row1_y),
-        Vec2::new(digit_w * 0.7, digit_h * 0.5),
-        display.day_2,
-        on,
-        off,
-    );
-    draw_digit(
-        painter,
-        Pos2::new(day_x + digit_w * 0.75, row1_y),
-        Vec2::new(digit_w * 0.7, digit_h * 0.5),
-        display.day_1,
-        on,
-        off,
-    );
-
-    // Hours (2 digits).
-    let hour_x = origin.x + w * 0.06;
-    draw_digit(
-        painter,
-        Pos2::new(hour_x, row2_y),
-        Vec2::new(digit_w, digit_h),
-        display.hour_2,
-        on,
-        off,
-    );
-    draw_digit(
-        painter,
-        Pos2::new(hour_x + digit_w * 1.1, row2_y),
-        Vec2::new(digit_w, digit_h),
-        display.hour_1,
-        on,
-        off,
-    );
-
-    // Colon dots.
-    let colon_x = origin.x + w * 0.34;
-    if display.dots {
-        painter.circle_filled(Pos2::new(colon_x, row2_y + digit_h * 0.25), 3.0, on);
-        painter.circle_filled(Pos2::new(colon_x, row2_y + digit_h * 0.75), 3.0, on);
+    if display_id == "mode_1" {
+        return match c {
+            'T' => vec!["A", "E", "F", "H"],
+            'R' => vec!["A", "B", "C", "E", "F", "G", "H"],
+            _ => seven,
+        };
     }
+    if display_id == "mode_2" {
+        return match c {
+            'M' => vec!["A", "B", "C", "E", "F", "H", "I"],
+            'T' => vec!["A", "H", "I"],
+            'H' => vec!["B", "C", "E", "F", "G"],
+            'W' => vec!["B", "C", "D", "E", "F", "H", "I"],
+            _ => seven,
+        };
+    }
+    seven
+}
 
-    // Minutes (2 digits).
-    let min_x = origin.x + w * 0.40;
-    draw_digit(
-        painter,
-        Pos2::new(min_x, row2_y),
-        Vec2::new(digit_w, digit_h),
-        display.minute_2,
-        on,
-        off,
-    );
-    draw_digit(
-        painter,
-        Pos2::new(min_x + digit_w * 1.1, row2_y),
-        Vec2::new(digit_w, digit_h),
-        display.minute_1,
-        on,
-        off,
-    );
+/// Renders the watch to an egui texture.
+pub fn render_to_texture(
+    renderer: &mut WatchRenderer,
+    display: &Display,
+    size: [u32; 2],
+    ctx: &egui::Context,
+) -> TextureHandle {
+    let image = renderer.render(display, size);
+    ctx.load_texture("watch", image, TextureOptions::LINEAR)
+}
 
-    // Seconds (2 digits), smaller.
-    let sec_x = origin.x + w * 0.72;
-    let sec_w = digit_w * 0.7;
-    let sec_h = digit_h * 0.7;
-    let sec_y = row2_y + digit_h * 0.15;
-    draw_digit(
-        painter,
-        Pos2::new(sec_x, sec_y),
-        Vec2::new(sec_w, sec_h),
-        display.second_2,
-        on,
-        off,
-    );
-    draw_digit(
-        painter,
-        Pos2::new(sec_x + sec_w * 1.1, sec_y),
-        Vec2::new(sec_w, sec_h),
-        display.second_1,
-        on,
-        off,
-    );
+impl Default for WatchRenderer {
+    fn default() -> Self {
+        Self::new()
+    }
 }

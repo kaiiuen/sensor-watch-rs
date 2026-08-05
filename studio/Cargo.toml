@@ -10,5 +10,9 @@ license = "MIT OR Apache-2.0"
 eframe = "0.27"
 egui = "0.27"
 
+# SVG rendering for the watch face (1:1 F-91W replica)
+resvg = "0.42"
+usvg = "0.42"
+
 # Firmware logic (UF2 encoding, date math, settings) — reused from the firmware
 sensor-watch-core = { path = "../core" }
