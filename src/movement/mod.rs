@@ -17,6 +17,7 @@ pub mod deadline;
 pub mod debounce;
 pub mod decimal_time;
 pub mod diagnostics;
+pub mod discgolf;
 pub mod fault;
 pub mod flashlight;
 pub mod french_revolutionary;
@@ -196,6 +197,9 @@ static mut DAY_ONE: day_one::DayOneFace = day_one::DayOneFace::new_static();
 
 /// The static time left face instance.
 static mut TIME_LEFT: time_left::TimeLeftFace = time_left::TimeLeftFace::new_static();
+
+/// The static disc golf face instance.
+static mut DISCGOLF: discgolf::DiscgolfFace = discgolf::DiscgolfFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -488,6 +492,7 @@ pub fn app_setup() {
             WATCH_FACES[38] = Some(&mut *core::ptr::addr_of_mut!(RANDONAUT));
             WATCH_FACES[39] = Some(&mut *core::ptr::addr_of_mut!(DAY_ONE));
             WATCH_FACES[40] = Some(&mut *core::ptr::addr_of_mut!(TIME_LEFT));
+            WATCH_FACES[41] = Some(&mut *core::ptr::addr_of_mut!(DISCGOLF));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
