@@ -317,3 +317,10 @@ pub fn freqcorr_write(value: i16, sign: i16) {
     // SAFETY: writing a valid frequency-correction value.
     unsafe { rtc().freqcorr().write(|w| w.bits(data as u8)) };
 }
+
+/// Reads the current frequency-correction value (signed).
+pub fn freqcorr_read() -> i16 {
+    let data = rtc().freqcorr().read().bits() as i16;
+    let value = data & 0x7F;
+    if data & 0x80 != 0 { -value } else { value }
+}

@@ -32,6 +32,7 @@ pub mod fault;
 pub mod finetune;
 pub mod flashlight;
 pub mod french_revolutionary;
+pub mod frequency_correction;
 pub mod geomancy;
 pub mod habit;
 pub mod hello_there;
@@ -175,6 +176,10 @@ static mut BEEPS: beeps::BeepsFace = beeps::BeepsFace::new_static();
 
 /// The static demo face instance.
 static mut DEMO: demo::DemoFace = demo::DemoFace::new_static();
+
+/// The static frequency correction face instance.
+static mut FREQUENCY_CORRECTION: frequency_correction::FrequencyCorrectionFace =
+    frequency_correction::FrequencyCorrectionFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -726,6 +731,7 @@ pub fn app_setup() {
             WATCH_FACES[82] = Some(&mut *core::ptr::addr_of_mut!(CHARACTER_SET));
             WATCH_FACES[83] = Some(&mut *core::ptr::addr_of_mut!(BEEPS));
             WATCH_FACES[84] = Some(&mut *core::ptr::addr_of_mut!(DEMO));
+            WATCH_FACES[85] = Some(&mut *core::ptr::addr_of_mut!(FREQUENCY_CORRECTION));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
