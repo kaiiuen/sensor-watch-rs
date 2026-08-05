@@ -1141,6 +1141,9 @@ pub fn app_loop() {
 fn release_peripherals() {
     watch::adc::disable_adc();
     watch::i2c::disable_i2c();
+    // Reconfigure the I2C pins to floating inputs so a sensor board cannot
+    // backward-power itself through the bus while the CPU sleeps.
+    watch::i2c::pins_to_floating_before_sleep();
     watch::spi::disable_spi();
 }
 

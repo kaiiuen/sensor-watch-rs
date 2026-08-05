@@ -10,3 +10,21 @@ MEMORY
   FLASH : ORIGIN = 0x00002000, LENGTH = 0x3A000
   RAM   : ORIGIN = 0x20000000, LENGTH = 0x8000
 }
+
+/* RAM-resident code (`.ramfunc`): flash-write routines must execute from RAM.
+ * If the CPU runs a function in flash bank A while writing to bank B (the RWW
+ * EEPROM area), the memory bus stalls. Placing these routines in RAM keeps the
+ * CPU running during the write. The startup code copies them from FLASH to RAM
+ * before main runs. */
+SECTIONS
+{
+  .ramfunc : ALIGN(4)
+  {
+    __ramfunc_start = .;
+    *(.ramfunc .ramfunc.*);
+    __ramfunc_end = .;
+  } > RAM AT> FLASH
+
+  /* LMA (load address) of the .ramfunc section, for the startup copy. */
+  __sramfunc_lma = LOADADDR(.ramfunc);
+}

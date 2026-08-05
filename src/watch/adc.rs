@@ -244,7 +244,15 @@ pub fn get_vcc_voltage() -> u16 {
     }
 
     let samplenum = adc().avgctrl().read().samplenum().bits();
-    ((raw_val as u32 * 1000) / (1024 * (1 << samplenum))) as u16
+    // The battery rail is measured as a scaled internal reference against the
+    // decaying VDD line, so the raw value rises as the battery weakens. Apply
+    // the inverse scaling: V = 1.0 V * ADC_Max / ADC_Raw, then convert to mV.
+    let raw = raw_val as u32;
+    if raw == 0 {
+        return 0;
+    }
+    let max = 1024u32 * (1 << samplenum);
+    ((1000u32 * max) / raw) as u16
 }
 
 /// Disables the analog circuitry on the selected pin.

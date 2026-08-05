@@ -66,6 +66,10 @@ pub fn read(row: u32, offset: u32, buffer: &mut [u8]) -> bool {
 }
 
 /// Writes bytes to a page in the storage area (the row should already be erased).
+///
+/// Runs from RAM (`.ramfunc`) so the CPU does not stall on the read-while-write
+/// bus when writing the RWW EEPROM area.
+#[unsafe(link_section = ".ramfunc")]
 pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
     let address = RWWEE_ADDR_START + row * ROW_SIZE + offset;
     let size = buffer.len() as u32;
@@ -116,6 +120,10 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
 }
 
 /// Erases a row in the storage area, setting all its bytes to 0xFF.
+///
+/// Runs from RAM (`.ramfunc`) so the CPU does not stall on the read-while-write
+/// bus when erasing the RWW EEPROM area.
+#[unsafe(link_section = ".ramfunc")]
 pub fn erase(row: u32) -> bool {
     let address = RWWEE_ADDR_START + row * ROW_SIZE;
     if !is_valid_address(address, ROW_SIZE) {

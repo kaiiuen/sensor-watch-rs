@@ -173,6 +173,64 @@ pub fn enter_sleep_mode() {
     supc().intenset().modify(|_, w| w.bod33det().set_bit());
 }
 
+/// Enters STANDBY from the main loop.
+///
+/// The SysTick interrupt is disabled immediately before WFI and re-enabled
+/// right after waking. If SysTick fires at the exact microsecond the CPU
+/// enters standby while back-bias is enabled (STDBYCFG.BBIAS = 1), the SAM L22
+/// throws a Hard Fault. Disabling it around the sleep instruction avoids that
+/// race. This is the primary sleep path used by the main loop.
+pub fn enter_standby() {
+    // Disable the SysTick interrupt to avoid the standby-entry hard fault.
+    // SAFETY: disabling SysTick is always safe.
+    unsafe {
+        let syst = &*cortex_m::peripheral::SYST::PTR;
+        syst.csr.modify(|csr| csr & !(1 << 1)); // clear TICKINT
+    }
+
+    // Enter standby.
+    cortex_m::asm::wfi();
+
+    // Re-enable the SysTick interrupt now that we are awake.
+    // SAFETY: re-enabling SysTick is always safe.
+    unsafe {
+        let syst = &*cortex_m::peripheral::SYST::PTR;
+        syst.csr.modify(|csr| csr | (1 << 1)); // set TICKINT
+    }
+}
+
+/// Configures the BOD33 brown-out detector.
+///
+/// BOD33 monitors VDD and triggers an interrupt before the rail falls below
+/// the CPU's operating threshold. This lets us react to a low battery instead
+/// of silently resetting. Configured to sample once per second in active mode
+/// and to run in standby, generating an interrupt at ~2.6 V.
+pub fn init_bod33() {
+    // BOD33 must be disabled to change its configuration.
+    supc().bod33().modify(|_, w| w.enable().clear_bit());
+    while !supc().status().read().b33srdy().bit_is_set() {}
+
+    supc().bod33().modify(|_, w| {
+        w.vmon().set_bit(); // monitor VDD
+        w.actcfg().set_bit(); // sample in active mode
+        w.runstdby().set_bit(); // sample in standby
+        w.stdbycfg().set_bit(); // run in standby
+        w.runbkup().clear_bit(); // don't run in backup
+        // SAFETY: 0x9 is a valid PSEL value (check every second).
+        unsafe { w.psel().bits(0x9) };
+        // SAFETY: 34 is a valid LEVEL value (detect at ~2.6 V).
+        unsafe { w.level().bits(34) };
+        w.action()
+            .variant(atsaml22j::supc::bod33::Actionselect::Int); // generate an interrupt on detect
+        w.hyst().clear_bit(); // no hysteresis
+        w.enable().set_bit()
+    });
+    while !supc().status().read().b33srdy().bit_is_set() {}
+
+    // Enable the BOD33 detect interrupt.
+    supc().intenset().modify(|_, w| w.bod33det().set_bit());
+}
+
 /// Enters Deep Sleep Mode (sleep mode with the LCD disabled).
 pub fn enter_deep_sleep_mode() {
     // TODO: disable the LCD (requires the SLCD deinit).

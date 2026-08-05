@@ -7,6 +7,7 @@
 pub mod adc;
 pub mod buzzer;
 pub mod clock;
+pub mod crc;
 pub mod deepsleep;
 pub mod extint;
 pub mod gpio;

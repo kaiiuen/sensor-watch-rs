@@ -82,6 +82,20 @@ pub fn disable_i2c() {
     mclk().apbcmask().modify(|_, w| w.sercom1_().clear_bit());
 }
 
+/// Reconfigures the I2C pins as floating GPIO inputs before sleep.
+///
+/// Any sensor board on the 9-pin connector is powered from the same LDO rail
+/// as the SAM L22, so it can backward-power itself through the SDA/SCL pull-up
+/// lines while the CPU sleeps. Reconfiguring the pins to floating inputs (no
+/// pull, no peripheral function) halts that leakage. They are restored to
+/// SERCOM function C by `enable_i2c` on the next wake.
+pub fn pins_to_floating_before_sleep() {
+    gpio::set_pin_function(SDA, Function::Off);
+    gpio::set_pin_direction(SDA, Direction::Off);
+    gpio::set_pin_function(SCL, Function::Off);
+    gpio::set_pin_direction(SCL, Direction::Off);
+}
+
 /// Sends a series of bytes to a device on the I2C bus.
 pub fn send(addr: i16, buf: &[u8]) {
     // Set the peripheral address (7-bit) and issue a START condition.

@@ -8,6 +8,25 @@
 use crate::watch::deepsleep;
 use crate::watch::led;
 
+/// Backup register for the boot-count throttle.
+const REG_BOOT_COUNT: u8 = 7;
+/// Backup register for the boot timestamp (in fast ticks, coarse).
+const REG_BOOT_TIME: u8 = 6;
+
+/// Maximum number of boots allowed within the throttle window.
+const MAX_BOOTS_IN_WINDOW: u32 = 3;
+/// The throttle window: if we boot more than this many times in a short
+/// period, a brown-out loop is likely and we enter the safe state.
+const BOOT_WINDOW_TICKS: u32 = 5;
+
+/// Whether the watch is currently in the brown-out safe state.
+static mut SAFE_STATE: bool = false;
+
+/// Returns true if the watch is in the brown-out safe state.
+pub fn in_safe_state() -> bool {
+    unsafe { SAFE_STATE }
+}
+
 /// Fault codes. Each maps to a distinct LED flash pattern.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -81,6 +100,33 @@ pub fn check_reset_reason() {
         record_reset_reason(ResetReason::Watchdog);
     } else if rcause.por().bit_is_set() {
         record_reset_reason(ResetReason::PowerOn);
+    }
+}
+
+/// Detects a brown-out reboot loop and drops the watch into a safe state.
+///
+/// When a CR2016 battery drops below ~2.0 V its internal resistance spikes,
+/// so a high-load peripheral (buzzer, LED) can pull the rail below the CPU
+/// threshold, resetting the chip. The load then drops, the battery bounces
+/// back, and the watch reboots into the same load — an infinite loop. We count
+/// boots in a short window; if we exceed the limit, we enter a safe state that
+/// disables the buzzer and LED until the battery is replaced.
+pub fn check_boot_throttle() {
+    let now = crate::watch::rtc::get_date_time().second as u32;
+    let last = deepsleep::get_backup_data(REG_BOOT_TIME);
+    let count = deepsleep::get_backup_data(REG_BOOT_COUNT);
+
+    let count = if now.wrapping_sub(last) <= BOOT_WINDOW_TICKS {
+        count.wrapping_add(1)
+    } else {
+        1
+    };
+
+    deepsleep::store_backup_data(now, REG_BOOT_TIME);
+    deepsleep::store_backup_data(count, REG_BOOT_COUNT);
+
+    if count > MAX_BOOTS_IN_WINDOW {
+        unsafe { SAFE_STATE = true };
     }
 }
 

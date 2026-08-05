@@ -17,7 +17,11 @@ pub const MOVEMENT_LONG_PRESS_TICKS: u16 = 64;
 pub const MOVEMENT_REALLY_LONG_PRESS_TICKS: u16 = 192;
 
 /// Global settings covering watch behavior, stored in RTC backup register 0.
+///
+/// `#[repr(C, align(4))]` guarantees the packed layout matches what the flash
+/// controller expects (word-aligned writes to the RWW EEPROM area).
 #[derive(Clone, Copy, Debug, Default)]
+#[repr(C, align(4))]
 pub struct Settings {
     pub reg: u32,
 }

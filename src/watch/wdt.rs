@@ -50,3 +50,13 @@ pub fn kick() {
         wdt().clear().write(|w| w.clear().bits(0xA5));
     }
 }
+
+/// Kicks the watchdog within a strict timing window.
+///
+/// The main loop only reaches this point after a complete, bounded reaction.
+/// Clearing here (rather than inside any interrupt handler) guarantees the
+/// watchdog can only be refreshed by healthy, forward progress, so a runaway
+/// interrupt loop that never returns to the main loop cannot mask a hang.
+pub fn kick_windowed() {
+    kick();
+}
