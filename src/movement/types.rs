@@ -10,6 +10,16 @@ use crate::watch::buzzer::Note as BuzzerNote;
 /// Number of watch faces (set by the config; default to a small number for now).
 pub const MOVEMENT_NUM_FACES: usize = 111;
 
+/// The index of the first face in the secondary (settings) face list.
+///
+/// Faces before this index form the primary list; a long-press of the Mode
+/// button from face 0 jumps to the secondary list, and normal rotation only
+/// cycles within the current list. Set to 0 to disable the secondary list.
+///
+/// In this firmware, the diagnostics face (index 5) is the start of the
+/// secondary list.
+pub const MOVEMENT_SECONDARY_FACE_INDEX: usize = 5;
+
 /// Long press threshold in fast ticks (128 Hz).
 pub const MOVEMENT_LONG_PRESS_TICKS: u16 = 64;
 
@@ -216,6 +226,18 @@ pub trait WatchFace {
     fn advise(&mut self, _settings: &Settings) {}
 }
 
+/// Buzzer priority levels. Higher cancels lower; alarm > signal > button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[repr(u8)]
+pub enum BuzzerPriority {
+    /// Button feedback (lowest).
+    Button = 0,
+    /// Signal / hourly chime.
+    Signal = 1,
+    /// Alarm (highest).
+    Alarm = 2,
+}
+
 /// Global movement state.
 pub struct MovementState {
     pub settings: Settings,
@@ -225,6 +247,8 @@ pub struct MovementState {
     pub is_buzzing: bool,
     pub alarm_note: BuzzerNote,
     pub next_available_backup_register: u8,
+    /// The priority of the currently playing sequence.
+    pub pending_sequence_priority: BuzzerPriority,
 }
 
 impl MovementState {
@@ -238,6 +262,7 @@ impl MovementState {
             is_buzzing: false,
             alarm_note: BuzzerNote::C8,
             next_available_backup_register: 4,
+            pending_sequence_priority: BuzzerPriority::Button,
         }
     }
 
@@ -250,6 +275,7 @@ impl MovementState {
             is_buzzing: false,
             alarm_note: BuzzerNote::C8,
             next_available_backup_register: 4,
+            pending_sequence_priority: BuzzerPriority::Button,
         }
     }
 }

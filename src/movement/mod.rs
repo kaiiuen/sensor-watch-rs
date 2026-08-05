@@ -582,7 +582,22 @@ pub fn default_loop_handler(event: Event, _settings: &Settings) {
     match event {
         Event::Button(Button::Mode, ButtonEvent::Up) => move_to_next_face(),
         Event::Button(Button::Light, ButtonEvent::Down) => illuminate_led(),
-        Event::Button(Button::Mode, ButtonEvent::LongPress) => move_to_face(0),
+        Event::Button(Button::Light, ButtonEvent::Up)
+        | Event::Button(Button::Light, ButtonEvent::LongUp) => {
+            if unsafe { MOVEMENT_STATE.settings.led_duration() } == 0 {
+                force_led_off();
+            }
+        }
+        Event::Button(Button::Mode, ButtonEvent::LongPress) => {
+            // Long-press Mode: if on face 0 and a secondary list exists, jump to
+            // it; otherwise jump back to face 0.
+            let secondary = MOVEMENT_SECONDARY_FACE_INDEX;
+            if secondary != 0 && unsafe { MOVEMENT_STATE.current_face_idx } == 0 {
+                move_to_face(secondary);
+            } else {
+                move_to_face(0);
+            }
+        }
         _ => {}
     }
 }
@@ -605,9 +620,18 @@ pub fn move_to_face(watch_face_index: usize) {
 }
 
 /// Moves to the next watch face.
+///
+/// If a secondary face list is configured, rotation is bounded to the current
+/// list: primary faces (0..SECONDARY) cycle within the primary list, and
+/// secondary faces (SECONDARY..NUM) cycle within the secondary list.
 pub fn move_to_next_face() {
     unsafe {
-        let face_max = MOVEMENT_NUM_FACES;
+        let secondary = MOVEMENT_SECONDARY_FACE_INDEX;
+        let face_max = if secondary != 0 && MOVEMENT_STATE.current_face_idx < secondary {
+            secondary
+        } else {
+            MOVEMENT_NUM_FACES
+        };
         move_to_face((MOVEMENT_STATE.current_face_idx + 1) % face_max);
     }
 }
@@ -657,9 +681,22 @@ pub fn play_signal() {
 }
 
 /// Plays a single note with the given priority (0 = button, 1 = signal, 2 = alarm).
-pub fn play_note(note: BuzzerNote, _priority: u8) {
+///
+/// A lower-priority note does not interrupt a higher-priority one.
+pub fn play_note(note: BuzzerNote, priority: u8) {
     if crate::movement::fault::in_safe_state() {
         return;
+    }
+    if (priority as u8) < unsafe { MOVEMENT_STATE.pending_sequence_priority as u8 } {
+        return;
+    }
+    // Store the priority as the current pending priority.
+    unsafe {
+        MOVEMENT_STATE.pending_sequence_priority = match priority {
+            0 => BuzzerPriority::Button,
+            1 => BuzzerPriority::Signal,
+            _ => BuzzerPriority::Alarm,
+        };
     }
     buzzer::set_buzzer_period(crate::watch::buzzer::NOTE_PERIODS[note as usize] as u32);
     buzzer::set_buzzer_on();
@@ -685,16 +722,24 @@ pub fn play_alarm_beeps(rounds: u8, alarm_note: BuzzerNote) {
     unsafe {
         MOVEMENT_STATE.alarm_note = alarm_note;
         MOVEMENT_STATE.is_buzzing = true;
+        MOVEMENT_STATE.pending_sequence_priority = BuzzerPriority::Alarm;
     }
     buzzer::enable_buzzer();
 }
 
 /// Plays a note sequence (a pointer to (note, duration) pairs ending in 0).
-pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
+///
+/// The sequence plays at signal priority, so it cannot be cancelled by a button
+/// note but can be interrupted by an alarm.
+pub fn play_sequence(note_sequence: *const i8, _callback_on_end: Option<fn()>) {
     if crate::movement::fault::in_safe_state() {
         return;
     }
-    buzzer::play_sequence(note_sequence, callback_on_end);
+    if (BuzzerPriority::Signal as u8) < unsafe { MOVEMENT_STATE.pending_sequence_priority as u8 } {
+        return;
+    }
+    unsafe { MOVEMENT_STATE.pending_sequence_priority = BuzzerPriority::Signal };
+    buzzer::play_sequence(note_sequence, _callback_on_end);
 }
 
 /// Claims a backup register (4-7).
