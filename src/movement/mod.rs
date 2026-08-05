@@ -20,6 +20,7 @@ pub mod fault;
 pub mod flashlight;
 pub mod french_revolutionary;
 pub mod habit;
+pub mod kitchen_conversions;
 pub mod mars_time;
 pub mod metronome;
 pub mod minimal_clock;
@@ -40,7 +41,9 @@ pub mod tally;
 pub mod timer;
 pub mod tomato;
 pub mod toss_up;
+pub mod tuning_tones;
 pub mod types;
+pub mod wake;
 pub mod weeknumber;
 pub mod world_clock;
 
@@ -162,6 +165,17 @@ static mut BREATHING: breathing::BreathingFace = breathing::BreathingFace::new_s
 
 /// The static periodic table face instance.
 static mut PERIODIC: periodic::PeriodicFace = periodic::PeriodicFace::new_static();
+
+/// The static tuning tones face instance.
+static mut TUNING_TONES: tuning_tones::TuningTonesFace =
+    tuning_tones::TuningTonesFace::new_static();
+
+/// The static wake face instance.
+static mut WAKE: wake::WakeFace = wake::WakeFace::new_static();
+
+/// The static kitchen conversions face instance.
+static mut KITCHEN_CONVERSIONS: kitchen_conversions::KitchenConversionsFace =
+    kitchen_conversions::KitchenConversionsFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -446,6 +460,9 @@ pub fn app_setup() {
             WATCH_FACES[30] = Some(&mut *core::ptr::addr_of_mut!(DEADLINE));
             WATCH_FACES[31] = Some(&mut *core::ptr::addr_of_mut!(BREATHING));
             WATCH_FACES[32] = Some(&mut *core::ptr::addr_of_mut!(PERIODIC));
+            WATCH_FACES[33] = Some(&mut *core::ptr::addr_of_mut!(TUNING_TONES));
+            WATCH_FACES[34] = Some(&mut *core::ptr::addr_of_mut!(WAKE));
+            WATCH_FACES[35] = Some(&mut *core::ptr::addr_of_mut!(KITCHEN_CONVERSIONS));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
