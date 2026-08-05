@@ -59,6 +59,7 @@ pub mod rpn_calculator_alt;
 pub mod sailing;
 pub mod save_load;
 pub mod set_time;
+pub mod set_time_hackwatch;
 pub mod ships_bell;
 pub mod simon;
 pub mod simple_calculator;
@@ -149,6 +150,10 @@ static mut SAVE_LOAD: save_load::SaveLoadFace = save_load::SaveLoadFace::new_sta
 
 /// The static nanosec face instance.
 static mut NANOSEC: nanosec::NanosecFace = nanosec::NanosecFace::new_static();
+
+/// The static set time hackwatch face instance.
+static mut SET_TIME_HACKWATCH: set_time_hackwatch::SetTimeHackwatchFace =
+    set_time_hackwatch::SetTimeHackwatchFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -694,6 +699,7 @@ pub fn app_setup() {
             WATCH_FACES[76] = Some(&mut *core::ptr::addr_of_mut!(FINETUNE));
             WATCH_FACES[77] = Some(&mut *core::ptr::addr_of_mut!(SAVE_LOAD));
             WATCH_FACES[78] = Some(&mut *core::ptr::addr_of_mut!(NANOSEC));
+            WATCH_FACES[79] = Some(&mut *core::ptr::addr_of_mut!(SET_TIME_HACKWATCH));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
