@@ -7,6 +7,7 @@
 pub mod alarm;
 pub mod blinky;
 pub mod board;
+pub mod breathing;
 pub mod close_enough;
 pub mod countdown;
 pub mod counter;
@@ -23,6 +24,7 @@ pub mod mars_time;
 pub mod metronome;
 pub mod minimal_clock;
 pub mod moon_phase;
+pub mod periodic;
 pub mod persist;
 pub mod probability;
 pub mod pulsometer;
@@ -154,6 +156,12 @@ static mut TOMATO: tomato::TomatoFace = tomato::TomatoFace::new_static();
 
 /// The static deadline face instance.
 static mut DEADLINE: deadline::DeadlineFace = deadline::DeadlineFace::new_static();
+
+/// The static breathing face instance.
+static mut BREATHING: breathing::BreathingFace = breathing::BreathingFace::new_static();
+
+/// The static periodic table face instance.
+static mut PERIODIC: periodic::PeriodicFace = periodic::PeriodicFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -436,6 +444,8 @@ pub fn app_setup() {
             WATCH_FACES[28] = Some(&mut *core::ptr::addr_of_mut!(HABIT));
             WATCH_FACES[29] = Some(&mut *core::ptr::addr_of_mut!(TOMATO));
             WATCH_FACES[30] = Some(&mut *core::ptr::addr_of_mut!(DEADLINE));
+            WATCH_FACES[31] = Some(&mut *core::ptr::addr_of_mut!(BREATHING));
+            WATCH_FACES[32] = Some(&mut *core::ptr::addr_of_mut!(PERIODIC));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
