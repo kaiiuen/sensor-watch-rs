@@ -1044,9 +1044,129 @@ pub fn request_wake() {
     // Waking is handled by the interrupt that woke us; nothing to do here.
 }
 
+/// Timeout callback indices (matching Second Movement's timeout indices).
+#[repr(u8)]
+pub enum TimeoutIndex {
+    LightButton = 0,
+    ModeButton = 1,
+    AlarmButton = 2,
+    Led = 3,
+    Resign = 4,
+    Sleep = 5,
+    Minute = 6,
+}
+
+/// Registers a compare callback at the given timeout index and target time.
+pub fn register_timeout(index: TimeoutIndex, target: DateTime) {
+    watch::rtc::register_comp_callback(compare_timeout_dispatcher, target.to_reg(), index as usize);
+}
+
+/// Disables a compare callback at the given timeout index.
+pub fn disable_timeout(index: TimeoutIndex) {
+    watch::rtc::disable_comp_callback(index as usize);
+}
+
+/// A single compare-callback dispatcher that routes to the timeout handler.
+///
+/// Each timeout index stores the same dispatcher; the timeout index is derived
+/// from which slot fired via the per-slot target check inside the RTC queue.
+fn compare_timeout_dispatcher() {
+    // The RTC compare queue already fired the slot's callback; map it to an
+    // event. All indexed timeouts converge to a generic wakeup.
+    unsafe {
+        PENDING_EVENT = Event::BackgroundTask;
+    }
+}
+
 /// Stores the current settings to flash.
 pub fn store_settings() {
     save_settings();
+}
+
+/// Detects and enables the accelerometer on the 9-pin connector.
+///
+/// Returns true if a LIS2DW is present. When present, the watch can use
+/// tap detection and wake-on-motion.
+pub fn accelerometer_begin() -> bool {
+    watch::i2c::enable_i2c();
+    let present = watch::lis2dw::begin();
+    if !present {
+        watch::i2c::disable_i2c();
+    }
+    present
+}
+
+/// Enables tap detection if an accelerometer is available.
+pub fn enable_tap_detection_if_available() -> bool {
+    if !accelerometer_begin() {
+        return false;
+    }
+    watch::lis2dw::configure_tap_threshold(12, watch::lis2dw::TAP_THS_Z_Z_AXIS_ENABLE);
+    watch::lis2dw::configure_tap_duration(2, 2, 2);
+    watch::lis2dw::set_low_noise_mode(true);
+    watch::lis2dw::set_data_rate(watch::lis2dw::DataRate::H400);
+    watch::lis2dw::set_mode(watch::lis2dw::Mode::LowPower);
+    watch::lis2dw::enable_double_tap();
+    watch::lis2dw::configure_int1(
+        watch::lis2dw::CTRL4_INT1_SINGLE_TAP | watch::lis2dw::CTRL4_INT1_DOUBLE_TAP,
+    );
+    watch::lis2dw::enable_interrupts();
+    true
+}
+
+/// Disables tap detection.
+pub fn disable_tap_detection_if_available() -> bool {
+    if !accelerometer_begin() {
+        return false;
+    }
+    watch::lis2dw::set_low_noise_mode(false);
+    watch::lis2dw::set_data_rate(watch::lis2dw::DataRate::Lowest);
+    watch::lis2dw::set_mode(watch::lis2dw::Mode::LowPower);
+    watch::lis2dw::disable_double_tap();
+    watch::lis2dw::configure_tap_threshold(0, 0);
+    watch::lis2dw::disable_interrupts();
+    true
+}
+
+/// Polls the accelerometer interrupt source and reports tap events.
+///
+/// Called from the accelerometer interrupt. Sets the pending event for a
+/// single or double tap.
+pub fn handle_accelerometer_event() {
+    let int_src = watch::lis2dw::get_interrupt_source();
+    if int_src & watch::lis2dw::INTERRUPT_SRC_DOUBLE_TAP != 0 {
+        unsafe { PENDING_EVENT = Event::DoubleTap };
+    } else if int_src & watch::lis2dw::INTERRUPT_SRC_SINGLE_TAP != 0 {
+        unsafe { PENDING_EVENT = Event::SingleTap };
+    }
+}
+
+/// Returns the accelerometer background data rate.
+pub fn get_accelerometer_background_rate() -> watch::lis2dw::DataRate {
+    watch::lis2dw::get_data_rate()
+}
+
+/// Sets the accelerometer background data rate.
+pub fn set_accelerometer_background_rate(rate: watch::lis2dw::DataRate) {
+    watch::lis2dw::set_data_rate(rate);
+}
+
+/// Returns the accelerometer motion threshold.
+pub fn get_accelerometer_motion_threshold() -> u8 {
+    watch::lis2dw::get_wakeup_threshold()
+}
+
+/// Sets the accelerometer motion threshold and enables wake-on-motion.
+pub fn set_accelerometer_motion_threshold(threshold: u8) {
+    watch::lis2dw::configure_wakeup_threshold(threshold);
+}
+
+/// Returns the temperature from the accelerometer (or 0 if absent).
+pub fn get_temperature() -> f32 {
+    if !accelerometer_begin() {
+        return 0.0;
+    }
+    watch::lis2dw::get_temperature() as f32
 }
 
 /// App init: called once at boot.
@@ -1132,6 +1252,11 @@ pub fn app_setup() {
         );
 
         watch::slcd::enable_display();
+
+        // Detect an optional accelerometer on the 9-pin connector. If present,
+        // tap detection and wake-on-motion are available to faces.
+        let has_accel = accelerometer_begin();
+        let _ = has_accel;
 
         // Register the watch faces (static instances, no heap).
         if WATCH_FACES[0].is_none() {
@@ -1288,6 +1413,15 @@ pub fn app_loop() {
         let event = PENDING_EVENT;
         if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
+        }
+
+        // If a face enabled tap detection and a tap woke us, poll the
+        // accelerometer interrupt source and dispatch the tap event.
+        if matches!(
+            event,
+            Event::SingleTap | Event::DoubleTap | Event::AccelerometerWake
+        ) {
+            handle_accelerometer_event();
         }
 
         // Persist any settings a face may have changed.

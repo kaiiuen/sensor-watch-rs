@@ -218,6 +218,119 @@ pub fn disable_alarm_callback() {
     unsafe { rtc().intenclr().write(|w| w.bits(1 << 8)) }; // ALARM0
 }
 
+// --- Compare-callback queue ---
+//
+// A software analog of the Second Movement hardware compare-callback queue.
+// Second Movement runs the RTC in counter (MODE0) mode with hardware compare
+// registers; this firmware runs it in calendar (MODE2) mode. We provide the
+// same indexed-compare-callback API, implemented in software: up to
+// `N_COMP_CB` indexed slots hold a target time (packed DateTime) and callback,
+// and the earliest pending slot is armed via the existing one-shot alarm.
+
+/// The number of compare-callback slots.
+pub const N_COMP_CB: usize = 8;
+
+/// A single compare-callback slot.
+struct CompCallback {
+    target: u32,
+    callback: Option<Callback>,
+    enabled: bool,
+}
+
+/// The compare-callback slots.
+static mut COMP_CALLBACKS: [CompCallback; N_COMP_CB] = [const {
+    CompCallback {
+        target: 0,
+        callback: None,
+        enabled: false,
+    }
+}; N_COMP_CB];
+
+/// Arms the earliest pending compare callback via the one-shot alarm.
+fn schedule_next_compare() {
+    unsafe {
+        let now = get_date_time().to_reg();
+        let mut earliest: Option<u32> = None;
+        for slot in COMP_CALLBACKS.iter() {
+            if slot.enabled
+                && slot.target >= now
+                && (earliest.is_none() || slot.target < earliest.unwrap())
+            {
+                earliest = Some(slot.target);
+            }
+        }
+        if let Some(target) = earliest {
+            let dt = DateTime::from_reg(target);
+            schedule_wakeup(compare_tick, dt);
+        }
+    }
+}
+
+/// Registers a compare callback at the given target time (packed DateTime).
+pub fn register_comp_callback(callback: Callback, target: u32, index: usize) {
+    if index >= N_COMP_CB {
+        return;
+    }
+    unsafe {
+        COMP_CALLBACKS[index].target = target;
+        COMP_CALLBACKS[index].callback = Some(callback);
+        COMP_CALLBACKS[index].enabled = true;
+    }
+    schedule_next_compare();
+}
+
+/// Registers a compare callback without re-arming the alarm.
+pub fn register_comp_callback_no_schedule(callback: Callback, target: u32, index: usize) {
+    if index >= N_COMP_CB {
+        return;
+    }
+    unsafe {
+        COMP_CALLBACKS[index].target = target;
+        COMP_CALLBACKS[index].callback = Some(callback);
+        COMP_CALLBACKS[index].enabled = true;
+    }
+}
+
+/// Disables a compare callback.
+pub fn disable_comp_callback(index: usize) {
+    if index >= N_COMP_CB {
+        return;
+    }
+    unsafe {
+        COMP_CALLBACKS[index].enabled = false;
+    }
+    schedule_next_compare();
+}
+
+/// Disables a compare callback without re-arming the alarm.
+pub fn disable_comp_callback_no_schedule(index: usize) {
+    if index >= N_COMP_CB {
+        return;
+    }
+    unsafe {
+        COMP_CALLBACKS[index].enabled = false;
+    }
+}
+
+/// Fires any compare callbacks whose target time has been reached.
+///
+/// Called from the one-shot alarm that armed the earliest slot.
+fn compare_tick() {
+    unsafe {
+        let now = get_date_time().to_reg();
+        for slot in COMP_CALLBACKS.iter_mut() {
+            if slot.enabled && slot.target <= now {
+                slot.enabled = false;
+                if let Some(cb) = slot.callback {
+                    cb();
+                }
+            }
+        }
+        // Re-arm the next pending slot.
+        schedule_next_compare();
+    }
+}
+
 /// Schedules a one-shot wakeup at the given time.
 ///
 /// The alarm fires once when the RTC clock reaches `alarm_time` (matching

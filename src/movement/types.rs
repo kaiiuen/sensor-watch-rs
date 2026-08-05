@@ -194,6 +194,12 @@ pub enum Event {
     BackgroundTask,
     /// A button was pressed.
     Button(Button, ButtonEvent),
+    /// The accelerometer detected a single tap.
+    SingleTap,
+    /// The accelerometer detected a double tap.
+    DoubleTap,
+    /// The accelerometer detected motion (wake-on-motion).
+    AccelerometerWake,
 }
 
 impl Event {

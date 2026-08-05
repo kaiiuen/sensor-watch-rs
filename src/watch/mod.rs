@@ -14,6 +14,7 @@ pub mod gpio;
 pub mod i2c;
 pub mod irq;
 pub mod led;
+pub mod lis2dw;
 pub mod rtc;
 pub mod slcd;
 pub mod spi;
