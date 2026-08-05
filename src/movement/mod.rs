@@ -56,6 +56,7 @@ pub mod ships_bell;
 pub mod simon;
 pub mod simple_calculator;
 pub mod simple_clock;
+pub mod simple_clock_bin_led;
 pub mod simple_coin_flip;
 pub mod solstice;
 pub mod stats;
@@ -110,6 +111,14 @@ static mut COUNTER: counter::CounterFace = counter::CounterFace::new_static();
 
 /// The static world clock face instance.
 static mut WORLD_CLOCK: world_clock::WorldClockFace = world_clock::WorldClockFace::new_static();
+
+/// The static world clock 2 face instance.
+static mut WORLD_CLOCK2: world_clock2::WorldClock2Face =
+    world_clock2::WorldClock2Face::new_static();
+
+/// The static simple clock bin LED face instance.
+static mut SIMPLE_CLOCK_BIN_LED: simple_clock_bin_led::SimpleClockBinLedFace =
+    simple_clock_bin_led::SimpleClockBinLedFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -325,10 +334,6 @@ static mut DUAL_TIMER: dual_timer::DualTimerFace = dual_timer::DualTimerFace::ne
 /// The static RPN calculator alt face instance.
 static mut RPN_CALCULATOR_ALT: rpn_calculator_alt::RpnCalculatorAltFace =
     rpn_calculator_alt::RpnCalculatorAltFace::new_static();
-
-/// The static world clock 2 face instance.
-static mut WORLD_CLOCK2: world_clock2::WorldClock2Face =
-    world_clock2::WorldClock2Face::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -651,6 +656,7 @@ pub fn app_setup() {
             WATCH_FACES[68] = Some(&mut *core::ptr::addr_of_mut!(DUAL_TIMER));
             WATCH_FACES[69] = Some(&mut *core::ptr::addr_of_mut!(RPN_CALCULATOR_ALT));
             WATCH_FACES[70] = Some(&mut *core::ptr::addr_of_mut!(WORLD_CLOCK2));
+            WATCH_FACES[71] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK_BIN_LED));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
