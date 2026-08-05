@@ -8,7 +8,6 @@
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch;
-use crate::watch::slcd;
 
 const PREFERENCES_FACE_NUM_PREFERENCES: u8 = 7;
 const TITLES: [&str; 7] = [

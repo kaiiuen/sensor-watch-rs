@@ -6,7 +6,6 @@
 
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::watch;
 use crate::watch::rtc;
 use crate::watch::slcd;
 use crate::watch::utility;
@@ -121,7 +120,7 @@ impl NanosecFace {
     }
 
     fn apply_rtc_correction(&mut self, correction: i16) {
-        let mut correction = correction + self.freq_correction_residual;
+        let correction = correction + self.freq_correction_residual;
         let mut correction_lr = correction as i32 * 2 / DITHERING;
         if correction_lr & 1 != 0 {
             if correction_lr > 0 {

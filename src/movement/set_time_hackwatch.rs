@@ -145,7 +145,7 @@ impl WatchFace for SetTimeHackwatchFace {
                     2 => {
                         self.seconds_reset_sequence = 0;
                     }
-                    3 => self.date_time_settings.year = ((self.date_time_settings.year % 50) + 1),
+                    3 => self.date_time_settings.year = (self.date_time_settings.year % 50) + 1,
                     4 => self.date_time_settings.month = (self.date_time_settings.month % 12) + 1,
                     5 => self.date_time_settings.day += 1,
                     6 => {

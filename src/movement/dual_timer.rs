@@ -6,8 +6,7 @@
 
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::watch;
-use crate::watch::rtc::{self, DateTime};
+use crate::watch::rtc::DateTime;
 use crate::watch::slcd;
 
 /// A distant-future date used to keep the watch awake while running.
@@ -50,7 +49,7 @@ fn ticks_to_duration(mut ticks: u32) -> Duration {
     let mut hours = 0u8;
     let mut days = 0u8;
     while ticks >= (60 * 60) {
-        ticks -= (60 * 60);
+        ticks -= 60 * 60;
         hours += 1;
         if hours >= 24 {
             hours -= 24;

@@ -98,7 +98,7 @@ impl DeadlineFace {
         let days_in_month = [31, 28, 31, 30, 31, 30, 30, 31, 30, 31, 30, 31];
         match self.current_page {
             0 => {
-                date_time.year = ((date_time.year % 10) + 1);
+                date_time.year = (date_time.year % 10) + 1;
             }
             1 => {
                 date_time.month = (date_time.month % 12) + 1;

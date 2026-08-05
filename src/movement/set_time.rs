@@ -38,7 +38,7 @@ impl SetTimeFace {
             0 => date_time.hour = (date_time.hour + 1) % 24,
             1 => date_time.minute = (date_time.minute + 1) % 60,
             2 => date_time.second = 0,
-            3 => date_time.year = ((date_time.year % 60) + 1),
+            3 => date_time.year = (date_time.year % 60) + 1,
             4 => date_time.month = (date_time.month % 12) + 1,
             5 => date_time.day += 1,
             6 => {

@@ -6,7 +6,6 @@
 
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::watch;
 use crate::watch::deepsleep;
 use crate::watch::rtc;
 use crate::watch::slcd;

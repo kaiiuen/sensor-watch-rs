@@ -174,7 +174,7 @@ impl EndlessRunnerFace {
         rand_legal &= max;
         for i in 0..=min_zeros {
             if prev_val & (1 << (i as u32 + NUM_BITS - NUM_GRID)) != 0 {
-                rand_legal >>= (min_zeros - i);
+                rand_legal >>= min_zeros - i;
                 break;
             }
         }
@@ -364,7 +364,6 @@ impl EndlessRunnerFace {
     }
 
     fn display_obstacle(&mut self, obstacle: bool, grid_loc: u32) {
-        let mut prev_obst_pos_two = false;
         match grid_loc {
             2 => {
                 self.loc_2_on = obstacle;
@@ -372,11 +371,7 @@ impl EndlessRunnerFace {
                     watch::slcd::set_pixel(0, 20);
                 } else if self.jump_state != NOT_JUMPING {
                     watch::slcd::clear_pixel(0, 20);
-                    if self.fuel_mode && prev_obst_pos_two {
-                        self.add_to_score();
-                    }
                 }
-                prev_obst_pos_two = obstacle;
             }
             3 => {
                 self.loc_3_on = obstacle;

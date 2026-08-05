@@ -421,7 +421,7 @@ impl MorsecalcFace {
         slcd::display_character(b'0' + ((digits / 100) % 10) as u8, 5);
         slcd::display_character(b'0' + ((digits / 10) % 10) as u8, 6);
         slcd::display_character(b'0' + (digits % 10) as u8, 7);
-        let mut om = if om_is_negative { -om } else { om };
+        let om = if om_is_negative { -om } else { om };
         if om <= 99 {
             slcd::display_character(b'0' + ((om / 10) % 10) as u8, 8);
             slcd::display_character(b'0' + (om % 10) as u8, 9);

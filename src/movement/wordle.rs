@@ -7,7 +7,6 @@
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch;
-use crate::watch::slcd::Indicator;
 
 const WORDLE_LENGTH: usize = 5;
 const WORDLE_NUM_VALID_LETTERS: u8 = 12;

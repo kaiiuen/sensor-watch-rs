@@ -7,7 +7,6 @@
 
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::watch;
 use crate::watch::slcd;
 
 const PLACEHOLDER_HUNDREDTHS: u8 = 0;
@@ -202,7 +201,7 @@ impl SimpleCalculatorFace {
     fn view_results(&mut self) {
         let first = self.convert_to_float(self.first_num);
         let second = self.convert_to_float(self.second_num);
-        let mut result_float = 0.0f32;
+        let mut result_float: f32;
         match self.operation {
             OP_ADD => result_float = first + second,
             OP_SUB => result_float = first - second,

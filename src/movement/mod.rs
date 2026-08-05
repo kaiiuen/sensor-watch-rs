@@ -708,16 +708,9 @@ pub fn play_alarm() {
 }
 
 /// Plays alarm beeps.
-pub fn play_alarm_beeps(rounds: u8, alarm_note: BuzzerNote) {
+pub fn play_alarm_beeps(_rounds: u8, alarm_note: BuzzerNote) {
     if crate::movement::fault::in_safe_state() {
         return;
-    }
-    let mut rounds = rounds;
-    if rounds == 0 {
-        rounds = 1;
-    }
-    if rounds > 20 {
-        rounds = 20;
     }
     unsafe {
         MOVEMENT_STATE.alarm_note = alarm_note;

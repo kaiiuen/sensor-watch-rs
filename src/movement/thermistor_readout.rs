@@ -50,14 +50,13 @@ impl WatchFace for ThermistorReadoutFace {
     }
 
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
-        let mut date_time = rtc::get_date_time();
+        let date_time = rtc::get_date_time();
         match event {
             Event::Button(Button::Alarm, ButtonEvent::Down) => {
                 settings.set_use_imperial_units(!settings.use_imperial_units());
                 self.update_display(settings.use_imperial_units());
             }
             Event::Activate => {
-                date_time.second = 0;
                 self.update_display(settings.use_imperial_units());
             }
             Event::Tick => {

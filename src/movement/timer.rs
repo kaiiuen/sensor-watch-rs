@@ -408,6 +408,7 @@ impl WatchFace for TimerFace {
                         crate::movement::play_alarm_beeps(1, crate::watch::buzzer::Note::C7);
                     }
                 }
+                #[allow(unreachable_patterns)]
                 _ => {}
             },
             Event::Button(Button::Alarm, ButtonEvent::LongUp) => self.abort_quick_cycle(),

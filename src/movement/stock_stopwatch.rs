@@ -9,7 +9,7 @@ use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch;
 use crate::watch::buzzer::Note;
-use crate::watch::rtc::{self, DateTime};
+use crate::watch::rtc::DateTime;
 use crate::watch::slcd::Indicator;
 
 /// A distant-future date used to keep the watch awake while running.
@@ -270,7 +270,7 @@ impl WatchFace for StockStopwatchFace {
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
         unsafe {
             while TICKS >= (128 * 60 * 60) {
-                TICKS -= (128 * 60 * 60);
+                TICKS -= 128 * 60 * 60;
                 self.hours += 1;
                 if self.hours >= 24 {
                     self.hours -= 24;

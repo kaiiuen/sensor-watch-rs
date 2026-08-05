@@ -7,7 +7,6 @@
 
 use crate::movement;
 use crate::movement::types::{Event, Settings, WatchFace};
-use crate::watch;
 use crate::watch::rtc;
 use crate::watch::slcd;
 

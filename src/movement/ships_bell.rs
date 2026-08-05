@@ -38,7 +38,7 @@ impl ShipsBellFace {
             buf[0] = b' ';
         }
         let date_time = rtc::get_date_time();
-        let mut hour = date_time.hour % 4;
+        let hour = date_time.hour % 4;
         buf[1] = b' ';
         buf[2] = b'0' + hour;
         buf[3] = b'0' + date_time.minute / 10;

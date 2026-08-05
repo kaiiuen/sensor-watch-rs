@@ -6,7 +6,6 @@
 
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::watch;
 use crate::watch::buzzer::Note;
 use crate::watch::slcd;
 
@@ -364,11 +363,11 @@ impl WatchFace for InvadersFace {
                                                 if bonus_points == 0 {
                                                     bonus_points = 10;
                                                 }
-                                                bonus_points += (6 - i as u8);
+                                                bonus_points += 6 - i as u8;
                                                 if self.waves >= INVADERS_FACE_WAVES_PER_STAGE
                                                     && i != 0
                                                 {
-                                                    bonus_points += (6 - i as u8);
+                                                    bonus_points += 6 - i as u8;
                                                 }
                                                 self.score += bonus_points as u16;
                                                 for j in 0..(bonus_points / 10) as usize {

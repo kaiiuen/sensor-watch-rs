@@ -340,7 +340,7 @@ impl WatchFace for RandonautFace {
             Event::Button(Button::Alarm, ButtonEvent::Up) => match self.mode {
                 0 => self.mode = 1,
                 2 => {
-                    self.location_format = ((self.location_format + 1) % 7);
+                    self.location_format = (self.location_format + 1) % 7;
                     if self.location_format == 0 {
                         self.location_format += 1;
                     }

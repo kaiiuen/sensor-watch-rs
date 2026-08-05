@@ -80,8 +80,8 @@ impl TomatoFace {
 
     fn draw(&self) {
         let mut buf = [0u8; 11];
-        let mut min = 0u8;
-        let mut sec = 0u8;
+        let min: u8;
+        let sec: u8;
         let kind = match self.kind {
             TomatoKind::Break => b'b',
             TomatoKind::Focus => b'f',

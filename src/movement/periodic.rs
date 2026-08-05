@@ -7,8 +7,6 @@
 
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
-use crate::watch;
-use crate::watch::buzzer::Note;
 use crate::watch::slcd;
 
 const MAX_ELEMENT: u8 = 118;

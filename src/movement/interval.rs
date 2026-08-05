@@ -235,7 +235,7 @@ impl IntervalFace {
             return;
         }
         let mut buf = [0u8; 11];
-        let mut tmp: u8;
+        let tmp: u8;
         if self.face_state == IntervalFaceState::Waiting && self.ticks >= 0 {
             let mut ticks = self.ticks % 12;
             if ticks == 0 {

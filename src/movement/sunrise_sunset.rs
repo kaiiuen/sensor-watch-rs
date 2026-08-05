@@ -283,10 +283,9 @@ impl SunriseSunsetFace {
             &mut self.working_longitude
         };
         let max = if self.page == 1 { 9000 } else { 18000 };
-        let mut value = *v;
+        let value = *v;
         let digit = match self.active_digit {
             0 => {
-                value = -value;
                 return;
             }
             1 => 1000,

@@ -10,7 +10,6 @@ use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch;
 use crate::watch::rtc::{self, DateTime};
-use crate::watch::slcd::Indicator;
 use crate::watch::utility;
 
 /// A distant-future date (January 1, 2083) used to keep the watch awake while
