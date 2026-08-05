@@ -13,6 +13,7 @@ pub mod board;
 pub mod breathing;
 pub mod butterfly_game;
 pub mod character_set;
+pub mod chirpy_demo;
 pub mod close_enough;
 pub mod couch_to_5k;
 pub mod countdown;
@@ -180,6 +181,9 @@ static mut DEMO: demo::DemoFace = demo::DemoFace::new_static();
 /// The static frequency correction face instance.
 static mut FREQUENCY_CORRECTION: frequency_correction::FrequencyCorrectionFace =
     frequency_correction::FrequencyCorrectionFace::new_static();
+
+/// The static chirpy demo face instance.
+static mut CHIRPY_DEMO: chirpy_demo::ChirpyDemoFace = chirpy_demo::ChirpyDemoFace::new_static();
 
 /// The static diagnostics face instance.
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
@@ -732,6 +736,7 @@ pub fn app_setup() {
             WATCH_FACES[83] = Some(&mut *core::ptr::addr_of_mut!(BEEPS));
             WATCH_FACES[84] = Some(&mut *core::ptr::addr_of_mut!(DEMO));
             WATCH_FACES[85] = Some(&mut *core::ptr::addr_of_mut!(FREQUENCY_CORRECTION));
+            WATCH_FACES[86] = Some(&mut *core::ptr::addr_of_mut!(CHIRPY_DEMO));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
