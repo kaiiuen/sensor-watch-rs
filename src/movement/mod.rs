@@ -79,6 +79,7 @@ pub mod wareki;
 pub mod weeknumber;
 pub mod wordle;
 pub mod world_clock;
+pub mod world_clock2;
 pub mod wyoscan;
 
 use crate::movement::types::*;
@@ -324,6 +325,10 @@ static mut DUAL_TIMER: dual_timer::DualTimerFace = dual_timer::DualTimerFace::ne
 /// The static RPN calculator alt face instance.
 static mut RPN_CALCULATOR_ALT: rpn_calculator_alt::RpnCalculatorAltFace =
     rpn_calculator_alt::RpnCalculatorAltFace::new_static();
+
+/// The static world clock 2 face instance.
+static mut WORLD_CLOCK2: world_clock2::WorldClock2Face =
+    world_clock2::WorldClock2Face::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -645,6 +650,7 @@ pub fn app_setup() {
             WATCH_FACES[67] = Some(&mut *core::ptr::addr_of_mut!(TEMPCHART));
             WATCH_FACES[68] = Some(&mut *core::ptr::addr_of_mut!(DUAL_TIMER));
             WATCH_FACES[69] = Some(&mut *core::ptr::addr_of_mut!(RPN_CALCULATOR_ALT));
+            WATCH_FACES[70] = Some(&mut *core::ptr::addr_of_mut!(WORLD_CLOCK2));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
