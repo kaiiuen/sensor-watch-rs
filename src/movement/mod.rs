@@ -41,6 +41,7 @@ pub mod pulsometer;
 pub mod randonaut;
 pub mod ratemeter;
 pub mod repetition_minute;
+pub mod rpn_calculator;
 pub mod sailing;
 pub mod ships_bell;
 pub mod simon;
@@ -250,6 +251,10 @@ static mut COUCH_TO_5K: couch_to_5k::CouchTo5kFace = couch_to_5k::CouchTo5kFace:
 /// The static simple calculator face instance.
 static mut SIMPLE_CALCULATOR: simple_calculator::SimpleCalculatorFace =
     simple_calculator::SimpleCalculatorFace::new_static();
+
+/// The static RPN calculator face instance.
+static mut RPN_CALCULATOR: rpn_calculator::RpnCalculatorFace =
+    rpn_calculator::RpnCalculatorFace::new_static();
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
@@ -554,6 +559,7 @@ pub fn app_setup() {
             WATCH_FACES[50] = Some(&mut *core::ptr::addr_of_mut!(WYOSCAN));
             WATCH_FACES[51] = Some(&mut *core::ptr::addr_of_mut!(COUCH_TO_5K));
             WATCH_FACES[52] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CALCULATOR));
+            WATCH_FACES[53] = Some(&mut *core::ptr::addr_of_mut!(RPN_CALCULATOR));
         }
 
         for (i, face) in WATCH_FACES.iter_mut().enumerate() {
