@@ -4,6 +4,10 @@
 //! data word with a 7-bit SECDED Hamming code that can correct any single-bit
 //! error and detect any double-bit error. The encoded word is stored as 40
 //! bits (5 bytes) per 32-bit data word.
+//!
+//! NOTE: This logic is duplicated in `core/src/ecc.rs`, which is host-tested
+//! (the firmware crate is `no_std` and cannot run unit tests on the host). Keep
+//! the two copies identical.
 
 /// The number of data bits protected per code word.
 const DATA_BITS: u32 = 32;
@@ -118,39 +122,4 @@ fn extract_data(code: u64) -> u32 {
         data_idx += 1;
     }
     data
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn encode_decode_roundtrip() {
-        let data = 0xDEAD_BEEF;
-        let code = encode(data);
-        let (decoded, corrected) = decode(code);
-        assert_eq!(decoded, data);
-        assert!(!corrected);
-    }
-
-    #[test]
-    fn corrects_single_bit_error() {
-        let data = 0x1234_5678;
-        let code = encode(data);
-        // Flip a single data bit.
-        let corrupted = code ^ (1 << 5);
-        let (decoded, corrected) = decode(corrupted);
-        assert_eq!(decoded, data);
-        assert!(corrected);
-    }
-
-    #[test]
-    fn detects_double_bit_error() {
-        let data = 0xABCD_EF01;
-        let code = encode(data);
-        // Flip two bits -> uncorrectable.
-        let corrupted = code ^ ((1 << 3) | (1 << 9));
-        let (_, corrected) = decode(corrupted);
-        assert!(!corrected);
-    }
 }
