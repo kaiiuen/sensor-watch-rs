@@ -50,6 +50,22 @@ pub struct WatchConfig {
     pub signal_volume: bool,
     /// Alarm volume: false = soft, true = loud.
     pub alarm_volume: bool,
+
+    // ---- Advanced / app-level settings (used by the compiler app) ----
+    /// Piezo buzzer drive voltage in volts (0.0 - 9.0).
+    pub piezo_voltage: f32,
+    /// Whether the LED uses a color gradient when lit.
+    pub led_gradient: bool,
+    /// The LED gradient color as a hex string (e.g. "#00FF88").
+    pub led_gradient_hex: String,
+    /// The LED color as a hex string (e.g. "#00FF00").
+    pub led_color_hex: String,
+    /// Whether raise-to-wake is enabled.
+    pub raise_to_wake: bool,
+    /// Whether raise-to-wake lights the LED.
+    pub raise_to_wake_light: bool,
+    /// Whether the light uses red at night instead of the day color.
+    pub night_light_red: bool,
 }
 
 impl Default for WatchConfig {
@@ -71,6 +87,13 @@ impl Default for WatchConfig {
             button_volume: false,
             signal_volume: false,
             alarm_volume: false,
+            piezo_voltage: 9.0,
+            led_gradient: false,
+            led_gradient_hex: "#00FF88".to_string(),
+            led_color_hex: "#00FF00".to_string(),
+            raise_to_wake: false,
+            raise_to_wake_light: false,
+            night_light_red: false,
         }
     }
 }
@@ -117,6 +140,13 @@ impl WatchConfig {
             button_volume: (reg >> 29) & 0x1 != 0,
             signal_volume: (reg >> 30) & 0x1 != 0,
             alarm_volume: (reg >> 31) & 0x1 != 0,
+            piezo_voltage: 9.0,
+            led_gradient: false,
+            led_gradient_hex: "#00FF88".to_string(),
+            led_color_hex: "#00FF00".to_string(),
+            raise_to_wake: false,
+            raise_to_wake_light: false,
+            night_light_red: false,
         }
     }
 }
