@@ -11,6 +11,7 @@ rewrite in Rust.
 | [MODULES.md](MODULES.md) | A symbol-by-symbol reference for every module and public item. |
 | [POWER.md](POWER.md) | Power-management deep-dive: states, event-driven model, and the control mechanisms. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, test, and contribute, including how to add a new watch face. |
+| [TESTING.md](TESTING.md) | The hardware test plan: power, RTC accuracy, flash wear, faces, faults, and peripherals. |
 | [BACKBURNER.md](BACKBURNER.md) | Ideas captured for later: companion app, clock calibration, drift, raise-to-wake, BACKUP mode. |
 
 ## Companion app

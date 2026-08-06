@@ -143,6 +143,7 @@ See [`docs/`](docs/README.md) for the full documentation set:
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | Design philosophy, power states, resource budget, boot sequence, every module |
 | [MODULES.md](docs/MODULES.md) | Symbol-by-symbol module reference |
 | [POWER.md](docs/POWER.md) | Power-management deep-dive |
+| [TESTING.md](docs/TESTING.md) | Hardware test plan: power, RTC accuracy, flash wear, faces, faults, peripherals |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Build, test, and how to add a watch face |
 | [BACKBURNER.md](docs/BACKBURNER.md) | Ideas captured for later |
 

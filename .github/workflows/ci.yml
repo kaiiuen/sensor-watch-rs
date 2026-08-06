@@ -75,6 +75,35 @@ jobs:
       - name: Run Studio tests
         run: cargo test -p sensor-watch-studio
 
+  uf2:
+    name: Build UF2 artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv6m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - name: Install binutils
+        run: sudo apt-get update && sudo apt-get install -y binutils-arm-none-eabi
+      - name: Build firmware (release)
+        run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch
+      - name: Extract raw binary
+        run: |
+          arm-none-eabi-objcopy -O binary \
+            target/thumbv6m-none-eabi/release/sensor-watch \
+            target/thumbv6m-none-eabi/release/sensor-watch.bin
+      - name: Convert to UF2
+        run: |
+          cargo run -p sensor-watch-core --bin uf2tool -- \
+            target/thumbv6m-none-eabi/release/sensor-watch.bin \
+            target/thumbv6m-none-eabi/release/sensor-watch.uf2
+      - name: Upload UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: sensor-watch-uf2
+          path: target/thumbv6m-none-eabi/release/sensor-watch.uf2
+
   fmt:
     name: Format
     runs-on: ubuntu-latest
