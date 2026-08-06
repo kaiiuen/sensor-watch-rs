@@ -895,6 +895,10 @@ impl StudioApp {
         ui.heading("Watch Settings");
         ui.label("Configure the watch firmware (mirrors the on-watch preferences face).");
         ui.add_space(8.0);
+
+        // ---- Time & Display ----
+        ui.strong("Time & Display");
+        ui.separator();
         egui::Grid::new("watch_settings_grid")
             .striped(true)
             .spacing([24.0, 6.0])
@@ -928,6 +932,35 @@ impl StudioApp {
                 ui.checkbox(&mut self.watch_config.show_seconds, "");
                 ui.end_row();
 
+                // Time zone.
+                ui.label("Time zone");
+                ui.horizontal(|ui| {
+                    ui.add(egui::Slider::new(&mut self.watch_config.time_zone, 0..=40));
+                    let off = watch_config::TIMEZONE_OFFSETS
+                        .get(self.watch_config.time_zone as usize)
+                        .copied()
+                        .unwrap_or(0);
+                    let sign = if off < 0 { '-' } else { '+' };
+                    let abs = off.unsigned_abs();
+                    ui.label(format!("UTC{sign}{:02}:{:02}", abs / 60, abs % 60));
+                });
+                ui.end_row();
+
+                // Imperial units.
+                ui.label("Imperial units");
+                ui.checkbox(&mut self.watch_config.use_imperial_units, "");
+                ui.end_row();
+            });
+
+        ui.add_space(12.0);
+        // ---- Sound & Buzzer ----
+        ui.strong("Sound & Buzzer");
+        ui.separator();
+        egui::Grid::new("watch_sound_grid")
+            .striped(true)
+            .spacing([24.0, 6.0])
+            .num_columns(2)
+            .show(ui, |ui| {
                 // Button sound.
                 ui.label("Button sound");
                 ui.checkbox(&mut self.watch_config.button_should_sound, "");
@@ -987,6 +1020,27 @@ impl StudioApp {
                 });
                 ui.end_row();
 
+                // Piezo voltage (advanced).
+                ui.label("Piezo voltage");
+                ui.horizontal(|ui| {
+                    ui.add(
+                        egui::Slider::new(&mut self.watch_config.piezo_voltage, 0.0..=9.0)
+                            .step_by(0.1),
+                    );
+                    ui.label(format!("{:.1} V", self.watch_config.piezo_voltage));
+                });
+                ui.end_row();
+            });
+
+        ui.add_space(12.0);
+        // ---- LED / Backlight ----
+        ui.strong("LED / Backlight");
+        ui.separator();
+        egui::Grid::new("watch_led_grid")
+            .striped(true)
+            .spacing([24.0, 6.0])
+            .num_columns(2)
+            .show(ui, |ui| {
                 // LED duration.
                 ui.label("LED duration");
                 ui.horizontal(|ui| {
@@ -1018,6 +1072,53 @@ impl StudioApp {
                 ));
                 ui.end_row();
 
+                // LED color hex.
+                ui.label("LED color (hex)");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.watch_config.led_color_hex);
+                    if let Some(col) = parse_hex_color(&self.watch_config.led_color_hex) {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(24.0, 16.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 2.0, col);
+                    }
+                });
+                ui.end_row();
+
+                // LED gradient toggle.
+                ui.label("LED gradient");
+                ui.checkbox(&mut self.watch_config.led_gradient, "Use a color gradient");
+                ui.end_row();
+
+                // LED gradient hex.
+                ui.label("Gradient color (hex)");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.watch_config.led_gradient_hex);
+                    if let Some(col) = parse_hex_color(&self.watch_config.led_gradient_hex) {
+                        let (rect, _) =
+                            ui.allocate_exact_size(egui::vec2(24.0, 16.0), egui::Sense::hover());
+                        ui.painter().rect_filled(rect, 2.0, col);
+                    }
+                });
+                ui.end_row();
+
+                // Night light red.
+                ui.label("Night light");
+                ui.checkbox(
+                    &mut self.watch_config.night_light_red,
+                    "Use red at night instead of day color",
+                );
+                ui.end_row();
+            });
+
+        ui.add_space(12.0);
+        // ---- Power & Motion ----
+        ui.strong("Power & Motion");
+        ui.separator();
+        egui::Grid::new("watch_power_grid")
+            .striped(true)
+            .spacing([24.0, 6.0])
+            .num_columns(2)
+            .show(ui, |ui| {
                 // Timeout interval.
                 ui.label("Timeout interval");
                 ui.horizontal(|ui| {
@@ -1048,23 +1149,17 @@ impl StudioApp {
                 });
                 ui.end_row();
 
-                // Imperial units.
-                ui.label("Imperial units");
-                ui.checkbox(&mut self.watch_config.use_imperial_units, "");
+                // Raise to wake.
+                ui.label("Raise to wake");
+                ui.checkbox(&mut self.watch_config.raise_to_wake, "Enabled");
                 ui.end_row();
 
-                // Time zone.
-                ui.label("Time zone");
-                ui.horizontal(|ui| {
-                    ui.add(egui::Slider::new(&mut self.watch_config.time_zone, 0..=40));
-                    let off = watch_config::TIMEZONE_OFFSETS
-                        .get(self.watch_config.time_zone as usize)
-                        .copied()
-                        .unwrap_or(0);
-                    let sign = if off < 0 { '-' } else { '+' };
-                    let abs = off.unsigned_abs();
-                    ui.label(format!("UTC{sign}{:02}:{:02}", abs / 60, abs % 60));
-                });
+                // Raise to wake light.
+                ui.label("Raise-to-wake light");
+                ui.checkbox(
+                    &mut self.watch_config.raise_to_wake_light,
+                    "Light LED on wake",
+                );
                 ui.end_row();
 
                 // Alarm enabled.
@@ -1241,24 +1336,46 @@ impl StudioApp {
             .num_columns(2)
             .show(ui, |ui| {
                 ui.label("Sensor Watch");
-                ui.label("The original C firmware and hardware platform by Joey Castillo.");
+                ui.hyperlink_to(
+                    "Original C firmware + hardware by Joey Castillo",
+                    "https://github.com/joeycastillo/Sensor-Watch",
+                );
                 ui.end_row();
                 ui.label("Movement");
-                ui.label("The original watch-face framework (part of Sensor Watch).");
+                ui.hyperlink_to(
+                    "Original watch-face framework (part of Sensor Watch)",
+                    "https://github.com/joeycastillo/Sensor-Watch/tree/main/movement",
+                );
                 ui.end_row();
                 ui.label("Second Movement");
-                ui.label("The rewritten C framework with persistent settings and wear-leveling.");
+                ui.hyperlink_to(
+                    "Rewritten C framework with persistent settings and wear-leveling",
+                    "https://github.com/joeycastillo/Sensor-Watch/tree/main/movement2",
+                );
                 ui.end_row();
                 ui.label("Casio F-91W simulator");
-                ui.label(
-                    "Online F-91W replica by Alexis Philip (alexisphilip.fr), used for the SVG.",
+                ui.hyperlink_to(
+                    "Online F-91W replica by Alexis Philip, used for the SVG",
+                    "https://github.com/alexisphilip/Casio-F-91W",
                 );
                 ui.end_row();
                 ui.label("egui / eframe");
-                ui.label("The Rust GUI framework used for this app.");
+                ui.hyperlink_to(
+                    "Rust GUI framework used for this app",
+                    "https://github.com/emilk/egui",
+                );
                 ui.end_row();
                 ui.label("resvg / usvg");
-                ui.label("SVG rendering libraries used to draw the watch face.");
+                ui.hyperlink_to(
+                    "SVG rendering libraries used to draw the watch face",
+                    "https://github.com/RazrFalcon/resvg",
+                );
+                ui.end_row();
+                ui.label("sysinfo");
+                ui.hyperlink_to(
+                    "System resource usage library",
+                    "https://github.com/GuillaumeGomez/sysinfo",
+                );
                 ui.end_row();
             });
     }
@@ -1489,4 +1606,18 @@ fn ui_copy_to_clipboard(text: &str) -> Result<(), String> {
 fn ui_paste_from_clipboard() -> Result<String, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     clipboard.get_text().map_err(|e| e.to_string())
+}
+
+/// Parses a hex color string like "#00FF88" into an egui color.
+fn parse_hex_color(s: &str) -> Option<egui::Color32> {
+    let t = s.trim().trim_start_matches('#');
+    if t.len() != 6 {
+        return None;
+    }
+    let v = u32::from_str_radix(t, 16).ok()?;
+    Some(egui::Color32::from_rgb(
+        ((v >> 16) & 0xFF) as u8,
+        ((v >> 8) & 0xFF) as u8,
+        (v & 0xFF) as u8,
+    ))
 }
