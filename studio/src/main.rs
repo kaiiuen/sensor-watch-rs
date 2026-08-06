@@ -87,6 +87,17 @@ struct StudioApp {
     sys_stats: sysstats::SysStats,
     /// The receiver for background system resource samples.
     sys_rx: std::sync::mpsc::Receiver<sysstats::SysStats>,
+    /// The catalog search query.
+    catalog_search: String,
+    /// The index of the preset face currently being simulated.
+    sim_face_idx: usize,
+    /// Simulator date controller: year, month, day, hour, minute, weekday.
+    sim_year: i32,
+    sim_month: u32,
+    sim_day: u32,
+    sim_hour: u32,
+    sim_minute: u32,
+    sim_weekday: usize,
 }
 
 /// The navigation panels.
@@ -151,6 +162,14 @@ impl Default for StudioApp {
             watch_config: watch_config::WatchConfig::default(),
             sys_stats: sysstats::SysStats::default(),
             sys_rx: sysstats::spawn_sampler(),
+            catalog_search: String::new(),
+            sim_face_idx: 0,
+            sim_year: 2026,
+            sim_month: 1,
+            sim_day: 1,
+            sim_hour: 12,
+            sim_minute: 0,
+            sim_weekday: 4,
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -445,7 +464,18 @@ impl StudioApp {
             .width_range(180.0..=f32::INFINITY)
             .show_inside(ui, |ui| {
                 ui.heading("Catalog");
+                // Search box.
+                ui.horizontal(|ui| {
+                    ui.label("Search:");
+                    ui.text_edit_singleline(&mut self.catalog_search);
+                    if !self.catalog_search.is_empty() {
+                        if ui.small_button("x").clicked() {
+                            self.catalog_search.clear();
+                        }
+                    }
+                });
                 ui.separator();
+                let query = self.catalog_search.trim().to_lowercase();
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
@@ -459,6 +489,13 @@ impl StudioApp {
                                 ui.strong("Add");
                                 ui.end_row();
                                 for (i, face) in self.face_list.iter().enumerate() {
+                                    // Filter by search query.
+                                    if !query.is_empty()
+                                        && !face.name.to_lowercase().contains(&query)
+                                        && !face.index.to_string().contains(&query)
+                                    {
+                                        continue;
+                                    }
                                     let selected = self.selected_face == Some(i);
                                     if ui
                                         .selectable_label(selected, face.index.to_string())
@@ -716,8 +753,83 @@ impl StudioApp {
             if ui.button("Reset").clicked() {
                 self.sim_scale = 0.5;
             }
+            ui.separator();
+            // Show which preset face is being simulated.
+            let faces = self.presets.active_faces();
+            let idx = self.sim_face_idx.min(faces.len().saturating_sub(1));
+            ui.label(format!(
+                "Face: {} / {}",
+                if faces.is_empty() { 0 } else { idx + 1 },
+                faces.len()
+            ));
+            if !faces.is_empty() {
+                ui.monospace(&faces[idx]);
+            }
         });
         ui.separator();
+
+        // Date/time controller: set the simulated display without tedious
+        // button mashing.
+        ui.collapsing("Date / time controller", |ui| {
+            egui::Grid::new("sim_date_grid")
+                .spacing([12.0, 6.0])
+                .num_columns(4)
+                .show(ui, |ui| {
+                    ui.label("Year");
+                    ui.add(egui::DragValue::new(&mut self.sim_year).clamp_range(1970..=2100));
+                    ui.label("Month");
+                    ui.add(egui::DragValue::new(&mut self.sim_month).clamp_range(1..=12));
+                    ui.end_row();
+                    ui.label("Day");
+                    ui.add(egui::DragValue::new(&mut self.sim_day).clamp_range(1..=31));
+                    ui.label("Weekday");
+                    let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                    egui::ComboBox::from_id_source("sim_weekday")
+                        .selected_text(names[self.sim_weekday])
+                        .show_ui(ui, |ui| {
+                            for (i, n) in names.iter().enumerate() {
+                                ui.selectable_value(&mut self.sim_weekday, i, *n);
+                            }
+                        });
+                    ui.end_row();
+                    ui.label("Hour");
+                    ui.add(egui::DragValue::new(&mut self.sim_hour).clamp_range(0..=23));
+                    ui.label("Minute");
+                    ui.add(egui::DragValue::new(&mut self.sim_minute).clamp_range(0..=59));
+                    ui.end_row();
+                });
+            ui.horizontal(|ui| {
+                if ui.button("Apply date/time").clicked() {
+                    self.watch.set_datetime(
+                        self.sim_year,
+                        self.sim_month,
+                        self.sim_day,
+                        self.sim_hour,
+                        self.sim_minute,
+                    );
+                    self.log.log(format!(
+                        "Sim date set to {}-{:02}-{:02} {:02}:{:02}",
+                        self.sim_year, self.sim_month, self.sim_day, self.sim_hour, self.sim_minute
+                    ));
+                }
+                // Changing the weekday only overrides the weekday; it does not
+                // touch the date/time.
+                if ui.button("Apply weekday").clicked() {
+                    self.watch.weekday_override = Some(self.sim_weekday as u32);
+                    self.log.log(format!(
+                        "Weekday set to {}",
+                        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][self.sim_weekday]
+                    ));
+                }
+                if ui.button("Reset to now").clicked() {
+                    self.watch.time_offset = 0;
+                    self.watch.weekday_override = None;
+                    self.log.log("Sim date reset to now");
+                }
+            });
+            ui.separator();
+        });
+
         self.draw_watch(ui, ctx, self.sim_scale);
     }
 
@@ -807,6 +919,19 @@ impl StudioApp {
                 self.watch.button_l(l.is_pointer_button_down_on());
                 self.watch.button_c(c.is_pointer_button_down_on());
                 self.watch.button_a(a.is_pointer_button_down_on());
+                // A button: toggle 12/24 on a clean click (fires exactly once).
+                if a.clicked() {
+                    self.watch.toggle_time_mode();
+                }
+                // C button also cycles through the preset's watch faces.
+                if c.clicked() {
+                    let faces = self.presets.active_faces();
+                    if !faces.is_empty() {
+                        self.sim_face_idx = (self.sim_face_idx + 1) % faces.len();
+                        self.log
+                            .log(format!("Simulating face: {}", faces[self.sim_face_idx]));
+                    }
+                }
                 ui.end_row();
                 // Instructions row.
                 ui.label(l_desc);
