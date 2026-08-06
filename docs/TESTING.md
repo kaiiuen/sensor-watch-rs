@@ -82,5 +82,9 @@ but has not yet been validated on silicon. This plan closes that gap.
 ## Reporting
 
 For each test, record: date, board revision, firmware commit, result (pass/fail),
-and any measured values (current, PPM, error). This becomes the evidence that
-the audit's concerns are addressed.
+and any measured values (current, PPM, error). Publish the results (e.g. as a
+`TESTING.md` update or a release note) so the project's hardware-validation
+status is transparent and verifiable.
+
+> **Status:** Not yet executed. This is the procedure to follow once a board is
+> available for flashing.

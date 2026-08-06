@@ -101,6 +101,11 @@ Produce a `.uf2` for drag-and-drop flashing:
 
 The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`.
 
+> **Note:** This is a Cargo workspace. A bare `cargo build` at the repo root
+> builds the **Firmware Studio GUI app** (the workspace default member), not the
+> firmware. To build the firmware, always pass the embedded target as above, or
+> use `./build.sh` to produce the `.uf2`.
+
 ## Testing & linting
 
 The `core` crate holds pure logic that is host-testable:
