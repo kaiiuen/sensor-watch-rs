@@ -7,6 +7,7 @@
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
 
+use super::face_sim::FaceDisplay;
 use super::watch_sim::Display;
 
 /// The SVG source, embedded at compile time.
@@ -164,36 +165,25 @@ fn element_opacity(id: &str, d: &Display) -> Option<f32> {
 
 /// Returns the set of on-segments for a character on a given display.
 fn char_segments(display_id: &str, c: char) -> Vec<&'static str> {
-    let seven: Vec<&str> = match c {
-        '0' => vec!["A", "B", "C", "D", "E", "F"],
-        '1' => vec!["B", "C"],
-        '2' => vec!["A", "B", "D", "E", "G"],
-        '3' => vec!["A", "B", "C", "D", "G"],
-        '4' => vec!["B", "C", "F", "G"],
-        '5' => vec!["A", "C", "D", "F", "G"],
-        '6' => vec!["A", "C", "D", "E", "F", "G"],
-        '7' => vec!["A", "B", "C"],
-        '8' => vec!["A", "B", "C", "D", "E", "F", "G"],
-        '9' => vec!["A", "B", "C", "D", "F", "G"],
-        'A' => vec!["A", "B", "C", "E", "F", "G"],
-        'C' => vec!["A", "D", "E", "F"],
-        'E' => vec!["A", "D", "E", "F", "G"],
-        'F' => vec!["A", "E", "F", "G"],
-        'H' => vec!["B", "C", "E", "F", "G"],
-        'I' => vec!["B", "C"],
-        'L' => vec!["D", "E", "F"],
-        'O' => vec!["A", "B", "C", "D", "E", "F"],
-        'S' => vec!["A", "C", "D", "F", "G"],
-        'U' => vec!["B", "C", "D", "E", "F"],
-        ' ' => vec![],
-        _ => vec![],
+    // Use the firmware's real character set so all letters render correctly.
+    let segdata = if (c as u32) >= 0x20 && (c as u32) < 0x7F {
+        crate::face_sim::CHARACTER_SET[(c as usize) - 0x20]
+    } else {
+        0
     };
-
+    let seg_names = ["A", "B", "C", "D", "E", "F", "G", "H"];
+    let mut out = Vec::new();
+    for i in 0..7 {
+        if segdata & (1 << i) != 0 {
+            out.push(seg_names[i]);
+        }
+    }
+    // Keep the special mode_1/mode_2 handling for the F-91W weekday display.
     if display_id == "mode_1" {
         return match c {
             'T' => vec!["A", "E", "F", "H"],
             'R' => vec!["A", "B", "C", "E", "F", "G", "H"],
-            _ => seven,
+            _ => out,
         };
     }
     if display_id == "mode_2" {
@@ -202,10 +192,10 @@ fn char_segments(display_id: &str, c: char) -> Vec<&'static str> {
             'T' => vec!["A", "H", "I"],
             'H' => vec!["B", "C", "E", "F", "G"],
             'W' => vec!["B", "C", "D", "E", "F", "H", "I"],
-            _ => seven,
+            _ => out,
         };
     }
-    seven
+    out
 }
 
 /// Renders the watch to an egui texture.
@@ -217,6 +207,33 @@ pub fn render_to_texture(
 ) -> TextureHandle {
     let image = renderer.render(display, size);
     ctx.load_texture("watch", image, TextureOptions::LINEAR)
+}
+
+/// Converts a firmware-style `FaceDisplay` (10 chars + indicators) into the
+/// SVG `Display` state, using the firmware's real character set so text renders
+/// correctly on the 7-segment display.
+pub fn face_display_to_svg(fd: &FaceDisplay) -> Display {
+    let mut d = Display::default();
+    d.dots = fd.colon;
+    d.alarm_on_mark = fd.signal;
+    d.time_signal_on_mark = fd.bell;
+    d.time_mode_24 = fd.h24;
+    d.time_mode_12 = fd.pm;
+    d.lap = fd.lap;
+    // Map the 10 LCD positions to the SVG display IDs.
+    // positions: 0,1 -> mode_2,mode_1 ; 2,3 -> day_2,day_1 ; 4,5 -> hour_2,hour_1
+    //            6,7 -> minute_2,minute_1 ; 8,9 -> second_2,second_1
+    d.mode_2 = fd.chars[0];
+    d.mode_1 = fd.chars[1];
+    d.day_2 = fd.chars[2];
+    d.day_1 = fd.chars[3];
+    d.hour_2 = fd.chars[4];
+    d.hour_1 = fd.chars[5];
+    d.minute_2 = fd.chars[6];
+    d.minute_1 = fd.chars[7];
+    d.second_2 = fd.chars[8];
+    d.second_1 = fd.chars[9];
+    d
 }
 
 impl Default for WatchRenderer {
