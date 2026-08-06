@@ -13,7 +13,9 @@ mod face_sim;
 mod faces;
 mod fuzz;
 mod i18n;
+mod integrity;
 mod ntp;
+mod persist;
 mod presets;
 mod settings;
 mod sysstats;
@@ -74,6 +76,11 @@ struct StudioApp {
     editor_template: usize,
     /// The selected NTP server index.
     ntp_server: usize,
+    /// Custom NTP servers added by the user (name, host).
+    ntp_servers: Vec<(String, String)>,
+    /// The name/host being edited for a custom NTP server.
+    ntp_edit_name: String,
+    ntp_edit_host: String,
     /// The NTP-derived UTC time (seconds since epoch), if fetched.
     ntp_time: Option<u64>,
     /// The NTP ping latency in ms.
@@ -194,6 +201,9 @@ impl Default for StudioApp {
             editor_source: String::new(),
             editor_template: 0,
             ntp_server: 0,
+            ntp_servers: Vec::new(),
+            ntp_edit_name: String::new(),
+            ntp_edit_host: String::new(),
             ntp_time: None,
             ntp_ping: 0.0,
             ntp_offset: 0.0,
@@ -227,6 +237,11 @@ impl Default for StudioApp {
         app.face_list = faces::discover_faces();
         app.log
             .log(format!("Discovered {} watch faces", app.face_list.len()));
+        // Load persisted settings (language, theme, presets, NTP servers, etc.).
+        if let Some(saved) = persist::load() {
+            app.apply_settings(saved);
+            app.log.log("Loaded persisted settings");
+        }
         app.status = tr(app.language, Key::Ready).to_string();
         app
     }
@@ -412,21 +427,83 @@ impl StudioApp {
         ui.add_space(16.0);
         ui.separator();
         ui.heading("NTP Time");
-        ui.label("Select a server and fetch the current time.");
+        ui.label("Select a server and fetch the current time. Add your own servers below.")
+            .on_hover_text(
+                "Network Time Protocol (NTP) synchronizes the watch's clock to an\n\
+                 atomic time source over the internet. Pick a server, press Fetch,\n\
+                 and the app shows the exact UTC time plus the network latency.",
+            );
         ui.add_space(4.0);
+
+        // Build the full server list: built-in + custom.
+        let mut all_servers: Vec<(String, String)> = ntp::SERVERS
+            .iter()
+            .map(|(n, h)| (n.to_string(), h.to_string()))
+            .collect();
+        all_servers.extend(self.ntp_servers.iter().cloned());
+        if self.ntp_server >= all_servers.len() {
+            self.ntp_server = 0;
+        }
 
         // Server selection.
         ui.horizontal(|ui| {
             ui.label("Server:");
             egui::ComboBox::from_id_source("ntp_server")
-                .selected_text(ntp::SERVERS[self.ntp_server].0)
+                .selected_text(&all_servers[self.ntp_server].0)
                 .show_ui(ui, |ui| {
-                    for (i, (name, _)) in ntp::SERVERS.iter().enumerate() {
-                        ui.selectable_value(&mut self.ntp_server, i, *name);
+                    for (i, (name, _)) in all_servers.iter().enumerate() {
+                        ui.selectable_value(&mut self.ntp_server, i, name);
                     }
                 });
             if ui.button("Fetch time").clicked() {
                 self.fetch_ntp();
+            }
+        });
+
+        // Custom server management.
+        ui.add_space(4.0);
+        ui.collapsing("Manage custom servers", |ui| {
+            ui.horizontal(|ui| {
+                ui.label("Name:");
+                ui.text_edit_singleline(&mut self.ntp_edit_name);
+                ui.label("Host:");
+                ui.text_edit_singleline(&mut self.ntp_edit_host);
+                if ui.button("Add").clicked() {
+                    let name = self.ntp_edit_name.trim().to_string();
+                    let host = self.ntp_edit_host.trim().to_string();
+                    if !name.is_empty() && !host.is_empty() {
+                        self.ntp_servers.push((name, host));
+                        self.ntp_edit_name.clear();
+                        self.ntp_edit_host.clear();
+                        self.log.log("Added custom NTP server");
+                        self.save_settings_internal();
+                    }
+                }
+            });
+            // List custom servers with edit/delete.
+            let mut to_delete: Option<usize> = None;
+            for (i, (name, host)) in self.ntp_servers.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.monospace(format!("{name}  ({host})"));
+                    if ui.small_button("Edit").clicked() {
+                        self.ntp_edit_name = name.clone();
+                        self.ntp_edit_host = host.clone();
+                        to_delete = Some(i); // reuse: remove then re-add on Add
+                    }
+                    if ui.small_button("Del").clicked() {
+                        to_delete = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = to_delete {
+                if i < self.ntp_servers.len() {
+                    self.ntp_servers.remove(i);
+                    if self.ntp_server >= ntp::SERVERS.len() + self.ntp_servers.len() {
+                        self.ntp_server = 0;
+                    }
+                    self.log.log("Removed custom NTP server");
+                    self.save_settings_internal();
+                }
             }
         });
 
@@ -467,6 +544,15 @@ impl StudioApp {
         ui.label(
             "Generate a precise set-time command. The watch's serial shell accepts\n\
              `settime YYMMDDHHMMSS`; send it at the exact minute boundary.",
+        )
+        .on_hover_text(
+            "The watch's RTC drifts slightly over time. To calibrate it precisely:\n\
+             1. Fetch the NTP time above.\n\
+             2. This generates a `settime` command for the exact next minute.\n\
+             3. Send it to the watch's serial shell at that moment.\n\n\
+             NOTE: Over USB the watch appears as a file drive (UF2 bootloader), not\n\
+             a serial port. The serial shell is used over the debug UART pins, or\n\
+             via the Studio app when a serial connection is available.",
         );
         ui.add_space(4.0);
         if let Some(ts) = self.ntp_time {
@@ -505,6 +591,16 @@ impl StudioApp {
         ui.label(
             "Measure the watch's crystal drift (PPM) by recording two samples\n\
              (watch time vs NTP reference) some time apart.",
+        )
+        .on_hover_text(
+            "Every watch crystal runs slightly fast or slow (measured in parts-per-\n\
+             million, PPM). To measure yours:\n\
+             1. Fetch the NTP time.\n\
+             2. Press 'Record sample' now.\n\
+             3. Wait hours or days.\n\
+             4. Fetch NTP again and press 'Record sample' again.\n\
+             The app computes the drift, which you can apply as a frequency\n\
+             correction to the RTC.",
         );
         ui.add_space(4.0);
         ui.horizontal(|ui| {
@@ -552,7 +648,13 @@ impl StudioApp {
         ui.add_space(16.0);
         ui.separator();
         ui.heading("Fuzz Testing");
-        ui.label("Run randomized button/tick sequences through a face to check stability.");
+        ui.label("Run randomized button/tick sequences through a face to check stability.")
+            .on_hover_text(
+                "Fuzzing throws random button presses, ticks, and time changes at a\n\
+                 watch face to make sure it never panics or produces a broken\n\
+                 display. It's a quick way to find crashes before they happen on\n\
+                 your wrist. Higher iterations = more thorough but slower.",
+            );
         ui.add_space(4.0);
         ui.horizontal(|ui| {
             ui.label("Iterations:");
@@ -633,112 +735,453 @@ impl StudioApp {
         });
         ui.separator();
 
-        // Catalog (left) and active preset (right), both filling space.
+        // Left column: catalog (top) and active preset (bottom), stacked.
         egui::SidePanel::left("catalog")
             .resizable(true)
             .default_width(ui.available_width() * 0.45)
             .width_range(180.0..=f32::INFINITY)
             .show_inside(ui, |ui| {
-                ui.heading("Catalog");
-                // Search box.
-                ui.horizontal(|ui| {
-                    ui.label("Search:");
-                    ui.text_edit_singleline(&mut self.catalog_search);
-                    if !self.catalog_search.is_empty() {
-                        if ui.small_button("x").clicked() {
-                            self.catalog_search.clear();
-                        }
-                    }
-                });
-                ui.separator();
-                let query = self.catalog_search.trim().to_lowercase();
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .show(ui, |ui| {
-                        // Spreadsheet-style grid: # | Face | Add.
-                        egui::Grid::new("catalog_grid")
-                            .striped(true)
-                            .spacing([12.0, 4.0])
-                            .show(ui, |ui| {
-                                ui.strong("#");
-                                ui.strong("Face");
-                                ui.strong("Add");
-                                ui.end_row();
-                                for (i, face) in self.face_list.iter().enumerate() {
-                                    // Filter by search query.
-                                    if !query.is_empty()
-                                        && !face.name.to_lowercase().contains(&query)
-                                        && !face.index.to_string().contains(&query)
-                                    {
-                                        continue;
-                                    }
-                                    let selected = self.selected_face == Some(i);
-                                    if ui
-                                        .selectable_label(selected, face.index.to_string())
-                                        .clicked()
-                                    {
-                                        self.selected_face = Some(i);
-                                    }
-                                    ui.label(&face.name);
-                                    if ui.small_button("+").clicked() {
-                                        self.presets.add_face(&face.name);
-                                        self.log.log(format!("Added {} to preset", face.name));
-                                    }
-                                    ui.end_row();
+                // Catalog on top.
+                egui::TopBottomPanel::top("catalog_top")
+                    .resizable(true)
+                    .show_inside(ui, |ui| {
+                        ui.heading("Catalog");
+                        // Search box.
+                        ui.horizontal(|ui| {
+                            ui.label("Search:");
+                            ui.text_edit_singleline(&mut self.catalog_search);
+                            if !self.catalog_search.is_empty() {
+                                if ui.small_button("x").clicked() {
+                                    self.catalog_search.clear();
                                 }
+                            }
+                        });
+                        ui.separator();
+                        let query = self.catalog_search.trim().to_lowercase();
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .show(ui, |ui| {
+                                // Spreadsheet-style grid: # | Face | Add.
+                                egui::Grid::new("catalog_grid")
+                                    .striped(true)
+                                    .spacing([12.0, 4.0])
+                                    .show(ui, |ui| {
+                                        ui.strong("#");
+                                        ui.strong("Face");
+                                        ui.strong("Add");
+                                        ui.end_row();
+                                        for (i, face) in self.face_list.iter().enumerate() {
+                                            // Filter by search query.
+                                            if !query.is_empty()
+                                                && !face.name.to_lowercase().contains(&query)
+                                                && !face.index.to_string().contains(&query)
+                                            {
+                                                continue;
+                                            }
+                                            let selected = self.selected_face == Some(i);
+                                            if ui
+                                                .selectable_label(selected, face.index.to_string())
+                                                .clicked()
+                                            {
+                                                self.selected_face = Some(i);
+                                            }
+                                            ui.label(&face.name);
+                                            if ui.small_button("+").clicked() {
+                                                self.presets.add_face(&face.name);
+                                                self.log
+                                                    .log(format!("Added {} to preset", face.name));
+                                            }
+                                            ui.end_row();
+                                        }
+                                    });
                             });
                     });
+
+                // Active preset on bottom.
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.heading("Active Preset");
+                        ui.separator();
+                        // Add selected catalog face to the preset.
+                        if let Some(i) = self.selected_face {
+                            let face = self.face_list[i].name.clone();
+                            if ui.button(format!("Add {face}")).clicked() {
+                                self.presets.add_face(&face);
+                                self.log.log(format!("Added {face} to preset"));
+                            }
+                        }
+                    });
+                    ui.separator();
+                    // Spreadsheet-style grid: # | Face | Up | Dn | Del.
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            egui::Grid::new("preset_grid")
+                                .striped(true)
+                                .spacing([12.0, 4.0])
+                                .show(ui, |ui| {
+                                    // Header row.
+                                    ui.strong("#");
+                                    ui.strong("Face");
+                                    ui.strong("Up");
+                                    ui.strong("Dn");
+                                    ui.strong("Del");
+                                    ui.end_row();
+
+                                    let faces = self.presets.active_faces();
+                                    for (i, face) in faces.iter().enumerate() {
+                                        let selected = self.selected_preset_face == Some(i);
+                                        if ui
+                                            .selectable_label(selected, (i + 1).to_string())
+                                            .clicked()
+                                        {
+                                            self.selected_preset_face = Some(i);
+                                        }
+                                        ui.label(face);
+                                        if ui.small_button("Up").clicked() {
+                                            self.presets.move_face_up(i);
+                                        }
+                                        if ui.small_button("Dn").clicked() {
+                                            self.presets.move_face_down(i);
+                                        }
+                                        if ui.small_button("Del").clicked() {
+                                            self.presets.remove_face(i);
+                                        }
+                                        ui.end_row();
+                                    }
+                                });
+                        });
+                });
             });
 
+        // Right column: watch settings.
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("Active Preset");
-                ui.separator();
-                // Add selected catalog face to the preset.
-                if let Some(i) = self.selected_face {
-                    let face = self.face_list[i].name.clone();
-                    if ui.button(format!("Add {face}")).clicked() {
-                        self.presets.add_face(&face);
-                        self.log.log(format!("Added {face} to preset"));
-                    }
-                }
-            });
-            ui.separator();
-            // Spreadsheet-style grid: # | Face | Up | Dn | Del.
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    egui::Grid::new("preset_grid")
+                    ui.heading("Watch Settings");
+                    ui.label(
+                        "Configure the watch firmware (mirrors the on-watch preferences face).",
+                    );
+                    ui.add_space(8.0);
+
+                    // ---- Time & Display ----
+                    ui.strong("Time & Display");
+                    ui.separator();
+                    egui::Grid::new("watch_settings_grid")
                         .striped(true)
-                        .spacing([12.0, 4.0])
+                        .spacing([24.0, 6.0])
+                        .num_columns(2)
                         .show(ui, |ui| {
-                            // Header row.
-                            ui.strong("#");
-                            ui.strong("Face");
-                            ui.strong("Up");
-                            ui.strong("Dn");
-                            ui.strong("Del");
+                            // Clock mode.
+                            ui.label("Clock mode");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(self.watch_config.clock_mode_24h, "24-hour")
+                                    .clicked()
+                                {
+                                    self.watch_config.clock_mode_24h = true;
+                                }
+                                if ui
+                                    .selectable_label(!self.watch_config.clock_mode_24h, "12-hour")
+                                    .clicked()
+                                {
+                                    self.watch_config.clock_mode_24h = false;
+                                }
+                            });
                             ui.end_row();
 
-                            let faces = self.presets.active_faces();
-                            for (i, face) in faces.iter().enumerate() {
-                                let selected = self.selected_preset_face == Some(i);
-                                if ui.selectable_label(selected, (i + 1).to_string()).clicked() {
-                                    self.selected_preset_face = Some(i);
-                                }
-                                ui.label(face);
-                                if ui.small_button("Up").clicked() {
-                                    self.presets.move_face_up(i);
-                                }
-                                if ui.small_button("Dn").clicked() {
-                                    self.presets.move_face_down(i);
-                                }
-                                if ui.small_button("Del").clicked() {
-                                    self.presets.remove_face(i);
-                                }
-                                ui.end_row();
-                            }
+                            // Leading zero in 24h mode.
+                            ui.label("24h leading zero");
+                            ui.checkbox(&mut self.watch_config.clock_24h_leading_zero, "");
+                            ui.end_row();
+
+                            // Show seconds.
+                            ui.label("Show seconds");
+                            ui.checkbox(&mut self.watch_config.show_seconds, "");
+                            ui.end_row();
+
+                            // Time zone.
+                            ui.label("Time zone");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Slider::new(&mut self.watch_config.time_zone, 0..=40));
+                                let off = watch_config::TIMEZONE_OFFSETS
+                                    .get(self.watch_config.time_zone as usize)
+                                    .copied()
+                                    .unwrap_or(0);
+                                let sign = if off < 0 { '-' } else { '+' };
+                                let abs = off.unsigned_abs();
+                                ui.label(format!("UTC{sign}{:02}:{:02}", abs / 60, abs % 60));
+                            });
+                            ui.end_row();
+
+                            // Imperial units.
+                            ui.label("Imperial units");
+                            ui.checkbox(&mut self.watch_config.use_imperial_units, "");
+                            ui.end_row();
                         });
+
+                    ui.add_space(12.0);
+                    // ---- Sound & Buzzer ----
+                    ui.strong("Sound & Buzzer");
+                    ui.separator();
+                    egui::Grid::new("watch_sound_grid")
+                        .striped(true)
+                        .spacing([24.0, 6.0])
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            // Button sound.
+                            ui.label("Button sound");
+                            ui.checkbox(&mut self.watch_config.button_should_sound, "");
+                            ui.end_row();
+
+                            // Button volume.
+                            ui.label("Button volume");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(!self.watch_config.button_volume, "Soft")
+                                    .clicked()
+                                {
+                                    self.watch_config.button_volume = false;
+                                }
+                                if ui
+                                    .selectable_label(self.watch_config.button_volume, "Loud")
+                                    .clicked()
+                                {
+                                    self.watch_config.button_volume = true;
+                                }
+                            });
+                            ui.end_row();
+
+                            // Signal volume.
+                            ui.label("Signal volume");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(!self.watch_config.signal_volume, "Soft")
+                                    .clicked()
+                                {
+                                    self.watch_config.signal_volume = false;
+                                }
+                                if ui
+                                    .selectable_label(self.watch_config.signal_volume, "Loud")
+                                    .clicked()
+                                {
+                                    self.watch_config.signal_volume = true;
+                                }
+                            });
+                            ui.end_row();
+
+                            // Alarm volume.
+                            ui.label("Alarm volume");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .selectable_label(!self.watch_config.alarm_volume, "Soft")
+                                    .clicked()
+                                {
+                                    self.watch_config.alarm_volume = false;
+                                }
+                                if ui
+                                    .selectable_label(self.watch_config.alarm_volume, "Loud")
+                                    .clicked()
+                                {
+                                    self.watch_config.alarm_volume = true;
+                                }
+                            });
+                            ui.end_row();
+
+                            // Piezo voltage (advanced).
+                            ui.label("Piezo voltage");
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut self.watch_config.piezo_voltage,
+                                        0.0..=9.0,
+                                    )
+                                    .step_by(0.1),
+                                );
+                                ui.label(format!("{:.1} V", self.watch_config.piezo_voltage));
+                            });
+                            ui.end_row();
+                        });
+
+                    ui.add_space(12.0);
+                    // ---- LED / Backlight ----
+                    ui.strong("LED / Backlight");
+                    ui.separator();
+                    egui::Grid::new("watch_led_grid")
+                        .striped(true)
+                        .spacing([24.0, 6.0])
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            // LED duration.
+                            ui.label("LED duration");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Slider::new(
+                                    &mut self.watch_config.led_duration,
+                                    0..=7,
+                                ));
+                                ui.label(match self.watch_config.led_duration {
+                                    0 => "(only while pressed)".to_string(),
+                                    7 => "(off)".to_string(),
+                                    d => format!("({} seconds)", d * 2 - 1),
+                                });
+                            });
+                            ui.end_row();
+
+                            // LED red color.
+                            ui.label("LED red color");
+                            ui.add(egui::Slider::new(
+                                &mut self.watch_config.led_red_color,
+                                0..=15,
+                            ));
+                            ui.end_row();
+
+                            // LED green color.
+                            ui.label("LED green color");
+                            ui.add(egui::Slider::new(
+                                &mut self.watch_config.led_green_color,
+                                0..=15,
+                            ));
+                            ui.end_row();
+
+                            // LED color hex.
+                            ui.label("LED color (hex)");
+                            ui.horizontal(|ui| {
+                                ui.text_edit_singleline(&mut self.watch_config.led_color_hex);
+                                if let Some(col) = parse_hex_color(&self.watch_config.led_color_hex)
+                                {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(24.0, 16.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(rect, 2.0, col);
+                                }
+                            });
+                            ui.end_row();
+
+                            // LED gradient toggle.
+                            ui.label("LED gradient");
+                            ui.checkbox(
+                                &mut self.watch_config.led_gradient,
+                                "Use a color gradient",
+                            );
+                            ui.end_row();
+
+                            // LED gradient hex.
+                            ui.label("Gradient color (hex)");
+                            ui.horizontal(|ui| {
+                                ui.text_edit_singleline(&mut self.watch_config.led_gradient_hex);
+                                if let Some(col) =
+                                    parse_hex_color(&self.watch_config.led_gradient_hex)
+                                {
+                                    let (rect, _) = ui.allocate_exact_size(
+                                        egui::vec2(24.0, 16.0),
+                                        egui::Sense::hover(),
+                                    );
+                                    ui.painter().rect_filled(rect, 2.0, col);
+                                }
+                            });
+                            ui.end_row();
+
+                            // Night light red.
+                            ui.label("Night light");
+                            ui.checkbox(
+                                &mut self.watch_config.night_light_red,
+                                "Use red at night instead of day color",
+                            );
+                            ui.end_row();
+                        });
+
+                    ui.add_space(12.0);
+                    // ---- Power & Motion ----
+                    ui.strong("Power & Motion");
+                    ui.separator();
+                    egui::Grid::new("watch_power_grid")
+                        .striped(true)
+                        .spacing([24.0, 6.0])
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            // Timeout interval.
+                            ui.label("Timeout interval");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Slider::new(
+                                    &mut self.watch_config.to_interval,
+                                    0..=3,
+                                ));
+                                ui.label(match self.watch_config.to_interval {
+                                    0 => "(60 sec)".to_string(),
+                                    1 => "(2 min)".to_string(),
+                                    2 => "(5 min)".to_string(),
+                                    _ => "(30 min)".to_string(),
+                                });
+                            });
+                            ui.end_row();
+
+                            // Low energy interval.
+                            ui.label("Low energy interval");
+                            ui.horizontal(|ui| {
+                                ui.add(egui::Slider::new(
+                                    &mut self.watch_config.le_interval,
+                                    0..=7,
+                                ));
+                                ui.label(match self.watch_config.le_interval {
+                                    0 => "(never)".to_string(),
+                                    1 => "(10 min)".to_string(),
+                                    2 => "(1 hour)".to_string(),
+                                    3 => "(2 hour)".to_string(),
+                                    4 => "(6 hour)".to_string(),
+                                    5 => "(12 hr)".to_string(),
+                                    6 => "(1 day)".to_string(),
+                                    _ => "(7 day)".to_string(),
+                                });
+                            });
+                            ui.end_row();
+
+                            // Raise to wake.
+                            ui.label("Raise to wake");
+                            ui.checkbox(&mut self.watch_config.raise_to_wake, "Enabled");
+                            ui.end_row();
+
+                            // Raise to wake light.
+                            ui.label("Raise-to-wake light");
+                            ui.checkbox(
+                                &mut self.watch_config.raise_to_wake_light,
+                                "Light LED on wake",
+                            );
+                            ui.end_row();
+
+                            // Alarm enabled.
+                            ui.label("Alarm enabled");
+                            ui.checkbox(&mut self.watch_config.alarm_enabled, "");
+                            ui.end_row();
+                        });
+
+                    // Show the packed firmware settings register.
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        ui.label("Packed settings register:");
+                        ui.monospace(format!("0x{:08X}", self.watch_config.to_reg()));
+                        if ui.button("Copy").clicked() {
+                            let _ = ui_copy_to_clipboard(&format!(
+                                "0x{:08X}",
+                                self.watch_config.to_reg()
+                            ));
+                            self.status = "Settings register copied to clipboard".to_string();
+                            self.log.log("Settings register copied to clipboard");
+                        }
+                        if ui.button("Paste").clicked() {
+                            if let Ok(text) = ui_paste_from_clipboard() {
+                                let trimmed = text.trim().trim_start_matches("0x");
+                                if let Ok(reg) = u32::from_str_radix(trimmed, 16) {
+                                    self.watch_config = watch_config::WatchConfig::from_reg(reg);
+                                    self.status = "Settings register imported".to_string();
+                                    self.log.log("Settings register imported");
+                                } else {
+                                    self.status = "Invalid register value in clipboard".to_string();
+                                }
+                            }
+                        }
+                    });
                 });
         });
     }
@@ -1062,7 +1505,24 @@ impl StudioApp {
             weekday: t_weekday,
         };
         let fd = self.face_engine.render(&sim_time);
-        let svg_display = watch_display::face_display_to_svg(&fd);
+        let mut svg_display = watch_display::face_display_to_svg(&fd);
+        // Apply the watch's light and CASIO-override state, which the face
+        // engine does not model.
+        svg_display.light = self.watch.light;
+        if let Some(text) = &self.watch.override_text {
+            let chars: Vec<char> = text.chars().collect();
+            let slot = |i: usize| -> char { chars.get(i).copied().unwrap_or(' ') };
+            svg_display.mode_2 = ' ';
+            svg_display.mode_1 = ' ';
+            svg_display.day_2 = ' ';
+            svg_display.day_1 = ' ';
+            svg_display.hour_2 = slot(0);
+            svg_display.hour_1 = slot(1);
+            svg_display.minute_2 = slot(2);
+            svg_display.minute_1 = slot(3);
+            svg_display.second_2 = slot(4);
+            svg_display.second_1 = slot(5);
+        }
 
         // Render the watch SVG at a size based on the scale.
         let base = 740u32;
@@ -1285,311 +1745,9 @@ impl StudioApp {
 
                 // Firmware project path.
                 ui.label(tr(self.language, Key::FirmwareProject));
-                ui.monospace(build::FIRMWARE_DIR);
+                ui.monospace(build::firmware_dir().display().to_string());
                 ui.end_row();
             });
-
-        ui.add_space(16.0);
-        ui.separator();
-        ui.heading("Watch Settings");
-        ui.label("Configure the watch firmware (mirrors the on-watch preferences face).");
-        ui.add_space(8.0);
-
-        // ---- Time & Display ----
-        ui.strong("Time & Display");
-        ui.separator();
-        egui::Grid::new("watch_settings_grid")
-            .striped(true)
-            .spacing([24.0, 6.0])
-            .num_columns(2)
-            .show(ui, |ui| {
-                // Clock mode.
-                ui.label("Clock mode");
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(self.watch_config.clock_mode_24h, "24-hour")
-                        .clicked()
-                    {
-                        self.watch_config.clock_mode_24h = true;
-                    }
-                    if ui
-                        .selectable_label(!self.watch_config.clock_mode_24h, "12-hour")
-                        .clicked()
-                    {
-                        self.watch_config.clock_mode_24h = false;
-                    }
-                });
-                ui.end_row();
-
-                // Leading zero in 24h mode.
-                ui.label("24h leading zero");
-                ui.checkbox(&mut self.watch_config.clock_24h_leading_zero, "");
-                ui.end_row();
-
-                // Show seconds.
-                ui.label("Show seconds");
-                ui.checkbox(&mut self.watch_config.show_seconds, "");
-                ui.end_row();
-
-                // Time zone.
-                ui.label("Time zone");
-                ui.horizontal(|ui| {
-                    ui.add(egui::Slider::new(&mut self.watch_config.time_zone, 0..=40));
-                    let off = watch_config::TIMEZONE_OFFSETS
-                        .get(self.watch_config.time_zone as usize)
-                        .copied()
-                        .unwrap_or(0);
-                    let sign = if off < 0 { '-' } else { '+' };
-                    let abs = off.unsigned_abs();
-                    ui.label(format!("UTC{sign}{:02}:{:02}", abs / 60, abs % 60));
-                });
-                ui.end_row();
-
-                // Imperial units.
-                ui.label("Imperial units");
-                ui.checkbox(&mut self.watch_config.use_imperial_units, "");
-                ui.end_row();
-            });
-
-        ui.add_space(12.0);
-        // ---- Sound & Buzzer ----
-        ui.strong("Sound & Buzzer");
-        ui.separator();
-        egui::Grid::new("watch_sound_grid")
-            .striped(true)
-            .spacing([24.0, 6.0])
-            .num_columns(2)
-            .show(ui, |ui| {
-                // Button sound.
-                ui.label("Button sound");
-                ui.checkbox(&mut self.watch_config.button_should_sound, "");
-                ui.end_row();
-
-                // Button volume.
-                ui.label("Button volume");
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(!self.watch_config.button_volume, "Soft")
-                        .clicked()
-                    {
-                        self.watch_config.button_volume = false;
-                    }
-                    if ui
-                        .selectable_label(self.watch_config.button_volume, "Loud")
-                        .clicked()
-                    {
-                        self.watch_config.button_volume = true;
-                    }
-                });
-                ui.end_row();
-
-                // Signal volume.
-                ui.label("Signal volume");
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(!self.watch_config.signal_volume, "Soft")
-                        .clicked()
-                    {
-                        self.watch_config.signal_volume = false;
-                    }
-                    if ui
-                        .selectable_label(self.watch_config.signal_volume, "Loud")
-                        .clicked()
-                    {
-                        self.watch_config.signal_volume = true;
-                    }
-                });
-                ui.end_row();
-
-                // Alarm volume.
-                ui.label("Alarm volume");
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(!self.watch_config.alarm_volume, "Soft")
-                        .clicked()
-                    {
-                        self.watch_config.alarm_volume = false;
-                    }
-                    if ui
-                        .selectable_label(self.watch_config.alarm_volume, "Loud")
-                        .clicked()
-                    {
-                        self.watch_config.alarm_volume = true;
-                    }
-                });
-                ui.end_row();
-
-                // Piezo voltage (advanced).
-                ui.label("Piezo voltage");
-                ui.horizontal(|ui| {
-                    ui.add(
-                        egui::Slider::new(&mut self.watch_config.piezo_voltage, 0.0..=9.0)
-                            .step_by(0.1),
-                    );
-                    ui.label(format!("{:.1} V", self.watch_config.piezo_voltage));
-                });
-                ui.end_row();
-            });
-
-        ui.add_space(12.0);
-        // ---- LED / Backlight ----
-        ui.strong("LED / Backlight");
-        ui.separator();
-        egui::Grid::new("watch_led_grid")
-            .striped(true)
-            .spacing([24.0, 6.0])
-            .num_columns(2)
-            .show(ui, |ui| {
-                // LED duration.
-                ui.label("LED duration");
-                ui.horizontal(|ui| {
-                    ui.add(egui::Slider::new(
-                        &mut self.watch_config.led_duration,
-                        0..=7,
-                    ));
-                    ui.label(match self.watch_config.led_duration {
-                        0 => "(only while pressed)".to_string(),
-                        7 => "(off)".to_string(),
-                        d => format!("({} seconds)", d * 2 - 1),
-                    });
-                });
-                ui.end_row();
-
-                // LED red color.
-                ui.label("LED red color");
-                ui.add(egui::Slider::new(
-                    &mut self.watch_config.led_red_color,
-                    0..=15,
-                ));
-                ui.end_row();
-
-                // LED green color.
-                ui.label("LED green color");
-                ui.add(egui::Slider::new(
-                    &mut self.watch_config.led_green_color,
-                    0..=15,
-                ));
-                ui.end_row();
-
-                // LED color hex.
-                ui.label("LED color (hex)");
-                ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut self.watch_config.led_color_hex);
-                    if let Some(col) = parse_hex_color(&self.watch_config.led_color_hex) {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(24.0, 16.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, 2.0, col);
-                    }
-                });
-                ui.end_row();
-
-                // LED gradient toggle.
-                ui.label("LED gradient");
-                ui.checkbox(&mut self.watch_config.led_gradient, "Use a color gradient");
-                ui.end_row();
-
-                // LED gradient hex.
-                ui.label("Gradient color (hex)");
-                ui.horizontal(|ui| {
-                    ui.text_edit_singleline(&mut self.watch_config.led_gradient_hex);
-                    if let Some(col) = parse_hex_color(&self.watch_config.led_gradient_hex) {
-                        let (rect, _) =
-                            ui.allocate_exact_size(egui::vec2(24.0, 16.0), egui::Sense::hover());
-                        ui.painter().rect_filled(rect, 2.0, col);
-                    }
-                });
-                ui.end_row();
-
-                // Night light red.
-                ui.label("Night light");
-                ui.checkbox(
-                    &mut self.watch_config.night_light_red,
-                    "Use red at night instead of day color",
-                );
-                ui.end_row();
-            });
-
-        ui.add_space(12.0);
-        // ---- Power & Motion ----
-        ui.strong("Power & Motion");
-        ui.separator();
-        egui::Grid::new("watch_power_grid")
-            .striped(true)
-            .spacing([24.0, 6.0])
-            .num_columns(2)
-            .show(ui, |ui| {
-                // Timeout interval.
-                ui.label("Timeout interval");
-                ui.horizontal(|ui| {
-                    ui.add(egui::Slider::new(&mut self.watch_config.to_interval, 0..=3));
-                    ui.label(match self.watch_config.to_interval {
-                        0 => "(60 sec)".to_string(),
-                        1 => "(2 min)".to_string(),
-                        2 => "(5 min)".to_string(),
-                        _ => "(30 min)".to_string(),
-                    });
-                });
-                ui.end_row();
-
-                // Low energy interval.
-                ui.label("Low energy interval");
-                ui.horizontal(|ui| {
-                    ui.add(egui::Slider::new(&mut self.watch_config.le_interval, 0..=7));
-                    ui.label(match self.watch_config.le_interval {
-                        0 => "(never)".to_string(),
-                        1 => "(10 min)".to_string(),
-                        2 => "(1 hour)".to_string(),
-                        3 => "(2 hour)".to_string(),
-                        4 => "(6 hour)".to_string(),
-                        5 => "(12 hr)".to_string(),
-                        6 => "(1 day)".to_string(),
-                        _ => "(7 day)".to_string(),
-                    });
-                });
-                ui.end_row();
-
-                // Raise to wake.
-                ui.label("Raise to wake");
-                ui.checkbox(&mut self.watch_config.raise_to_wake, "Enabled");
-                ui.end_row();
-
-                // Raise to wake light.
-                ui.label("Raise-to-wake light");
-                ui.checkbox(
-                    &mut self.watch_config.raise_to_wake_light,
-                    "Light LED on wake",
-                );
-                ui.end_row();
-
-                // Alarm enabled.
-                ui.label("Alarm enabled");
-                ui.checkbox(&mut self.watch_config.alarm_enabled, "");
-                ui.end_row();
-            });
-
-        // Show the packed firmware settings register.
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.label("Packed settings register:");
-            ui.monospace(format!("0x{:08X}", self.watch_config.to_reg()));
-            if ui.button("Copy").clicked() {
-                let _ = ui_copy_to_clipboard(&format!("0x{:08X}", self.watch_config.to_reg()));
-                self.status = "Settings register copied to clipboard".to_string();
-                self.log.log("Settings register copied to clipboard");
-            }
-            if ui.button("Paste").clicked() {
-                if let Ok(text) = ui_paste_from_clipboard() {
-                    let trimmed = text.trim().trim_start_matches("0x");
-                    if let Ok(reg) = u32::from_str_radix(trimmed, 16) {
-                        self.watch_config = watch_config::WatchConfig::from_reg(reg);
-                        self.status = "Settings register imported".to_string();
-                        self.log.log("Settings register imported");
-                    } else {
-                        self.status = "Invalid register value in clipboard".to_string();
-                    }
-                }
-            }
-        });
 
         ui.add_space(16.0);
         ui.separator();
@@ -1726,6 +1884,31 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
+        ui.heading("Integrity");
+        ui.label(
+            "Verify this app's executable hasn't been modified. The hash covers the\n\
+             binary only; your user data (settings, custom NTP servers, watch faces)\n\
+             is intentionally excluded since it changes at runtime.",
+        )
+        .on_hover_text(
+            "This computes a checksum of the running .exe so you can confirm it\n\
+             matches the official release. User-defined data (settings file, custom\n\
+             NTP servers, watch faces) is NOT hashed, because those are expected\n\
+             to differ between users and change as you use the app.",
+        );
+        ui.add_space(8.0);
+        if let Some(h) = integrity::exe_hash() {
+            ui.monospace(format!("SHA (FNV-1a): {}", integrity::format_hash(h)));
+            if ui.button("Copy hash").clicked() {
+                let _ = ui_copy_to_clipboard(&integrity::format_hash(h));
+                self.status = "Integrity hash copied".to_string();
+            }
+        } else {
+            ui.weak("Could not read the executable.");
+        }
+
+        ui.add_space(16.0);
+        ui.separator();
         ui.heading("Credits");
         ui.label("This project builds on the work of several open-source projects:");
         ui.add_space(8.0);
@@ -1786,6 +1969,7 @@ impl StudioApp {
             self.theme,
             &self.presets,
             self.ntp_server,
+            &self.ntp_servers,
             self.sim_scale,
             &self.watch_config,
         );
@@ -1811,6 +1995,23 @@ impl StudioApp {
         }
     }
 
+    /// Persists the current settings to the file next to the executable.
+    fn save_settings_internal(&mut self) {
+        let settings = settings::AppSettings::capture(
+            self.language,
+            self.theme,
+            &self.presets,
+            self.ntp_server,
+            &self.ntp_servers,
+            self.sim_scale,
+            &self.watch_config,
+        );
+        match persist::save(&settings) {
+            Ok(_) => {}
+            Err(e) => self.log.log(format!("Failed to persist settings: {e}")),
+        }
+    }
+
     /// Exports the settings JSON to the clipboard.
     fn export_settings(&mut self) {
         let settings = settings::AppSettings::capture(
@@ -1818,6 +2019,7 @@ impl StudioApp {
             self.theme,
             &self.presets,
             self.ntp_server,
+            &self.ntp_servers,
             self.sim_scale,
             &self.watch_config,
         );
@@ -1867,8 +2069,10 @@ impl StudioApp {
         }
         self.presets = s.presets;
         self.ntp_server = s.ntp_server;
+        self.ntp_servers = s.ntp_servers;
         self.sim_scale = s.sim_scale;
         self.watch_config = s.watch_config;
+        self.save_settings_internal();
     }
 
     /// Exports the source code to a folder.
