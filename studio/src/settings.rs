@@ -22,6 +22,8 @@ pub struct AppSettings {
     pub presets: PresetManager,
     /// The selected NTP server index.
     pub ntp_server: usize,
+    /// Custom NTP servers added by the user (name, host).
+    pub ntp_servers: Vec<(String, String)>,
     /// The simulator display scale.
     pub sim_scale: f32,
     /// The watch configuration.
@@ -35,6 +37,7 @@ impl AppSettings {
         theme: Theme,
         presets: &PresetManager,
         ntp_server: usize,
+        ntp_servers: &[(String, String)],
         sim_scale: f32,
         watch_config: &WatchConfig,
     ) -> Self {
@@ -43,6 +46,7 @@ impl AppSettings {
             theme: theme.name().to_string(),
             presets: presets.clone(),
             ntp_server,
+            ntp_servers: ntp_servers.to_vec(),
             sim_scale,
             watch_config: watch_config.clone(),
         }
