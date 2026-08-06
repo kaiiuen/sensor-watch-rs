@@ -17,7 +17,11 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Editor** — create, edit, or delete watch faces from templates
 - **Simulator** — 1:1 F-91W replica (SVG) with clickable button hotspots, a
   **date/time controller** (year/month/day/hour/minute/weekday), and face
-  cycling through the active preset
+  cycling through the active preset. Faces are **fully interactive** via the
+  `face_sim` engine: the clock ticks live, the stopwatch/timer/counter run,
+  the alarm toggles, and the diagnostics/settings face is navigable. Text is
+  rendered with the firmware's real 7-segment character set, so it displays
+  correctly instead of as gibberish.
 - **Build** — assembles the firmware into a `.uf2` (runs `cargo build`, extracts
   the raw binary with `rust-objcopy`, and converts to UF2 with the
   `sensor-watch-core` encoder)
@@ -56,6 +60,25 @@ produce the final file.
 - `serde` / `serde_json` — settings save/export/import
 - `arboard` — system clipboard
 - `sysinfo` — app/system resource usage
+
+## Source layout
+
+- `main.rs` — the app shell and all panels
+- `face_sim.rs` — the stateful watch-face simulation engine (clock, stopwatch,
+  timer, countdown, counter, alarm, world clock, diagnostics)
+- `watch_display.rs` — renders faces to the SVG using the firmware character set
+- `watch_sim.rs` — the F-91W clock/light/CASIO logic and live time accessor
+- `build.rs` — firmware build → UF2
+- `faces.rs` — discovers faces from the firmware `mod.rs`
+- `editor.rs` — face templates + read/write/delete
+- `presets.rs` — preset manager
+- `i18n.rs` — language (English)
+- `theme.rs` — Light/Dark/Auto
+- `debug.rs` — ring-buffer log
+- `ntp.rs` — NTP time client
+- `settings.rs` — settings save/export/import
+- `sysstats.rs` — app/system resource usage
+- `watch_config.rs` — watch configuration (mirrors the firmware Settings register)
 
 ## License
 
