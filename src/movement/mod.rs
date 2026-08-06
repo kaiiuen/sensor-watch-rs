@@ -138,375 +138,608 @@ pub static mut WATCH_FACES: [Option<&'static mut dyn WatchFace>; MOVEMENT_NUM_FA
     [const { None }; MOVEMENT_NUM_FACES];
 
 /// The static simple clock face instance.
+#[used]
 static mut SIMPLE_CLOCK: simple_clock::SimpleClockFace =
     simple_clock::SimpleClockFace::new_static();
 
 /// The static countdown face instance.
+#[used]
 static mut COUNTDOWN: countdown::CountdownFace = countdown::CountdownFace::new_static();
 
 /// The static alarm face instance.
+#[used]
 static mut ALARM: alarm::AlarmFace = alarm::AlarmFace::new_static();
 
 /// The static advanced alarm face instance.
+#[used]
 static mut ADVANCED_ALARM: advanced_alarm::AdvancedAlarmFace =
     advanced_alarm::AdvancedAlarmFace::new_static();
 
 /// The static counter face instance.
+#[used]
 static mut COUNTER: counter::CounterFace = counter::CounterFace::new_static();
 
 /// The static world clock face instance.
+#[used]
 static mut WORLD_CLOCK: world_clock::WorldClockFace = world_clock::WorldClockFace::new_static();
 
 /// The static world clock 2 face instance.
+#[used]
 static mut WORLD_CLOCK2: world_clock2::WorldClock2Face =
     world_clock2::WorldClock2Face::new_static();
 
 /// The static simple clock bin LED face instance.
+#[used]
 static mut SIMPLE_CLOCK_BIN_LED: simple_clock_bin_led::SimpleClockBinLedFace =
     simple_clock_bin_led::SimpleClockBinLedFace::new_static();
 
 /// The static minute repeater decimal face instance.
+#[used]
 static mut MINUTE_REPEATER_DECIMAL: minute_repeater_decimal::MinuteRepeaterDecimalFace =
     minute_repeater_decimal::MinuteRepeaterDecimalFace::new_static();
 
 /// The static day/night percentage face instance.
+#[used]
 static mut DAY_NIGHT_PERCENTAGE: day_night_percentage::DayNightPercentageFace =
     day_night_percentage::DayNightPercentageFace::new_static();
 
 /// The static set time face instance.
+#[used]
 static mut SET_TIME: set_time::SetTimeFace = set_time::SetTimeFace::new_static();
 
 /// The static preferences face instance.
+#[used]
 static mut PREFERENCES: preferences::PreferencesFace = preferences::PreferencesFace::new_static();
 
 /// The static finetune face instance.
+#[used]
 static mut FINETUNE: finetune::FinetuneFace = finetune::FinetuneFace::new_static();
 
 /// The static save/load face instance.
+#[used]
 static mut SAVE_LOAD: save_load::SaveLoadFace = save_load::SaveLoadFace::new_static();
 
 /// The static nanosec face instance.
+#[used]
 static mut NANOSEC: nanosec::NanosecFace = nanosec::NanosecFace::new_static();
 
 /// The static set time hackwatch face instance.
+#[used]
 static mut SET_TIME_HACKWATCH: set_time_hackwatch::SetTimeHackwatchFace =
     set_time_hackwatch::SetTimeHackwatchFace::new_static();
 
 /// The static voltage face instance.
+#[used]
 static mut VOLTAGE: voltage::VoltageFace = voltage::VoltageFace::new_static();
 
 /// The static hello there face instance.
+#[used]
 static mut HELLO_THERE: hello_there::HelloThereFace = hello_there::HelloThereFace::new_static();
 
 /// The static character set face instance.
+#[used]
 static mut CHARACTER_SET: character_set::CharacterSetFace =
     character_set::CharacterSetFace::new_static();
 
 /// The static beeps face instance.
+#[used]
 static mut BEEPS: beeps::BeepsFace = beeps::BeepsFace::new_static();
 
 /// The static demo face instance.
+#[used]
 static mut DEMO: demo::DemoFace = demo::DemoFace::new_static();
 
 /// The static frequency correction face instance.
+#[used]
 static mut FREQUENCY_CORRECTION: frequency_correction::FrequencyCorrectionFace =
     frequency_correction::FrequencyCorrectionFace::new_static();
 
 /// The static chirpy demo face instance.
+#[used]
 static mut CHIRPY_DEMO: chirpy_demo::ChirpyDemoFace = chirpy_demo::ChirpyDemoFace::new_static();
 
 /// The static LIS2DW logging face instance.
+#[used]
 static mut LIS2DW_LOGGING: lis2dw_logging::Lis2dwLoggingFace =
     lis2dw_logging::Lis2dwLoggingFace::new_static();
 
 /// The static thermistor readout face instance.
+#[used]
 static mut THERMISTOR_READOUT: thermistor_readout::ThermistorReadoutFace =
     thermistor_readout::ThermistorReadoutFace::new_static();
 
 /// The static min/max face instance.
+#[used]
 static mut MINMAX: minmax::MinmaxFace = minmax::MinmaxFace::new_static();
 
 /// The static lightmeter face instance.
+#[used]
 static mut LIGHTMETER: lightmeter::LightmeterFace = lightmeter::LightmeterFace::new_static();
 
 /// The static thermistor logging face instance.
+#[used]
 static mut THERMISTOR_LOGGING: thermistor_logging::ThermistorLoggingFace =
     thermistor_logging::ThermistorLoggingFace::new_static();
 
 /// The static thermistor testing face instance.
+#[used]
 static mut THERMISTOR_TESTING: thermistor_testing::ThermistorTestingFace =
     thermistor_testing::ThermistorTestingFace::new_static();
 
 /// The static alarm thermometer face instance.
+#[used]
 static mut ALARM_THERMOMETER: alarm_thermometer::AlarmThermometerFace =
     alarm_thermometer::AlarmThermometerFace::new_static();
 
 /// The static accelerometer data acquisition face instance.
+#[used]
 static mut ACCELEROMETER_DATA_ACQUISITION:
     accelerometer_data_acquisition::AccelerometerDataAcquisitionFace =
     accelerometer_data_acquisition::AccelerometerDataAcquisitionFace::new_static();
 
 /// The static accel interrupt count face instance.
+#[used]
 static mut ACCEL_INTERRUPT_COUNT: accel_interrupt_count::AccelInterruptCountFace =
     accel_interrupt_count::AccelInterruptCountFace::new_static();
 
 /// The static diagnostics face instance.
+#[used]
 static mut DIAGNOSTICS: diagnostics::DiagnosticsFace = diagnostics::DiagnosticsFace::new_static();
 
 /// The static flashlight face instance.
+#[used]
 static mut FLASHLIGHT: flashlight::FlashlightFace = flashlight::FlashlightFace::new_static();
 
 /// The static decimal time face instance.
+#[used]
 static mut DECIMAL_TIME: decimal_time::DecimalTimeFace =
     decimal_time::DecimalTimeFace::new_static();
 
 /// The static week number clock face instance.
+#[used]
 static mut WEEKNUMBER: weeknumber::WeekNumberClockFace =
     weeknumber::WeekNumberClockFace::new_static();
 
 /// The static minimal clock face instance.
+#[used]
 static mut MINIMAL_CLOCK: minimal_clock::MinimalClockFace =
     minimal_clock::MinimalClockFace::new_static();
 
 /// The static blinky face instance.
+#[used]
 static mut BLINKY: blinky::BlinkyFace = blinky::BlinkyFace::new_static();
 
 /// The static tally face instance.
+#[used]
 static mut TALLY: tally::TallyFace = tally::TallyFace::new_static();
 
 /// The static ships bell face instance.
+#[used]
 static mut SHIPS_BELL: ships_bell::ShipsBellFace = ships_bell::ShipsBellFace::new_static();
 
 /// The static close-enough clock face instance.
+#[used]
 static mut CLOSE_ENOUGH: close_enough::CloseEnoughClockFace =
     close_enough::CloseEnoughClockFace::new_static();
 
 /// The static moon phase face instance.
+#[used]
 static mut MOON_PHASE: moon_phase::MoonPhaseFace = moon_phase::MoonPhaseFace::new_static();
 
 /// The static stopwatch face instance.
+#[used]
 static mut STOPWATCH: stopwatch::StopwatchFace = stopwatch::StopwatchFace::new_static();
 
 /// The static timer face instance.
+#[used]
 static mut TIMER: timer::TimerFace = timer::TimerFace::new_static();
 
 /// The static French Revolutionary face instance.
+#[used]
 static mut FRENCH_REVOLUTIONARY: french_revolutionary::FrenchRevolutionaryFace =
     french_revolutionary::FrenchRevolutionaryFace::new_static();
 
 /// The static Mars time face instance.
+#[used]
 static mut MARS_TIME: mars_time::MarsTimeFace = mars_time::MarsTimeFace::new_static();
 
 /// The static sailing face instance.
+#[used]
 static mut SAILING: sailing::SailingFace = sailing::SailingFace::new_static();
 
 /// The static metronome face instance.
+#[used]
 static mut METRONOME: metronome::MetronomeFace = metronome::MetronomeFace::new_static();
 
 /// The static tachymeter face instance.
+#[used]
 static mut TACHYMETER: tachymeter::TachymeterFace = tachymeter::TachymeterFace::new_static();
 
 /// The static pulsometer face instance.
+#[used]
 static mut PULSOMETER: pulsometer::PulsometerFace = pulsometer::PulsometerFace::new_static();
 
 /// The static ratemeter face instance.
+#[used]
 static mut RATEMETER: ratemeter::RatemeterFace = ratemeter::RatemeterFace::new_static();
 
 /// The static probability face instance.
+#[used]
 static mut PROBABILITY: probability::ProbabilityFace = probability::ProbabilityFace::new_static();
 
 /// The static simple coin flip face instance.
+#[used]
 static mut SIMPLE_COIN_FLIP: simple_coin_flip::SimpleCoinFlipFace =
     simple_coin_flip::SimpleCoinFlipFace::new_static();
 
 /// The static toss-up face instance.
+#[used]
 static mut TOSS_UP: toss_up::TossUpFace = toss_up::TossUpFace::new_static();
 
 /// The static databank face instance.
+#[used]
 static mut DATABANK: databank::DatabankFace = databank::DatabankFace::new_static();
 
 /// The static habit face instance.
+#[used]
 static mut HABIT: habit::HabitFace = habit::HabitFace::new_static();
 
 /// The static tomato face instance.
+#[used]
 static mut TOMATO: tomato::TomatoFace = tomato::TomatoFace::new_static();
 
 /// The static deadline face instance.
+#[used]
 static mut DEADLINE: deadline::DeadlineFace = deadline::DeadlineFace::new_static();
 
 /// The static breathing face instance.
+#[used]
 static mut BREATHING: breathing::BreathingFace = breathing::BreathingFace::new_static();
 
 /// The static periodic table face instance.
+#[used]
 static mut PERIODIC: periodic::PeriodicFace = periodic::PeriodicFace::new_static();
 
 /// The static tuning tones face instance.
+#[used]
 static mut TUNING_TONES: tuning_tones::TuningTonesFace =
     tuning_tones::TuningTonesFace::new_static();
 
 /// The static wake face instance.
+#[used]
 static mut WAKE: wake::WakeFace = wake::WakeFace::new_static();
 
 /// The static kitchen conversions face instance.
+#[used]
 static mut KITCHEN_CONVERSIONS: kitchen_conversions::KitchenConversionsFace =
     kitchen_conversions::KitchenConversionsFace::new_static();
 
 /// The static wareki face instance.
+#[used]
 static mut WAREKI: wareki::WarekiFace = wareki::WarekiFace::new_static();
 
 /// The static tarot face instance.
+#[used]
 static mut TAROT: tarot::TarotFace = tarot::TarotFace::new_static();
 
 /// The static randonaut face instance.
+#[used]
 static mut RANDONAUT: randonaut::RandonautFace = randonaut::RandonautFace::new_static();
 
 /// The static day one face instance.
+#[used]
 static mut DAY_ONE: day_one::DayOneFace = day_one::DayOneFace::new_static();
 
 /// The static time left face instance.
+#[used]
 static mut TIME_LEFT: time_left::TimeLeftFace = time_left::TimeLeftFace::new_static();
 
 /// The static disc golf face instance.
+#[used]
 static mut DISCGOLF: discgolf::DiscgolfFace = discgolf::DiscgolfFace::new_static();
 
 /// The static menstrual cycle face instance.
+#[used]
 static mut MENSTRUAL_CYCLE: menstrual_cycle::MenstrualCycleFace =
     menstrual_cycle::MenstrualCycleFace::new_static();
 
 /// The static butterfly game face instance.
+#[used]
 static mut BUTTERFLY_GAME: butterfly_game::ButterflyGameFace =
     butterfly_game::ButterflyGameFace::new_static();
 
 /// The static simon face instance.
+#[used]
 static mut SIMON: simon::SimonFace = simon::SimonFace::new_static();
 
 /// The static invaders face instance.
+#[used]
 static mut INVADERS: invaders::InvadersFace = invaders::InvadersFace::new_static();
 
 /// The static higher/lower game face instance.
+#[used]
 static mut HIGHER_LOWER_GAME: higher_lower_game::HigherLowerGameFace =
     higher_lower_game::HigherLowerGameFace::new_static();
 
 /// The static endless runner face instance.
+#[used]
 static mut ENDLESS_RUNNER: endless_runner::EndlessRunnerFace =
     endless_runner::EndlessRunnerFace::new_static();
 
 /// The static geomancy face instance.
+#[used]
 static mut GEOMANCY: geomancy::GeomancyFace = geomancy::GeomancyFace::new_static();
 
 /// The static repetition minute face instance.
+#[used]
 static mut REPETITION_MINUTE: repetition_minute::RepetitionMinuteFace =
     repetition_minute::RepetitionMinuteFace::new_static();
 
 /// The static wyoscan face instance.
+#[used]
 static mut WYOSCAN: wyoscan::WyoscanFace = wyoscan::WyoscanFace::new_static();
 
 /// The static couch to 5k face instance.
+#[used]
 static mut COUCH_TO_5K: couch_to_5k::CouchTo5kFace = couch_to_5k::CouchTo5kFace::new_static();
 
 /// The static simple calculator face instance.
+#[used]
 static mut SIMPLE_CALCULATOR: simple_calculator::SimpleCalculatorFace =
     simple_calculator::SimpleCalculatorFace::new_static();
 
 /// The static RPN calculator face instance.
+#[used]
 static mut RPN_CALCULATOR: rpn_calculator::RpnCalculatorFace =
     rpn_calculator::RpnCalculatorFace::new_static();
 
 /// The static TOTP face instance.
+#[used]
 static mut TOTP: totp::TotpFace = totp::TotpFace::new_static();
 
 /// The static stock stopwatch face instance.
+#[used]
 static mut STOCK_STOPWATCH: stock_stopwatch::StockStopwatchFace =
     stock_stopwatch::StockStopwatchFace::new_static();
 
 /// The static activity face instance.
+#[used]
 static mut ACTIVITY: activity::ActivityFace = activity::ActivityFace::new_static();
 
 /// The static hydration face instance.
+#[used]
 static mut HYDRATION: hydration::HydrationFace = hydration::HydrationFace::new_static();
 
 /// The static interval face instance.
+#[used]
 static mut INTERVAL: interval::IntervalFace = interval::IntervalFace::new_static();
 
 /// The static TOTP LFS face instance.
+#[used]
 static mut TOTP_LFS: totp_lfs::TotpFaceLfs = totp_lfs::TotpFaceLfs::new_static();
 
 /// The static wordle face instance.
+#[used]
 static mut WORDLE: wordle::WordleFace = wordle::WordleFace::new_static();
 
 /// The static planetary time face instance.
+#[used]
 static mut PLANETARY_TIME: planetary_time::PlanetaryTimeFace =
     planetary_time::PlanetaryTimeFace::new_static();
 
 /// The static planetary hours face instance.
+#[used]
 static mut PLANETARY_HOURS: planetary_hours::PlanetaryHoursFace =
     planetary_hours::PlanetaryHoursFace::new_static();
 
 /// The static sunrise/sunset face instance.
+#[used]
 static mut SUNRISE_SUNSET: sunrise_sunset::SunriseSunsetFace =
     sunrise_sunset::SunriseSunsetFace::new_static();
 
 /// The static astronomy face instance.
+#[used]
 static mut ASTRONOMY: astronomy::AstronomyFace = astronomy::AstronomyFace::new_static();
 
 /// The static orrery face instance.
+#[used]
 static mut ORRERY: orrery::OrreryFace = orrery::OrreryFace::new_static();
 
 /// The static solstice face instance.
+#[used]
 static mut SOLSTICE: solstice::SolsticeFace = solstice::SolsticeFace::new_static();
 
 /// The static SOS face instance.
+#[used]
 static mut SOS: sos::SosFace = sos::SosFace::new_static();
 
 /// The static days since face instance.
+#[used]
 static mut DAYS_SINCE: days_since::DaysSinceFace = days_since::DaysSinceFace::new_static();
 
 /// The static tide face instance.
+#[used]
 static mut TIDE: tide::TideFace = tide::TideFace::new_static();
 
 /// The static blackjack face instance.
+#[used]
 static mut BLACKJACK: blackjack::BlackjackFace = blackjack::BlackjackFace::new_static();
 
 /// The static squash face instance.
+#[used]
 static mut SQUASH: squash::SquashFace = squash::SquashFace::new_static();
 
 /// The static lander face instance.
+#[used]
 static mut LANDER: lander::LanderFace = lander::LanderFace::new_static();
 
 /// The static ping face instance.
+#[used]
 static mut PING: ping::PingFace = ping::PingFace::new_static();
 
 /// The static baby kicks face instance.
+#[used]
 static mut BABY_KICKS: baby_kicks::BabyKicksFace = baby_kicks::BabyKicksFace::new_static();
 
 /// The static settings face instance.
+#[used]
 static mut SETTINGS_FACE: settings_face::SettingsFace = settings_face::SettingsFace::new_static();
 
 /// The static morsecalc face instance.
+#[used]
 static mut MORSECALC: morsecalc::MorsecalcFace = morsecalc::MorsecalcFace::new_static();
 
 /// The static tempchart face instance.
+#[used]
 static mut TEMPCHART: tempchart::TempchartFace = tempchart::TempchartFace::new_static();
 
 /// The static dual timer face instance.
+#[used]
 static mut DUAL_TIMER: dual_timer::DualTimerFace = dual_timer::DualTimerFace::new_static();
 
 /// The static RPN calculator alt face instance.
+#[used]
 static mut RPN_CALCULATOR_ALT: rpn_calculator_alt::RpnCalculatorAltFace =
     rpn_calculator_alt::RpnCalculatorAltFace::new_static();
 
 /// The static ISH (vague time) face instance.
+#[used]
 static mut ISH: ish::IshFace = ish::IshFace::new_static();
 
 /// The static solar time face instance.
+#[used]
 static mut SOLAR_TIME: solar_time::SolarTimeFace = solar_time::SolarTimeFace::new_static();
 
 /// The static Kè decimal time face instance.
+#[used]
 static mut KE_DECIMAL_TIME: ke_decimal_time::KeDecimalTimeFace =
     ke_decimal_time::KeDecimalTimeFace::new_static();
 
 /// The static beats face instance.
+#[used]
 static mut BEATS: beats::BeatsFace = beats::BeatsFace::new_static();
+
+/// Forces the linker to retain every face's vtable and methods.
+///
+/// The faces are stored as `static mut` and referenced only through
+/// `addr_of_mut!` in `app_setup`. The linker's `--gc-sections` cannot see these
+/// raw-pointer references, so it strips the faces' code and vtables (leaving a
+/// nearly-empty firmware). Referencing every face from a `#[used]` static makes
+/// the retention explicit and keeps the whole framework in the binary.
+#[used]
+static mut FACE_RETAIN: [&dyn WatchFace; MOVEMENT_NUM_FACES] = [
+    unsafe { &*core::ptr::addr_of_mut!(SIMPLE_CLOCK) },
+    unsafe { &*core::ptr::addr_of_mut!(COUNTDOWN) },
+    unsafe { &*core::ptr::addr_of_mut!(ALARM) },
+    unsafe { &*core::ptr::addr_of_mut!(ADVANCED_ALARM) },
+    unsafe { &*core::ptr::addr_of_mut!(COUNTER) },
+    unsafe { &*core::ptr::addr_of_mut!(WORLD_CLOCK) },
+    unsafe { &*core::ptr::addr_of_mut!(WORLD_CLOCK2) },
+    unsafe { &*core::ptr::addr_of_mut!(SIMPLE_CLOCK_BIN_LED) },
+    unsafe { &*core::ptr::addr_of_mut!(DIAGNOSTICS) },
+    unsafe { &*core::ptr::addr_of_mut!(FLASHLIGHT) },
+    unsafe { &*core::ptr::addr_of_mut!(DECIMAL_TIME) },
+    unsafe { &*core::ptr::addr_of_mut!(WEEKNUMBER) },
+    unsafe { &*core::ptr::addr_of_mut!(MINIMAL_CLOCK) },
+    unsafe { &*core::ptr::addr_of_mut!(BLINKY) },
+    unsafe { &*core::ptr::addr_of_mut!(TALLY) },
+    unsafe { &*core::ptr::addr_of_mut!(SHIPS_BELL) },
+    unsafe { &*core::ptr::addr_of_mut!(CLOSE_ENOUGH) },
+    unsafe { &*core::ptr::addr_of_mut!(MOON_PHASE) },
+    unsafe { &*core::ptr::addr_of_mut!(STOPWATCH) },
+    unsafe { &*core::ptr::addr_of_mut!(TIMER) },
+    unsafe { &*core::ptr::addr_of_mut!(FRENCH_REVOLUTIONARY) },
+    unsafe { &*core::ptr::addr_of_mut!(MARS_TIME) },
+    unsafe { &*core::ptr::addr_of_mut!(SAILING) },
+    unsafe { &*core::ptr::addr_of_mut!(METRONOME) },
+    unsafe { &*core::ptr::addr_of_mut!(TACHYMETER) },
+    unsafe { &*core::ptr::addr_of_mut!(PULSOMETER) },
+    unsafe { &*core::ptr::addr_of_mut!(RATEMETER) },
+    unsafe { &*core::ptr::addr_of_mut!(PROBABILITY) },
+    unsafe { &*core::ptr::addr_of_mut!(SIMPLE_COIN_FLIP) },
+    unsafe { &*core::ptr::addr_of_mut!(TOSS_UP) },
+    unsafe { &*core::ptr::addr_of_mut!(DATABANK) },
+    unsafe { &*core::ptr::addr_of_mut!(HABIT) },
+    unsafe { &*core::ptr::addr_of_mut!(TOMATO) },
+    unsafe { &*core::ptr::addr_of_mut!(DEADLINE) },
+    unsafe { &*core::ptr::addr_of_mut!(BREATHING) },
+    unsafe { &*core::ptr::addr_of_mut!(PERIODIC) },
+    unsafe { &*core::ptr::addr_of_mut!(TUNING_TONES) },
+    unsafe { &*core::ptr::addr_of_mut!(WAKE) },
+    unsafe { &*core::ptr::addr_of_mut!(KITCHEN_CONVERSIONS) },
+    unsafe { &*core::ptr::addr_of_mut!(WAREKI) },
+    unsafe { &*core::ptr::addr_of_mut!(TAROT) },
+    unsafe { &*core::ptr::addr_of_mut!(RANDONAUT) },
+    unsafe { &*core::ptr::addr_of_mut!(DAY_ONE) },
+    unsafe { &*core::ptr::addr_of_mut!(TIME_LEFT) },
+    unsafe { &*core::ptr::addr_of_mut!(DISCGOLF) },
+    unsafe { &*core::ptr::addr_of_mut!(MENSTRUAL_CYCLE) },
+    unsafe { &*core::ptr::addr_of_mut!(BUTTERFLY_GAME) },
+    unsafe { &*core::ptr::addr_of_mut!(SIMON) },
+    unsafe { &*core::ptr::addr_of_mut!(INVADERS) },
+    unsafe { &*core::ptr::addr_of_mut!(HIGHER_LOWER_GAME) },
+    unsafe { &*core::ptr::addr_of_mut!(ENDLESS_RUNNER) },
+    unsafe { &*core::ptr::addr_of_mut!(GEOMANCY) },
+    unsafe { &*core::ptr::addr_of_mut!(REPETITION_MINUTE) },
+    unsafe { &*core::ptr::addr_of_mut!(WYOSCAN) },
+    unsafe { &*core::ptr::addr_of_mut!(COUCH_TO_5K) },
+    unsafe { &*core::ptr::addr_of_mut!(SIMPLE_CALCULATOR) },
+    unsafe { &*core::ptr::addr_of_mut!(RPN_CALCULATOR) },
+    unsafe { &*core::ptr::addr_of_mut!(TOTP) },
+    unsafe { &*core::ptr::addr_of_mut!(STOCK_STOPWATCH) },
+    unsafe { &*core::ptr::addr_of_mut!(ACTIVITY) },
+    unsafe { &*core::ptr::addr_of_mut!(INTERVAL) },
+    unsafe { &*core::ptr::addr_of_mut!(TOTP_LFS) },
+    unsafe { &*core::ptr::addr_of_mut!(WORDLE) },
+    unsafe { &*core::ptr::addr_of_mut!(PLANETARY_TIME) },
+    unsafe { &*core::ptr::addr_of_mut!(PLANETARY_HOURS) },
+    unsafe { &*core::ptr::addr_of_mut!(SUNRISE_SUNSET) },
+    unsafe { &*core::ptr::addr_of_mut!(ASTRONOMY) },
+    unsafe { &*core::ptr::addr_of_mut!(ORRERY) },
+    unsafe { &*core::ptr::addr_of_mut!(SOLSTICE) },
+    unsafe { &*core::ptr::addr_of_mut!(MORSECALC) },
+    unsafe { &*core::ptr::addr_of_mut!(TEMPCHART) },
+    unsafe { &*core::ptr::addr_of_mut!(DUAL_TIMER) },
+    unsafe { &*core::ptr::addr_of_mut!(RPN_CALCULATOR_ALT) },
+    unsafe { &*core::ptr::addr_of_mut!(MINUTE_REPEATER_DECIMAL) },
+    unsafe { &*core::ptr::addr_of_mut!(DAY_NIGHT_PERCENTAGE) },
+    unsafe { &*core::ptr::addr_of_mut!(SET_TIME) },
+    unsafe { &*core::ptr::addr_of_mut!(PREFERENCES) },
+    unsafe { &*core::ptr::addr_of_mut!(FINETUNE) },
+    unsafe { &*core::ptr::addr_of_mut!(SAVE_LOAD) },
+    unsafe { &*core::ptr::addr_of_mut!(NANOSEC) },
+    unsafe { &*core::ptr::addr_of_mut!(SET_TIME_HACKWATCH) },
+    unsafe { &*core::ptr::addr_of_mut!(VOLTAGE) },
+    unsafe { &*core::ptr::addr_of_mut!(HELLO_THERE) },
+    unsafe { &*core::ptr::addr_of_mut!(CHARACTER_SET) },
+    unsafe { &*core::ptr::addr_of_mut!(BEEPS) },
+    unsafe { &*core::ptr::addr_of_mut!(DEMO) },
+    unsafe { &*core::ptr::addr_of_mut!(FREQUENCY_CORRECTION) },
+    unsafe { &*core::ptr::addr_of_mut!(CHIRPY_DEMO) },
+    unsafe { &*core::ptr::addr_of_mut!(LIS2DW_LOGGING) },
+    unsafe { &*core::ptr::addr_of_mut!(THERMISTOR_READOUT) },
+    unsafe { &*core::ptr::addr_of_mut!(MINMAX) },
+    unsafe { &*core::ptr::addr_of_mut!(LIGHTMETER) },
+    unsafe { &*core::ptr::addr_of_mut!(THERMISTOR_LOGGING) },
+    unsafe { &*core::ptr::addr_of_mut!(THERMISTOR_TESTING) },
+    unsafe { &*core::ptr::addr_of_mut!(ALARM_THERMOMETER) },
+    unsafe { &*core::ptr::addr_of_mut!(ACCELEROMETER_DATA_ACQUISITION) },
+    unsafe { &*core::ptr::addr_of_mut!(ACCEL_INTERRUPT_COUNT) },
+    unsafe { &*core::ptr::addr_of_mut!(HYDRATION) },
+    unsafe { &*core::ptr::addr_of_mut!(SOS) },
+    unsafe { &*core::ptr::addr_of_mut!(LANDER) },
+    unsafe { &*core::ptr::addr_of_mut!(PING) },
+    unsafe { &*core::ptr::addr_of_mut!(BABY_KICKS) },
+    unsafe { &*core::ptr::addr_of_mut!(SETTINGS_FACE) },
+    unsafe { &*core::ptr::addr_of_mut!(ISH) },
+    unsafe { &*core::ptr::addr_of_mut!(SOLAR_TIME) },
+    unsafe { &*core::ptr::addr_of_mut!(KE_DECIMAL_TIME) },
+    unsafe { &*core::ptr::addr_of_mut!(BEATS) },
+    unsafe { &*core::ptr::addr_of_mut!(DAYS_SINCE) },
+    unsafe { &*core::ptr::addr_of_mut!(TIDE) },
+    unsafe { &*core::ptr::addr_of_mut!(BLACKJACK) },
+    unsafe { &*core::ptr::addr_of_mut!(SQUASH) },
+];
 
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
