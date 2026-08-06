@@ -1,0 +1,10 @@
+# Pin the Rust toolchain so the firmware builds reproducibly.
+#
+# The firmware targets the Cortex-M0+ (thumbv6m-none-eabi). Stable Rust releases
+# every six weeks and can change code generation for this core, so we pin the
+# exact toolchain that the firmware was validated against. `rustup` reads this
+# file automatically and installs/uses the pinned version.
+[toolchain]
+channel = "1.97.1"
+components = ["rustfmt", "clippy"]
+targets = ["thumbv6m-none-eabi"]
