@@ -8,6 +8,7 @@
 mod build;
 mod debug;
 mod editor;
+mod face_sim;
 mod faces;
 mod i18n;
 mod ntp;
@@ -98,6 +99,23 @@ struct StudioApp {
     sim_hour: u32,
     sim_minute: u32,
     sim_weekday: usize,
+    /// Simulator button press state (edge detection + hold timing).
+    btn_l_down: bool,
+    btn_c_down: bool,
+    btn_a_down: bool,
+    btn_l_hold: f32,
+    btn_c_hold: f32,
+    btn_a_hold: f32,
+    /// The time delta (seconds) since the last frame, for hold timing.
+    sim_dt: f32,
+    /// The button currently being held (via the on-watch SVG hotspot or a Hold
+    /// button). Persists even if the pointer drifts off the widget while held;
+    /// only clears when the mouse is fully released.
+    held_button: Option<ButtonId>,
+    /// The stateful watch-face simulation engine.
+    face_engine: face_sim::FaceEngine,
+    /// Accumulator for advancing the face state once per second.
+    face_tick_accum: f32,
 }
 
 /// The navigation panels.
@@ -111,6 +129,22 @@ enum Panel {
     Flash,
     Debug,
     Settings,
+}
+
+/// The action a simulator button edge produced.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SimAction {
+    None,
+    Press,
+    Release,
+}
+
+/// Which simulator button is being handled.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ButtonId {
+    L,
+    C,
+    A,
 }
 
 impl Panel {
@@ -170,6 +204,16 @@ impl Default for StudioApp {
             sim_hour: 12,
             sim_minute: 0,
             sim_weekday: 4,
+            btn_l_down: false,
+            btn_c_down: false,
+            btn_a_down: false,
+            btn_l_hold: 0.0,
+            btn_c_hold: 0.0,
+            btn_a_hold: 0.0,
+            sim_dt: 0.0,
+            held_button: None,
+            face_engine: face_sim::FaceEngine::new("SIMPLE_CLOCK"),
+            face_tick_accum: 0.0,
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -765,6 +809,18 @@ impl StudioApp {
             if !faces.is_empty() {
                 ui.monospace(&faces[idx]);
             }
+            ui.separator();
+            // Show which preset face is being simulated.
+            let faces = self.presets.active_faces();
+            let idx = self.sim_face_idx.min(faces.len().saturating_sub(1));
+            ui.label(format!(
+                "Face: {} / {}",
+                if faces.is_empty() { 0 } else { idx + 1 },
+                faces.len()
+            ));
+            if !faces.is_empty() {
+                ui.monospace(&faces[idx]);
+            }
         });
         ui.separator();
 
@@ -835,32 +891,58 @@ impl StudioApp {
 
     /// Draws the watch SVG at the given scale with clickable F-91W button hotspots.
     fn draw_watch(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, scale: f32) {
-        // Advance the stopwatch and button-A hold timer based on elapsed time.
+        // Track frame time for hold timing.
         let now = std::time::Instant::now();
         let dt = now.duration_since(self.sim_last_tick);
         self.sim_last_tick = now;
-        let cs = dt.as_millis() as u64 / 10;
-        self.watch.tick_stopwatch(cs);
-        self.watch.tick_button_a();
+        self.sim_dt = dt.as_secs_f32();
 
         // Update the display state.
         self.watch.update_display();
 
+        // Determine the current face and sync the engine's face name.
+        let faces = self.presets.active_faces();
+        let face_name = if faces.is_empty() {
+            "SIMPLE_CLOCK".to_string()
+        } else {
+            faces[self.sim_face_idx.min(faces.len() - 1)].clone()
+        };
+        if self.face_engine.face_name != face_name {
+            self.face_engine = face_sim::FaceEngine::new(&face_name);
+        }
+        // Advance the face state by one second per real second.
+        self.face_tick_accum += self.sim_dt;
+        if self.face_tick_accum >= 1.0 {
+            self.face_tick_accum -= 1.0;
+            self.face_engine.tick();
+        }
+
+        // Use the watch's live simulated time so the clock ticks and the date
+        // controller (set_datetime / reset to now) takes effect.
+        let (t_year, t_month, t_day, t_hour, t_minute, t_second, t_weekday) = self.watch.get_time();
+        let sim_time = face_sim::SimTime {
+            year: t_year,
+            month: t_month,
+            day: t_day,
+            hour: t_hour,
+            minute: t_minute,
+            second: t_second,
+            weekday: t_weekday,
+        };
+        let fd = self.face_engine.render(&sim_time);
+        let svg_display = watch_display::face_display_to_svg(&fd);
+
         // Render the watch SVG at a size based on the scale.
         let base = 740u32;
         let size = [(base as f32 * scale) as u32, (655.0 * scale) as u32];
-        let texture = watch_display::render_to_texture(
-            &mut self.watch_renderer,
-            &self.watch.display,
-            size,
-            ctx,
-        );
+        let texture =
+            watch_display::render_to_texture(&mut self.watch_renderer, &svg_display, size, ctx);
         let aspect = 1480.0 / 1311.0;
         let w = size[0] as f32;
         let h = w / aspect;
 
         // Allocate the image rect so we can map clicks to SVG button hotspots.
-        let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(w, h), egui::Sense::click());
+        let (rect, _response) = ui.allocate_exact_size(egui::Vec2::new(w, h), egui::Sense::click());
         ui.painter().image(
             texture.id(),
             rect,
@@ -868,87 +950,147 @@ impl StudioApp {
             egui::Color32::WHITE,
         );
 
-        // Map a click position (in image space) to the F-91W buttons.
-        // SVG viewBox is 1480x1311; buttons are circles at known centers.
-        if let Some(pos) = response.interact_pointer_pos() {
-            if response.clicked() {
-                let svg_x = (pos.x - rect.min.x) / rect.width() * 1480.0;
-                let svg_y = (pos.y - rect.min.y) / rect.height() * 1311.0;
-                let hit = |cx: f32, cy: f32, r: f32| {
-                    let dx = svg_x - cx;
-                    let dy = svg_y - cy;
-                    dx * dx + dy * dy <= r * r
-                };
-                if hit(1355.0, 811.0, 125.0) {
-                    self.watch.button_a(true);
-                } else if hit(125.0, 813.0, 125.0) {
-                    self.watch.button_c(true);
-                } else if hit(125.0, 511.0, 125.0) {
-                    self.watch.button_l(true);
-                }
-            }
-        }
+        // Determine which button is being held. Use the GLOBAL pointer state so
+        // holding stays active even if the pointer drifts off the small widget.
+        // The held button locks on press and only clears when the mouse is
+        // fully released.
+        let pointer_down = ui.input(|i| i.pointer.primary_down());
+        let pointer_pos = ui.input(|i| i.pointer.interact_pos());
 
-        // Release held buttons when the pointer leaves the image.
-        if !response.hovered() {
-            self.watch.button_l(false);
-            self.watch.button_a(false);
-        }
-
-        // Buttons: arranged to mirror the physical F-91W layout (L top-left,
-        // C bottom-left, A right). Hold the button to keep it pressed; release
-        // when the mouse is released. Each shows its current action.
-        let (menu_desc, l_desc, c_desc, a_desc) = self.watch.instructions();
+        // Buttons: mirror the physical F-91W layout (L top-left, C bottom-left,
+        // A right). Each press fires exactly once on the press edge.
         ui.add_space(8.0);
-        ui.label(format!("Mode: {menu_desc}"));
-        ui.add_space(4.0);
         egui::Grid::new("sim_buttons")
             .spacing([16.0, 4.0])
             .num_columns(3)
+            .min_col_width(170.0)
             .show(ui, |ui| {
                 // Header.
                 ui.strong("L (top-left)");
                 ui.strong("C (bottom-left)");
                 ui.strong("A (right)");
                 ui.end_row();
-                // Hold-to-press buttons.
-                let l = ui.add(egui::Button::new("Hold").min_size(egui::vec2(80.0, 40.0)));
-                let c = ui.add(egui::Button::new("Hold").min_size(egui::vec2(80.0, 40.0)));
-                let a = ui.add(egui::Button::new("Hold").min_size(egui::vec2(80.0, 40.0)));
-                // Press while held, release on release.
-                self.watch.button_l(l.is_pointer_button_down_on());
-                self.watch.button_c(c.is_pointer_button_down_on());
-                self.watch.button_a(a.is_pointer_button_down_on());
-                // A button: toggle 12/24 on a clean click (fires exactly once).
-                if a.clicked() {
-                    self.watch.toggle_time_mode();
+                // Custom-drawn clickable regions (never grey out while held).
+                let l = sim_hold_button(ui, "Hold");
+                let c = sim_hold_button(ui, "Hold");
+                let a = sim_hold_button(ui, "Hold");
+
+                // Determine which button is under the pointer right now.
+                let mut under = None;
+                if pointer_down {
+                    if let Some(pos) = pointer_pos {
+                        // On-watch SVG hotspots.
+                        if rect.contains(pos) {
+                            let svg_x = (pos.x - rect.min.x) / rect.width() * 1480.0;
+                            let svg_y = (pos.y - rect.min.y) / rect.height() * 1311.0;
+                            let is_hit = |cx: f32, cy: f32, r: f32| {
+                                let dx = svg_x - cx;
+                                let dy = svg_y - cy;
+                                dx * dx + dy * dy <= r * r
+                            };
+                            if is_hit(1355.0, 811.0, 125.0) {
+                                under = Some(ButtonId::A);
+                            } else if is_hit(125.0, 813.0, 125.0) {
+                                under = Some(ButtonId::C);
+                            } else if is_hit(125.0, 511.0, 125.0) {
+                                under = Some(ButtonId::L);
+                            }
+                        }
+                        // Hold buttons.
+                        if under.is_none() {
+                            if l.rect.contains(pos) {
+                                under = Some(ButtonId::L);
+                            } else if c.rect.contains(pos) {
+                                under = Some(ButtonId::C);
+                            } else if a.rect.contains(pos) {
+                                under = Some(ButtonId::A);
+                            }
+                        }
+                    }
                 }
-                // C button also cycles through the preset's watch faces.
-                if c.clicked() {
+
+                // Lock onto the first button pressed; keep it held until the
+                // mouse is fully released.
+                if pointer_down {
+                    if self.held_button.is_none() {
+                        self.held_button = under;
+                    }
+                } else {
+                    self.held_button = None;
+                }
+                let l_down = self.held_button == Some(ButtonId::L);
+                let c_down = self.held_button == Some(ButtonId::C);
+                let a_down = self.held_button == Some(ButtonId::A);
+
+                let l_act = handle_sim_button(
+                    l_down,
+                    &mut self.btn_l_down,
+                    &mut self.btn_l_hold,
+                    self.sim_dt,
+                );
+                let c_act = handle_sim_button(
+                    c_down,
+                    &mut self.btn_c_down,
+                    &mut self.btn_c_hold,
+                    self.sim_dt,
+                );
+                let a_act = handle_sim_button(
+                    a_down,
+                    &mut self.btn_a_down,
+                    &mut self.btn_a_hold,
+                    self.sim_dt,
+                );
+                // L button: toggle the backlight while held, and act as the
+                // face's Light button on press.
+                match l_act {
+                    SimAction::Press => {
+                        self.watch.light = true;
+                        self.face_engine.press(face_sim::FaceButton::Light);
+                    }
+                    SimAction::Release => self.watch.light = false,
+                    SimAction::None => {}
+                }
+                // C button: cycle through the preset's watch faces on press.
+                if c_act == SimAction::Press {
                     let faces = self.presets.active_faces();
                     if !faces.is_empty() {
                         self.sim_face_idx = (self.sim_face_idx + 1) % faces.len();
-                        self.log
-                            .log(format!("Simulating face: {}", faces[self.sim_face_idx]));
+                        let name = faces[self.sim_face_idx].clone();
+                        self.log.log(format!("Simulating face: {name}"));
                     }
                 }
+                // A button: toggle 12/24 on a clean press, and act as the face's
+                // Alarm button on press.
+                if a_act == SimAction::Press {
+                    self.watch.toggle_time_mode();
+                    self.face_engine.press(face_sim::FaceButton::Alarm);
+                }
+                // A button: holding for ~1s shows the CASIO logo for as long as
+                // it's held; releasing returns to the time display.
+                if self.btn_a_down {
+                    if self.btn_a_hold >= 1.0 {
+                        self.watch.set_casio(true);
+                    }
+                } else {
+                    self.watch.set_casio(false);
+                }
                 ui.end_row();
-                // Instructions row.
-                ui.label(l_desc);
-                ui.label(c_desc);
-                ui.label(a_desc);
+                // Instructions row (fixed size so text changes don't shift layout).
+                ui.add_sized(egui::vec2(170.0, 40.0), egui::Label::new("Backlight"));
+                ui.add_sized(
+                    egui::vec2(170.0, 40.0),
+                    egui::Label::new("Cycle watch face"),
+                );
+                ui.add_sized(
+                    egui::vec2(170.0, 40.0),
+                    egui::Label::new("12/24 hour\nHold for CASIO"),
+                );
                 ui.end_row();
             });
 
         ui.add_space(8.0);
-        ui.label(format!(
-            "Menu: {:?}  Action: {:?}",
-            self.watch.active_menu, self.watch.active_action
-        ));
-        ui.label(format!(
-            "Time mode: {:?}  Alarm: {}  Signal: {}",
-            self.watch.time_mode, self.watch.alarm_on_mark, self.watch.time_signal_on_mark
-        ));
+        ui.label(format!("Time mode: {:?}", self.watch.time_mode));
+        ui.label(format!("Light: {}", self.watch.light));
 
         // Request a repaint so the clock ticks.
         ctx.request_repaint();
@@ -1745,4 +1887,51 @@ fn parse_hex_color(s: &str) -> Option<egui::Color32> {
         ((v >> 8) & 0xFF) as u8,
         (v & 0xFF) as u8,
     ))
+}
+
+/// Edge-detects a simulator button and returns the action to apply.
+///
+/// - Fires `Press` exactly once on the press edge.
+/// - Fires `Release` once on the release edge.
+/// - While held, `hold` accumulates elapsed seconds (used for hold features
+///   like the CASIO display). It does NOT auto-repeat.
+fn handle_sim_button(is_down: bool, down: &mut bool, hold: &mut f32, dt: f32) -> SimAction {
+    if is_down && !*down {
+        // Press edge: fire once.
+        *down = true;
+        *hold = 0.0;
+        SimAction::Press
+    } else if !is_down && *down {
+        // Release edge.
+        *down = false;
+        *hold = 0.0;
+        SimAction::Release
+    } else if is_down {
+        // Held: accumulate hold time (no auto-repeat).
+        *hold += dt;
+        SimAction::None
+    } else {
+        SimAction::None
+    }
+}
+
+/// Draws a fixed-style clickable region that never changes appearance while
+/// held (unlike `egui::Button`, which greys out / depresses on press).
+fn sim_hold_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let desired = egui::vec2(80.0, 40.0);
+    let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::click());
+    if ui.is_rect_visible(rect) {
+        let visuals = ui.visuals();
+        let fill = visuals.widgets.inactive.bg_fill;
+        let stroke = visuals.widgets.inactive.bg_stroke;
+        ui.painter().rect(rect, 4.0, fill, stroke);
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            egui::FontId::proportional(14.0),
+            visuals.text_color(),
+        );
+    }
+    response
 }
