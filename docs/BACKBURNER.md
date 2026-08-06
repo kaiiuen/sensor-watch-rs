@@ -124,17 +124,7 @@ a PC. This is a prerequisite for clock calibration and for the companion app.
 
 ---
 
-## 11. BLE / Companion Connectivity
-
-Bluetooth Low Energy connectivity for configuration and data transfer with a
-phone or computer.
-
-**Status:** Backburner. The Sensor Watch hardware does not include BLE; it would
-require an external module on the 9-pin connector.
-
----
-
-## 12. Benchmarks, Fuzzing, and Structured Logging
+## 11. Benchmarks, Fuzzing, and Structured Logging
 
 - Performance benchmarks for interrupt latency and power consumption.
 - Fuzz testing for button events and RTC input.
