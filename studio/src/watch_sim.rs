@@ -348,6 +348,7 @@ impl CasioF91W {
     }
 
     /// Returns (weekday, day, hours, minutes, seconds) for a timestamp.
+    /// Day is the true day-of-month computed from the civil calendar.
     fn date_time_parts(&self, t: i64) -> (String, u32, u32, u32, u32) {
         let days = t.div_euclid(86400);
         let secs = t.rem_euclid(86400);
@@ -357,14 +358,14 @@ impl CasioF91W {
         // Day of week: 1970-01-01 was a Thursday.
         let dow = ((days + 4).rem_euclid(7)) as u32; // 0=Sun
         let weekday = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"][dow as usize];
-        // Approximate day of month (not exact, but fine for a sim).
-        let day = ((days % 31) + 1) as u32;
+        let day = civil_day_of_month(days);
         (weekday.to_string(), day, hours, minutes, seconds)
     }
 
-    /// Returns the month (1-12) for a timestamp (approximate).
-    fn month(&self, _t: i64) -> u32 {
-        1
+    /// Returns the month (1-12) for a timestamp, from the civil calendar.
+    fn month(&self, t: i64) -> u32 {
+        let days = t.div_euclid(86400);
+        civil_month(days)
     }
 
     /// Applies the 12/24 hour display conversion.
@@ -527,10 +528,122 @@ impl CasioF91W {
             }
         }
     }
+
+    /// Returns the current instructions for each button, mirroring the online
+    /// simulator's dynamic instructions.
+    pub fn instructions(&self) -> (String, String, String, String) {
+        let (menu, l, c, a) = match self.active_menu {
+            Menu::DateTime => (
+                "Regular time keeping",
+                "Backlight",
+                "Switch to daily alarm",
+                if self.time_mode == TimeMode::H24 {
+                    "Switch to 12-hour\nHold for a surprise..."
+                } else {
+                    "Switch to 24-hour\nHold for a surprise..."
+                },
+            ),
+            Menu::DailyAlarm => {
+                let l = match self.active_action {
+                    Action::Default => "Set alarm hour",
+                    Action::EditHours => "Set alarm minutes\nBacklight",
+                    Action::EditMinutes => "Exit alarm setting\nBacklight",
+                    _ => "Backlight",
+                };
+                let a = match self.active_action {
+                    Action::Default => match (self.alarm_on_mark, self.time_signal_on_mark) {
+                        (true, true) => "Turn OFF alarm + signal",
+                        (true, false) => "Turn OFF alarm, ON signal",
+                        (false, true) => "Turn ON alarm",
+                        (false, false) => "Turn ON signal",
+                    },
+                    Action::EditHours => "Increment hours\nHold to speed up",
+                    Action::EditMinutes => "Increment minutes\nHold to speed up",
+                    _ => "",
+                };
+                ("Daily alarm", l, "Switch to stopwatch", a)
+            }
+            Menu::Stopwatch => {
+                let l = if self.stopwatch_running {
+                    if self.stopwatch_split.is_some() {
+                        "Reset split\nBacklight"
+                    } else {
+                        "Record split\nBacklight"
+                    }
+                } else if self.stopwatch_split.is_some() {
+                    "Reset split\nBacklight"
+                } else {
+                    "Reset stopwatch\nBacklight"
+                };
+                let a = if self.stopwatch_running {
+                    "Stop stopwatch"
+                } else {
+                    "Start stopwatch"
+                };
+                ("Stopwatch", l, "Switch to time/calendar setting", a)
+            }
+            Menu::SetDateTime => {
+                let l = match self.active_action {
+                    Action::Default => "Set minutes\nBacklight",
+                    Action::EditMinutes => "Set hours\nBacklight",
+                    Action::EditHours => "Set month\nBacklight",
+                    Action::EditMonth => "Set date\nBacklight",
+                    Action::EditDayNumber => "Set seconds\nBacklight",
+                    _ => "Backlight",
+                };
+                let a = match self.active_action {
+                    Action::Default => "Increment seconds\nHold to speed up",
+                    Action::EditMinutes => "Increment minutes\nHold to speed up",
+                    Action::EditHours => "Increment hours\nHold to speed up",
+                    Action::EditMonth => "Increment month\nHold to speed up",
+                    Action::EditDayNumber => "Increment date\nHold to speed up",
+                    _ => "",
+                };
+                (
+                    "Time/calendar setting",
+                    l,
+                    "Switch to regular time keeping",
+                    a,
+                )
+            }
+        };
+        (
+            menu.to_string(),
+            l.to_string(),
+            c.to_string(),
+            a.to_string(),
+        )
+    }
 }
 
 impl Default for CasioF91W {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Converts a count of days since the Unix epoch into a civil (year, month, day).
+/// Uses Howard Hinnant's `civil_from_days` algorithm.
+pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32; // [1, 12]
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
+}
+
+/// Day of month (1-31) for a day count since the Unix epoch.
+fn civil_day_of_month(days: i64) -> u32 {
+    civil_from_days(days).2
+}
+
+/// Month (1-12) for a day count since the Unix epoch.
+fn civil_month(days: i64) -> u32 {
+    civil_from_days(days).1
 }

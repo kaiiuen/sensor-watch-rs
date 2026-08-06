@@ -136,6 +136,11 @@ fn element_opacity(id: &str, d: &Display) -> Option<f32> {
         Some((d, s)) if s.len() == 1 => (d, s),
         _ => return None,
     };
+    // Only treat as a segment if the suffix is a real segment letter (A-I).
+    // This ignores group ids like "mode_2_2" so the whole display isn't hidden.
+    if !matches!(segment, "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I") {
+        return None;
+    }
     let c = match display_id {
         "mode_2" => d.mode_2,
         "mode_1" => d.mode_1,
