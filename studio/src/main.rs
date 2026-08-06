@@ -10,8 +10,12 @@ mod debug;
 mod editor;
 mod faces;
 mod i18n;
+mod ntp;
 mod presets;
+mod settings;
+mod sysstats;
 mod theme;
+mod watch_config;
 mod watch_display;
 mod watch_sim;
 
@@ -51,8 +55,6 @@ struct StudioApp {
     watch_renderer: watch_display::WatchRenderer,
     /// The simulator display scale (0.5 - 2.0).
     sim_scale: f32,
-    /// The simulator scale used in the Watch Faces panel (defaults smaller).
-    faces_sim_scale: f32,
     /// The watch-face preset manager.
     presets: PresetManager,
     /// The currently selected face in the catalog.
@@ -67,6 +69,24 @@ struct StudioApp {
     editor_source: String,
     /// The selected editor template.
     editor_template: usize,
+    /// The selected NTP server index.
+    ntp_server: usize,
+    /// The NTP-derived UTC time (seconds since epoch), if fetched.
+    ntp_time: Option<u64>,
+    /// The NTP ping latency in ms.
+    ntp_ping: f64,
+    /// The NTP clock offset in seconds.
+    ntp_offset: f64,
+    /// Whether an NTP query is in flight.
+    ntp_busy: bool,
+    /// The handle to the background NTP query.
+    pending_ntp: Option<std::thread::JoinHandle<Result<ntp::NtpResult, String>>>,
+    /// The watch configuration (mirrors the firmware Settings register).
+    watch_config: watch_config::WatchConfig,
+    /// The latest system resource snapshot for the footer.
+    sys_stats: sysstats::SysStats,
+    /// The receiver for background system resource samples.
+    sys_rx: std::sync::mpsc::Receiver<sysstats::SysStats>,
 }
 
 /// The navigation panels.
@@ -114,8 +134,7 @@ impl Default for StudioApp {
             watch: CasioF91W::new(),
             sim_last_tick: std::time::Instant::now(),
             watch_renderer: watch_display::WatchRenderer::new(),
-            sim_scale: 1.0,
-            faces_sim_scale: 0.5,
+            sim_scale: 0.5,
             presets: PresetManager::new(),
             selected_face: None,
             selected_preset_face: None,
@@ -123,6 +142,15 @@ impl Default for StudioApp {
             editor_name: String::new(),
             editor_source: String::new(),
             editor_template: 0,
+            ntp_server: 0,
+            ntp_time: None,
+            ntp_ping: 0.0,
+            ntp_offset: 0.0,
+            ntp_busy: false,
+            pending_ntp: None,
+            watch_config: watch_config::WatchConfig::default(),
+            sys_stats: sysstats::SysStats::default(),
+            sys_rx: sysstats::spawn_sampler(),
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -171,6 +199,36 @@ impl eframe::App for StudioApp {
             }
         }
 
+        // If an NTP query finished, collect its result.
+        if let Some(handle) = self.pending_ntp.take() {
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(Ok(result)) => {
+                        self.ntp_busy = false;
+                        self.ntp_time = Some(result.unix_seconds);
+                        self.ntp_ping = result.ping_ms;
+                        self.ntp_offset = result.offset_secs;
+                        self.status = "NTP time fetched".to_string();
+                        self.log.log(format!(
+                            "NTP time: {} (ping {:.1} ms)",
+                            result.unix_seconds, result.ping_ms
+                        ));
+                    }
+                    Ok(Err(e)) => {
+                        self.ntp_busy = false;
+                        self.status = format!("NTP error: {e}");
+                        self.log.log(format!("NTP error: {e}"));
+                    }
+                    Err(_) => {
+                        self.ntp_busy = false;
+                        self.status = "NTP thread panicked".to_string();
+                    }
+                }
+            } else {
+                self.pending_ntp = Some(handle);
+            }
+        }
+
         // Top navigation bar.
         egui::TopBottomPanel::top("nav").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -198,7 +256,25 @@ impl eframe::App for StudioApp {
 
         // Status bar at the bottom.
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            // Drain any pending system resource samples.
+            while let Ok(s) = self.sys_rx.try_recv() {
+                self.sys_stats = s;
+            }
             ui.horizontal(|ui| {
+                // Watch project stats (based on the selected faces in the preset).
+                let selected = self.presets.active_faces().len();
+                ui.label("Watch:");
+                ui.monospace(format!("{selected} faces selected"));
+                ui.separator();
+                ui.monospace(format!("~{} KB flash", self.estimate_flash_kb(selected)));
+                ui.separator();
+                ui.monospace(format!("~{} KB RAM", self.estimate_ram_kb(selected)));
+                ui.separator();
+                ui.monospace(format!(
+                    "~{} KB compiled",
+                    self.estimate_compiled_kb(selected)
+                ));
+                ui.separator();
                 ui.label(&self.status);
             });
         });
@@ -218,10 +294,37 @@ impl eframe::App for StudioApp {
 }
 
 impl StudioApp {
-    /// The dashboard: an overview of the project and its health.
+    /// The dashboard: an overview of the project, health, and NTP time.
     fn dashboard(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr(self.language, Key::Dashboard));
         ui.separator();
+
+        // Current date/time from the OS, used to sync the watch face.
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let days = now.div_euclid(86400);
+        let secs = now.rem_euclid(86400);
+        let h = (secs / 3600) % 24;
+        let m = (secs / 60) % 60;
+        let s = secs % 60;
+        let dow = ((days + 4).rem_euclid(7)) as usize;
+        let weekday = [
+            "Sunday",
+            "Monday",
+            "Tuesday",
+            "Wednesday",
+            "Thursday",
+            "Friday",
+            "Saturday",
+        ][dow];
+        let (year, month, day) = watch_sim::civil_from_days(days);
+        ui.monospace(format!(
+            "{weekday}, {year:04}-{month:02}-{day:02}  {h:02}:{m:02}:{s:02}"
+        ));
+        ui.add_space(8.0);
+
         ui.label(tr(self.language, Key::Target));
         ui.label(
             tr(self.language, Key::FlashRam).replace("{faces}", &self.face_list.len().to_string()),
@@ -234,11 +337,72 @@ impl StudioApp {
         } else {
             ui.label(tr(self.language, Key::NoBuildYet));
         }
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("NTP Time");
+        ui.label("Select a server and fetch the current time.");
+        ui.add_space(4.0);
+
+        // Server selection.
+        ui.horizontal(|ui| {
+            ui.label("Server:");
+            egui::ComboBox::from_id_source("ntp_server")
+                .selected_text(ntp::SERVERS[self.ntp_server].0)
+                .show_ui(ui, |ui| {
+                    for (i, (name, _)) in ntp::SERVERS.iter().enumerate() {
+                        ui.selectable_value(&mut self.ntp_server, i, *name);
+                    }
+                });
+            if ui.button("Fetch time").clicked() {
+                self.fetch_ntp();
+            }
+        });
+
+        // Show the fetched time.
+        if let Some(ts) = self.ntp_time {
+            let secs = ts as i64;
+            let days = secs.div_euclid(86400);
+            let rem = secs.rem_euclid(86400);
+            let h = (rem / 3600) % 24;
+            let m = (rem / 60) % 60;
+            let s = rem % 60;
+            // Day of week: 1970-01-01 was Thursday.
+            let dow = ((days + 4).rem_euclid(7)) as usize;
+            let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][dow];
+            ui.add_space(8.0);
+            ui.monospace(format!(
+                "{weekday}  {:02}:{:02}:{:02} UTC   (ping {:.1} ms, offset {:+.2} ms)",
+                h,
+                m,
+                s,
+                self.ntp_ping,
+                self.ntp_offset * 1000.0
+            ));
+        } else if self.ntp_busy {
+            ui.add_space(8.0);
+            ui.spinner();
+            ui.label("Fetching...");
+        } else {
+            ui.add_space(8.0);
+            ui.weak("No time fetched yet.");
+        }
     }
 
-    /// The watch-faces panel: split layout with the simulator, catalog, and
-    /// the active preset, plus preset management sub-tabs.
-    fn faces(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+    /// Fetches the current time from the selected NTP server on a background thread.
+    fn fetch_ntp(&mut self) {
+        if self.ntp_busy {
+            return;
+        }
+        self.ntp_busy = true;
+        let server = ntp::SERVERS[self.ntp_server].1.to_string();
+        let handle = std::thread::spawn(move || ntp::query_ntp(&server));
+        self.pending_ntp = Some(handle);
+    }
+
+    /// The watch-faces panel: catalog (left) and active preset (right), both
+    /// as spreadsheets, plus preset management sub-tabs.
+    fn faces(&mut self, ui: &mut egui::Ui, _ctx: &egui::Context) {
         ui.heading(tr(self.language, Key::WatchFaces));
         ui.separator();
 
@@ -274,16 +438,7 @@ impl StudioApp {
         });
         ui.separator();
 
-        // Split horizontally: simulator on the bottom (resizable), catalog+preset on top.
-        egui::TopBottomPanel::bottom("sim")
-            .resizable(true)
-            .default_height(ui.available_height() * 0.35)
-            .min_height(100.0)
-            .show_inside(ui, |ui| {
-                self.faces_simulator(ui, ctx);
-            });
-
-        // Top half: catalog (left) and active preset (right), both filling space.
+        // Catalog (left) and active preset (right), both filling space.
         egui::SidePanel::left("catalog")
             .resizable(true)
             .default_width(ui.available_width() * 0.45)
@@ -294,18 +449,31 @@ impl StudioApp {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        for (i, face) in self.face_list.iter().enumerate() {
-                            let selected = self.selected_face == Some(i);
-                            if ui
-                                .selectable_label(
-                                    selected,
-                                    format!("{} — {}", face.index, face.name),
-                                )
-                                .clicked()
-                            {
-                                self.selected_face = Some(i);
-                            }
-                        }
+                        // Spreadsheet-style grid: # | Face | Add.
+                        egui::Grid::new("catalog_grid")
+                            .striped(true)
+                            .spacing([12.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.strong("#");
+                                ui.strong("Face");
+                                ui.strong("Add");
+                                ui.end_row();
+                                for (i, face) in self.face_list.iter().enumerate() {
+                                    let selected = self.selected_face == Some(i);
+                                    if ui
+                                        .selectable_label(selected, face.index.to_string())
+                                        .clicked()
+                                    {
+                                        self.selected_face = Some(i);
+                                    }
+                                    ui.label(&face.name);
+                                    if ui.small_button("+").clicked() {
+                                        self.presets.add_face(&face.name);
+                                        self.log.log(format!("Added {} to preset", face.name));
+                                    }
+                                    ui.end_row();
+                                }
+                            });
                     });
             });
 
@@ -360,25 +528,6 @@ impl StudioApp {
                         });
                 });
         });
-    }
-
-    /// The simulator used inside the Watch Faces panel (smaller default scale).
-    fn faces_simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
-        ui.horizontal(|ui| {
-            ui.heading("Simulator");
-            ui.separator();
-            ui.label("Size:");
-            ui.add(
-                egui::Slider::new(&mut self.faces_sim_scale, 0.3..=1.5)
-                    .step_by(0.05)
-                    .suffix("x"),
-            );
-            if ui.button("Reset").clicked() {
-                self.faces_sim_scale = 0.5;
-            }
-        });
-        ui.separator();
-        self.draw_watch(ui, ctx, self.faces_sim_scale);
     }
 
     /// The editor panel: create, edit, or delete watch faces.
@@ -529,16 +678,26 @@ impl StudioApp {
             .show(ui, |ui| {
                 if self.log.is_empty() {
                     ui.label("(empty)");
+                    return;
                 }
-                for entry in self.log.entries() {
-                    let secs = entry.timestamp % 60;
-                    let mins = (entry.timestamp / 60) % 60;
-                    let hrs = (entry.timestamp / 3600) % 24;
-                    ui.monospace(format!(
-                        "[{:02}:{:02}:{:02}] {}",
-                        hrs, mins, secs, entry.message
-                    ));
-                }
+                // Spreadsheet-style: time in one column, message in the other.
+                egui::Grid::new("debug_grid")
+                    .striped(true)
+                    .spacing([16.0, 2.0])
+                    .num_columns(2)
+                    .show(ui, |ui| {
+                        ui.strong("Time");
+                        ui.strong("Message");
+                        ui.end_row();
+                        for entry in self.log.entries() {
+                            let secs = entry.timestamp % 60;
+                            let mins = (entry.timestamp / 60) % 60;
+                            let hrs = (entry.timestamp / 3600) % 24;
+                            ui.monospace(format!("{hrs:02}:{mins:02}:{secs:02}"));
+                            ui.monospace(&entry.message);
+                            ui.end_row();
+                        }
+                    });
             });
     }
 
@@ -555,14 +714,14 @@ impl StudioApp {
                     .suffix("x"),
             );
             if ui.button("Reset").clicked() {
-                self.sim_scale = 1.0;
+                self.sim_scale = 0.5;
             }
         });
         ui.separator();
         self.draw_watch(ui, ctx, self.sim_scale);
     }
 
-    /// Draws the watch SVG at the given scale and the control buttons.
+    /// Draws the watch SVG at the given scale with clickable F-91W button hotspots.
     fn draw_watch(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, scale: f32) {
         // Advance the stopwatch and button-A hold timer based on elapsed time.
         let now = std::time::Instant::now();
@@ -587,29 +746,74 @@ impl StudioApp {
         let aspect = 1480.0 / 1311.0;
         let w = size[0] as f32;
         let h = w / aspect;
-        ui.image((texture.id(), egui::Vec2::new(w, h)));
 
-        // Buttons.
+        // Allocate the image rect so we can map clicks to SVG button hotspots.
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(w, h), egui::Sense::click());
+        ui.painter().image(
+            texture.id(),
+            rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
+
+        // Map a click position (in image space) to the F-91W buttons.
+        // SVG viewBox is 1480x1311; buttons are circles at known centers.
+        if let Some(pos) = response.interact_pointer_pos() {
+            if response.clicked() {
+                let svg_x = (pos.x - rect.min.x) / rect.width() * 1480.0;
+                let svg_y = (pos.y - rect.min.y) / rect.height() * 1311.0;
+                let hit = |cx: f32, cy: f32, r: f32| {
+                    let dx = svg_x - cx;
+                    let dy = svg_y - cy;
+                    dx * dx + dy * dy <= r * r
+                };
+                if hit(1355.0, 811.0, 125.0) {
+                    self.watch.button_a(true);
+                } else if hit(125.0, 813.0, 125.0) {
+                    self.watch.button_c(true);
+                } else if hit(125.0, 511.0, 125.0) {
+                    self.watch.button_l(true);
+                }
+            }
+        }
+
+        // Release held buttons when the pointer leaves the image.
+        if !response.hovered() {
+            self.watch.button_l(false);
+            self.watch.button_a(false);
+        }
+
+        // Buttons: arranged to mirror the physical F-91W layout (L top-left,
+        // C bottom-left, A right). Hold the button to keep it pressed; release
+        // when the mouse is released. Each shows its current action.
+        let (menu_desc, l_desc, c_desc, a_desc) = self.watch.instructions();
         ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            if ui.button("L (light)").clicked() {
-                self.watch.button_l(true);
-            }
-            if ui.button("C (mode)").clicked() {
-                self.watch.button_c(true);
-            }
-            if ui.button("A (adjust)").clicked() {
-                self.watch.button_a(true);
-            }
-        });
-        ui.horizontal(|ui| {
-            if ui.button("Release L").clicked() {
-                self.watch.button_l(false);
-            }
-            if ui.button("Release A").clicked() {
-                self.watch.button_a(false);
-            }
-        });
+        ui.label(format!("Mode: {menu_desc}"));
+        ui.add_space(4.0);
+        egui::Grid::new("sim_buttons")
+            .spacing([16.0, 4.0])
+            .num_columns(3)
+            .show(ui, |ui| {
+                // Header.
+                ui.strong("L (top-left)");
+                ui.strong("C (bottom-left)");
+                ui.strong("A (right)");
+                ui.end_row();
+                // Hold-to-press buttons.
+                let l = ui.add(egui::Button::new("Hold").min_size(egui::vec2(80.0, 40.0)));
+                let c = ui.add(egui::Button::new("Hold").min_size(egui::vec2(80.0, 40.0)));
+                let a = ui.add(egui::Button::new("Hold").min_size(egui::vec2(80.0, 40.0)));
+                // Press while held, release on release.
+                self.watch.button_l(l.is_pointer_button_down_on());
+                self.watch.button_c(c.is_pointer_button_down_on());
+                self.watch.button_a(a.is_pointer_button_down_on());
+                ui.end_row();
+                // Instructions row.
+                ui.label(l_desc);
+                ui.label(c_desc);
+                ui.label(a_desc);
+                ui.end_row();
+            });
 
         ui.add_space(8.0);
         ui.label(format!(
@@ -629,38 +833,394 @@ impl StudioApp {
     fn settings(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr(self.language, Key::Settings));
         ui.separator();
+
+        // The settings panel is long, so wrap everything in a scroll area that
+        // shows scrollbars automatically when content overflows.
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.settings_body(ui);
+            });
+    }
+
+    /// The scrollable body of the settings panel.
+    fn settings_body(&mut self, ui: &mut egui::Ui) {
         ui.label(tr(self.language, Key::ConfigureApp));
         ui.add_space(8.0);
 
-        // Language selector.
-        ui.label(tr(self.language, Key::Language));
-        for lang in Language::ALL {
-            if ui
-                .selectable_label(self.language == lang, lang.name())
-                .clicked()
-            {
-                self.language = lang;
-                self.log.log(format!("Language set to {}", lang.name()));
-            }
-        }
+        // Spreadsheet-style layout: label on the left, config on the right.
+        egui::Grid::new("settings_grid")
+            .striped(true)
+            .spacing([24.0, 8.0])
+            .num_columns(2)
+            .show(ui, |ui| {
+                // Language.
+                ui.label(tr(self.language, Key::Language));
+                ui.horizontal(|ui| {
+                    for lang in Language::ALL {
+                        if ui
+                            .selectable_label(self.language == lang, lang.name())
+                            .clicked()
+                        {
+                            self.language = lang;
+                            self.log.log(format!("Language set to {}", lang.name()));
+                        }
+                    }
+                });
+                ui.end_row();
 
+                // Theme.
+                ui.label(tr(self.language, Key::Theme));
+                ui.horizontal(|ui| {
+                    for theme in Theme::ALL {
+                        if ui
+                            .selectable_label(self.theme == theme, theme.name())
+                            .clicked()
+                        {
+                            self.theme = theme;
+                            self.log.log(format!("Theme set to {}", theme.name()));
+                        }
+                    }
+                });
+                ui.end_row();
+
+                // Firmware project path.
+                ui.label(tr(self.language, Key::FirmwareProject));
+                ui.monospace(build::FIRMWARE_DIR);
+                ui.end_row();
+            });
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Watch Settings");
+        ui.label("Configure the watch firmware (mirrors the on-watch preferences face).");
+        ui.add_space(8.0);
+        egui::Grid::new("watch_settings_grid")
+            .striped(true)
+            .spacing([24.0, 6.0])
+            .num_columns(2)
+            .show(ui, |ui| {
+                // Clock mode.
+                ui.label("Clock mode");
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(self.watch_config.clock_mode_24h, "24-hour")
+                        .clicked()
+                    {
+                        self.watch_config.clock_mode_24h = true;
+                    }
+                    if ui
+                        .selectable_label(!self.watch_config.clock_mode_24h, "12-hour")
+                        .clicked()
+                    {
+                        self.watch_config.clock_mode_24h = false;
+                    }
+                });
+                ui.end_row();
+
+                // Leading zero in 24h mode.
+                ui.label("24h leading zero");
+                ui.checkbox(&mut self.watch_config.clock_24h_leading_zero, "");
+                ui.end_row();
+
+                // Show seconds.
+                ui.label("Show seconds");
+                ui.checkbox(&mut self.watch_config.show_seconds, "");
+                ui.end_row();
+
+                // Button sound.
+                ui.label("Button sound");
+                ui.checkbox(&mut self.watch_config.button_should_sound, "");
+                ui.end_row();
+
+                // Button volume.
+                ui.label("Button volume");
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(!self.watch_config.button_volume, "Soft")
+                        .clicked()
+                    {
+                        self.watch_config.button_volume = false;
+                    }
+                    if ui
+                        .selectable_label(self.watch_config.button_volume, "Loud")
+                        .clicked()
+                    {
+                        self.watch_config.button_volume = true;
+                    }
+                });
+                ui.end_row();
+
+                // Signal volume.
+                ui.label("Signal volume");
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(!self.watch_config.signal_volume, "Soft")
+                        .clicked()
+                    {
+                        self.watch_config.signal_volume = false;
+                    }
+                    if ui
+                        .selectable_label(self.watch_config.signal_volume, "Loud")
+                        .clicked()
+                    {
+                        self.watch_config.signal_volume = true;
+                    }
+                });
+                ui.end_row();
+
+                // Alarm volume.
+                ui.label("Alarm volume");
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(!self.watch_config.alarm_volume, "Soft")
+                        .clicked()
+                    {
+                        self.watch_config.alarm_volume = false;
+                    }
+                    if ui
+                        .selectable_label(self.watch_config.alarm_volume, "Loud")
+                        .clicked()
+                    {
+                        self.watch_config.alarm_volume = true;
+                    }
+                });
+                ui.end_row();
+
+                // LED duration.
+                ui.label("LED duration");
+                ui.horizontal(|ui| {
+                    ui.add(egui::Slider::new(
+                        &mut self.watch_config.led_duration,
+                        0..=7,
+                    ));
+                    ui.label(match self.watch_config.led_duration {
+                        0 => "(only while pressed)".to_string(),
+                        7 => "(off)".to_string(),
+                        d => format!("({} seconds)", d * 2 - 1),
+                    });
+                });
+                ui.end_row();
+
+                // LED red color.
+                ui.label("LED red color");
+                ui.add(egui::Slider::new(
+                    &mut self.watch_config.led_red_color,
+                    0..=15,
+                ));
+                ui.end_row();
+
+                // LED green color.
+                ui.label("LED green color");
+                ui.add(egui::Slider::new(
+                    &mut self.watch_config.led_green_color,
+                    0..=15,
+                ));
+                ui.end_row();
+
+                // Timeout interval.
+                ui.label("Timeout interval");
+                ui.horizontal(|ui| {
+                    ui.add(egui::Slider::new(&mut self.watch_config.to_interval, 0..=3));
+                    ui.label(match self.watch_config.to_interval {
+                        0 => "(60 sec)".to_string(),
+                        1 => "(2 min)".to_string(),
+                        2 => "(5 min)".to_string(),
+                        _ => "(30 min)".to_string(),
+                    });
+                });
+                ui.end_row();
+
+                // Low energy interval.
+                ui.label("Low energy interval");
+                ui.horizontal(|ui| {
+                    ui.add(egui::Slider::new(&mut self.watch_config.le_interval, 0..=7));
+                    ui.label(match self.watch_config.le_interval {
+                        0 => "(never)".to_string(),
+                        1 => "(10 min)".to_string(),
+                        2 => "(1 hour)".to_string(),
+                        3 => "(2 hour)".to_string(),
+                        4 => "(6 hour)".to_string(),
+                        5 => "(12 hr)".to_string(),
+                        6 => "(1 day)".to_string(),
+                        _ => "(7 day)".to_string(),
+                    });
+                });
+                ui.end_row();
+
+                // Imperial units.
+                ui.label("Imperial units");
+                ui.checkbox(&mut self.watch_config.use_imperial_units, "");
+                ui.end_row();
+
+                // Time zone.
+                ui.label("Time zone");
+                ui.horizontal(|ui| {
+                    ui.add(egui::Slider::new(&mut self.watch_config.time_zone, 0..=40));
+                    let off = watch_config::TIMEZONE_OFFSETS
+                        .get(self.watch_config.time_zone as usize)
+                        .copied()
+                        .unwrap_or(0);
+                    let sign = if off < 0 { '-' } else { '+' };
+                    let abs = off.unsigned_abs();
+                    ui.label(format!("UTC{sign}{:02}:{:02}", abs / 60, abs % 60));
+                });
+                ui.end_row();
+
+                // Alarm enabled.
+                ui.label("Alarm enabled");
+                ui.checkbox(&mut self.watch_config.alarm_enabled, "");
+                ui.end_row();
+            });
+
+        // Show the packed firmware settings register.
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            ui.label("Packed settings register:");
+            ui.monospace(format!("0x{:08X}", self.watch_config.to_reg()));
+            if ui.button("Copy").clicked() {
+                let _ = ui_copy_to_clipboard(&format!("0x{:08X}", self.watch_config.to_reg()));
+                self.status = "Settings register copied to clipboard".to_string();
+                self.log.log("Settings register copied to clipboard");
+            }
+            if ui.button("Paste").clicked() {
+                if let Ok(text) = ui_paste_from_clipboard() {
+                    let trimmed = text.trim().trim_start_matches("0x");
+                    if let Ok(reg) = u32::from_str_radix(trimmed, 16) {
+                        self.watch_config = watch_config::WatchConfig::from_reg(reg);
+                        self.status = "Settings register imported".to_string();
+                        self.log.log("Settings register imported");
+                    } else {
+                        self.status = "Invalid register value in clipboard".to_string();
+                    }
+                }
+            }
+        });
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("App Resource Usage");
+        ui.label("How much of the system this app is currently using (updates every second).");
         ui.add_space(8.0);
 
-        // Theme selector.
-        ui.label(tr(self.language, Key::Theme));
-        for theme in Theme::ALL {
-            if ui
-                .selectable_label(self.theme == theme, theme.name())
-                .clicked()
-            {
-                self.theme = theme;
-                self.log.log(format!("Theme set to {}", theme.name()));
-            }
-        }
+        // Side-by-side: App on the left, System on the right, as a plain grid.
+        egui::Grid::new("app_resources_grid")
+            .striped(true)
+            .spacing([40.0, 6.0])
+            .num_columns(4)
+            .show(ui, |ui| {
+                // Headers.
+                ui.strong("App");
+                ui.label("");
+                ui.strong("System");
+                ui.label("");
+                ui.end_row();
 
+                // CPU.
+                ui.label("CPU");
+                ui.monospace(format!("{:.1}%", self.sys_stats.cpu_percent));
+                ui.label("CPU");
+                ui.monospace(format!("{:.1}%", self.sys_stats.sys_cpu_percent));
+                ui.end_row();
+
+                // CPU speed / cores.
+                ui.label("CPU speed");
+                ui.monospace(format!("{} MHz", self.sys_stats.cpu_freq_mhz));
+                ui.label("Cores");
+                ui.monospace(format!("{}", self.sys_stats.physical_cores));
+                ui.end_row();
+
+                // Threads.
+                ui.label("Threads");
+                ui.monospace(format!("{}", self.sys_stats.threads));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+
+                // Memory.
+                ui.label("Memory");
+                ui.monospace(fmt_bytes(self.sys_stats.mem_bytes));
+                ui.label("Memory");
+                let total = self.sys_stats.total_mem_bytes.max(1);
+                let pct = self.sys_stats.sys_mem_used_bytes as f64 / total as f64 * 100.0;
+                ui.monospace(format!(
+                    "{} / {} ({pct:.1}%)",
+                    fmt_bytes(self.sys_stats.sys_mem_used_bytes),
+                    fmt_bytes(self.sys_stats.total_mem_bytes)
+                ));
+                ui.end_row();
+
+                // Virtual memory.
+                ui.label("Virtual memory");
+                ui.monospace(fmt_bytes(self.sys_stats.virtual_mem_bytes));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+
+                // Disk read.
+                ui.label("Disk read");
+                ui.monospace(format!(
+                    "{}  ({} total)",
+                    fmt_bytes(self.sys_stats.disk_read_rate),
+                    fmt_bytes(self.sys_stats.disk_read_bytes)
+                ));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+
+                // Disk write.
+                ui.label("Disk write");
+                ui.monospace(format!(
+                    "{}  ({} total)",
+                    fmt_bytes(self.sys_stats.disk_write_rate),
+                    fmt_bytes(self.sys_stats.disk_write_bytes)
+                ));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+
+                // Network.
+                ui.label("");
+                ui.label("");
+                ui.label("Network");
+                ui.monospace(format!(
+                    "↓ {}  ↑ {}",
+                    fmt_bytes(self.sys_stats.sys_net_rx_rate),
+                    fmt_bytes(self.sys_stats.sys_net_tx_rate)
+                ));
+                ui.end_row();
+
+                // Run time.
+                ui.label("Run time");
+                ui.monospace(format!("{} s", self.sys_stats.run_time_secs));
+                ui.label("");
+                ui.label("");
+                ui.end_row();
+
+                // GPU.
+                ui.label("GPU");
+                ui.monospace("N/A (Windows)");
+                ui.label("GPU");
+                ui.monospace("N/A (Windows)");
+                ui.end_row();
+            });
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Settings Data");
+        ui.label("Save, export, or import your settings, presets, and configuration.");
         ui.add_space(8.0);
-        ui.label(tr(self.language, Key::FirmwareProject));
-        ui.label(build::FIRMWARE_DIR);
+        ui.horizontal(|ui| {
+            if ui.button("Save settings to file").clicked() {
+                self.save_settings_to_file();
+            }
+            if ui.button("Export settings JSON").clicked() {
+                self.export_settings();
+            }
+            if ui.button("Import settings JSON").clicked() {
+                self.import_settings();
+            }
+        });
 
         ui.add_space(16.0);
         ui.separator();
@@ -669,6 +1229,130 @@ impl StudioApp {
         if ui.button("Export source").clicked() {
             self.export_source();
         }
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Credits");
+        ui.label("This project builds on the work of several open-source projects:");
+        ui.add_space(8.0);
+        egui::Grid::new("credits_grid")
+            .striped(true)
+            .spacing([16.0, 6.0])
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label("Sensor Watch");
+                ui.label("The original C firmware and hardware platform by Joey Castillo.");
+                ui.end_row();
+                ui.label("Movement");
+                ui.label("The original watch-face framework (part of Sensor Watch).");
+                ui.end_row();
+                ui.label("Second Movement");
+                ui.label("The rewritten C framework with persistent settings and wear-leveling.");
+                ui.end_row();
+                ui.label("Casio F-91W simulator");
+                ui.label(
+                    "Online F-91W replica by Alexis Philip (alexisphilip.fr), used for the SVG.",
+                );
+                ui.end_row();
+                ui.label("egui / eframe");
+                ui.label("The Rust GUI framework used for this app.");
+                ui.end_row();
+                ui.label("resvg / usvg");
+                ui.label("SVG rendering libraries used to draw the watch face.");
+                ui.end_row();
+            });
+    }
+
+    /// Saves the current settings to a JSON file in the app data directory.
+    fn save_settings_to_file(&mut self) {
+        let settings = settings::AppSettings::capture(
+            self.language,
+            self.theme,
+            &self.presets,
+            self.ntp_server,
+            self.sim_scale,
+            &self.watch_config,
+        );
+        match settings.to_json() {
+            Ok(json) => {
+                let path = std::path::Path::new("settings.json");
+                match std::fs::write(path, json) {
+                    Ok(_) => {
+                        self.status = format!("Settings saved to {}", path.display());
+                        self.log
+                            .log(format!("Settings saved to {}", path.display()));
+                    }
+                    Err(e) => {
+                        self.status = format!("Failed to save settings: {e}");
+                        self.log.log(format!("Failed to save settings: {e}"));
+                    }
+                }
+            }
+            Err(e) => {
+                self.status = format!("Failed to serialize settings: {e}");
+                self.log.log(format!("Failed to serialize settings: {e}"));
+            }
+        }
+    }
+
+    /// Exports the settings JSON to the clipboard.
+    fn export_settings(&mut self) {
+        let settings = settings::AppSettings::capture(
+            self.language,
+            self.theme,
+            &self.presets,
+            self.ntp_server,
+            self.sim_scale,
+            &self.watch_config,
+        );
+        match settings.to_json() {
+            Ok(json) => {
+                self.status = "Settings JSON copied to clipboard".to_string();
+                self.log.log("Settings JSON copied to clipboard");
+                let _ = ui_copy_to_clipboard(&json);
+            }
+            Err(e) => {
+                self.status = format!("Failed to serialize settings: {e}");
+                self.log.log(format!("Failed to serialize settings: {e}"));
+            }
+        }
+    }
+
+    /// Imports settings from a JSON file in the app data directory.
+    fn import_settings(&mut self) {
+        let path = std::path::Path::new("settings.json");
+        match std::fs::read_to_string(path) {
+            Ok(json) => match settings::AppSettings::from_json(&json) {
+                Ok(s) => {
+                    self.apply_settings(s);
+                    self.status = format!("Settings imported from {}", path.display());
+                    self.log
+                        .log(format!("Settings imported from {}", path.display()));
+                }
+                Err(e) => {
+                    self.status = format!("Failed to parse settings: {e}");
+                    self.log.log(format!("Failed to parse settings: {e}"));
+                }
+            },
+            Err(e) => {
+                self.status = format!("Failed to read settings: {e}");
+                self.log.log(format!("Failed to read settings: {e}"));
+            }
+        }
+    }
+
+    /// Applies imported settings to the app state.
+    fn apply_settings(&mut self, s: settings::AppSettings) {
+        if let Some(lang) = Language::ALL.iter().find(|l| l.name() == s.language) {
+            self.language = *lang;
+        }
+        if let Some(theme) = Theme::ALL.iter().find(|t| t.name() == s.theme) {
+            self.theme = *theme;
+        }
+        self.presets = s.presets;
+        self.ntp_server = s.ntp_server;
+        self.sim_scale = s.sim_scale;
+        self.watch_config = s.watch_config;
     }
 
     /// Exports the source code to a folder.
@@ -722,6 +1406,41 @@ impl StudioApp {
         self.status = "Watch not found (is it in bootloader mode?)".to_string();
         self.log.log("Watch not found (is it in bootloader mode?)");
     }
+
+    /// Rough estimate of the firmware flash size in KB for the selected faces.
+    /// The watch OS/framework baseline is ~40 KB; each face adds ~2 KB.
+    fn estimate_flash_kb(&self, selected: usize) -> u32 {
+        40 + (selected as u32) * 2
+    }
+
+    /// Rough estimate of the firmware RAM usage in KB for the selected faces.
+    /// The OS baseline is ~4 KB; each face adds ~0.4 KB.
+    fn estimate_ram_kb(&self, selected: usize) -> u32 {
+        4 + (selected as u32) / 2
+    }
+
+    /// Rough estimate of the compiled .uf2 size in KB for the selected faces.
+    fn estimate_compiled_kb(&self, selected: usize) -> u32 {
+        // UF2 adds ~512-byte headers; estimate flash + 10% overhead.
+        self.estimate_flash_kb(selected) + self.estimate_flash_kb(selected) / 10
+    }
+}
+
+/// Formats a byte count into a human-readable string.
+fn fmt_bytes(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    const GB: f64 = MB * 1024.0;
+    let b = bytes as f64;
+    if b >= GB {
+        format!("{:.1} GB", b / GB)
+    } else if b >= MB {
+        format!("{:.1} MB", b / MB)
+    } else if b >= KB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{b} B")
+    }
 }
 
 fn main() -> eframe::Result<()> {
@@ -756,4 +1475,18 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()>
         }
     }
     Ok(())
+}
+
+/// Copies text to the system clipboard (best-effort).
+fn ui_copy_to_clipboard(text: &str) -> Result<(), String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard
+        .set_text(text.to_string())
+        .map_err(|e| e.to_string())
+}
+
+/// Reads text from the system clipboard (best-effort).
+fn ui_paste_from_clipboard() -> Result<String, String> {
+    let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
+    clipboard.get_text().map_err(|e| e.to_string())
 }
