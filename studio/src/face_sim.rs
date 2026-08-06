@@ -241,6 +241,9 @@ impl FaceEngine {
             "BTN   ", "LED   ", "BUZZER", "ACCEL ", "CPU   ", "RAM   ", "STORAG", "BENCH ",
         ];
 
+        // Blank the display first so unused positions are spaces, not NUL.
+        d.chars = [' '; 10];
+
         // Breadcrumb: positions 0-1 = depth, 2-3 = face index.
         let depth = if self.diag_screen == 10 {
             0
