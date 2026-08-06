@@ -6,8 +6,10 @@
 
 use std::collections::VecDeque;
 
+use serde::{Deserialize, Serialize};
+
 /// A single watch-face preset.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Preset {
     /// The preset name.
     pub name: String,
@@ -16,6 +18,7 @@ pub struct Preset {
 }
 
 /// The preset manager.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PresetManager {
     /// All presets.
     pub presets: Vec<Preset>,
