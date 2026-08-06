@@ -13,6 +13,12 @@ rewrite in Rust.
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, test, and contribute, including how to add a new watch face. |
 | [BACKBURNER.md](BACKBURNER.md) | Ideas captured for later: companion app, clock calibration, drift, raise-to-wake, BACKUP mode. |
 
+## Companion app
+
+The `studio/` directory contains **Firmware Studio**, the GUI companion app
+(editor, debugger, assembler). See [`studio/README.md`](../studio/README.md) for
+its panels, features, and dependencies.
+
 ## Quick orientation
 
 - **`src/watch/`** — the hardware abstraction layer (HAL). One module per
