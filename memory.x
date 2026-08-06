@@ -17,9 +17,9 @@ MEMORY
  * CPU running during the write. The startup code copies them from FLASH to RAM
  * before main runs.
  *
- * `INSERT AFTER .data` places the `.ramfunc` LMA (load address in flash) after
- * the main code sections (`.text`, `.rodata`, `.data`), so it does not overlap
- * the vector table at the flash origin. */
+ * `INSERT AFTER .bss` places the `.ramfunc` LMA (load address in flash) after
+ * the main code sections (`.text`, `.rodata`, `.data`, `.bss`), so it does not
+ * overlap the vector table at the flash origin. */
 SECTIONS
 {
   .ramfunc : ALIGN(4)
@@ -31,4 +31,4 @@ SECTIONS
 
   /* LMA (load address) of the .ramfunc section, for the startup copy. */
   __sramfunc_lma = LOADADDR(.ramfunc);
-} INSERT AFTER .data;
+} INSERT AFTER .bss;
