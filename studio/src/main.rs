@@ -7,9 +7,11 @@
 
 mod build;
 mod debug;
+mod drift;
 mod editor;
 mod face_sim;
 mod faces;
+mod fuzz;
 mod i18n;
 mod ntp;
 mod presets;
@@ -116,6 +118,10 @@ struct StudioApp {
     face_engine: face_sim::FaceEngine,
     /// Accumulator for advancing the face state once per second.
     face_tick_accum: f32,
+    /// The drift calibration session.
+    drift_session: drift::DriftSession,
+    /// The number of fuzz iterations to run.
+    fuzz_iterations: usize,
 }
 
 /// The navigation panels.
@@ -214,6 +220,8 @@ impl Default for StudioApp {
             held_button: None,
             face_engine: face_sim::FaceEngine::new("SIMPLE_CLOCK"),
             face_tick_accum: 0.0,
+            drift_session: drift::DriftSession::new(),
+            fuzz_iterations: 5000,
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -450,6 +458,130 @@ impl StudioApp {
             ui.add_space(8.0);
             ui.weak("No time fetched yet.");
         }
+
+        // Clock calibration: compute the next-minute-boundary timestamp from the
+        // NTP time and generate a `settime` command for the serial shell.
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Clock Calibration");
+        ui.label(
+            "Generate a precise set-time command. The watch's serial shell accepts\n\
+             `settime YYMMDDHHMMSS`; send it at the exact minute boundary.",
+        );
+        ui.add_space(4.0);
+        if let Some(ts) = self.ntp_time {
+            // Compute the next minute boundary in UTC.
+            let boundary = (ts / 60 + 1) * 60;
+            let b = boundary as i64;
+            let days = b.div_euclid(86400);
+            let rem = b.rem_euclid(86400);
+            let h = (rem / 3600) % 24;
+            let m = (rem / 60) % 60;
+            let s = rem % 60;
+            let (year, month, day) = watch_sim::civil_from_days(days);
+            let yy = (year % 100) as u32;
+            let cmd = format!(
+                "settime {:02}{:02}{:02}{:02}{:02}{:02}",
+                yy, month, day, h, m, s
+            );
+            ui.monospace(format!(
+                "Next minute boundary: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                year, month, day, h, m, s
+            ));
+            ui.monospace(format!("Command: {cmd}"));
+            if ui.button("Copy command").clicked() {
+                let _ = ui_copy_to_clipboard(&cmd);
+                self.status = "Calibration command copied".to_string();
+                self.log.log(format!("Calibration command: {cmd}"));
+            }
+        } else {
+            ui.weak("Fetch NTP time first to generate a calibration command.");
+        }
+
+        // Drift calibration: measure the watch's drift against NTP over time.
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Drift Calibration");
+        ui.label(
+            "Measure the watch's crystal drift (PPM) by recording two samples\n\
+             (watch time vs NTP reference) some time apart.",
+        );
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            if ui.button("Record sample").clicked() {
+                if let Some(ts) = self.ntp_time {
+                    // Use the sim watch's live time as the "watch" reading.
+                    let (_, _, _, h, m, s, _) = self.watch.get_time();
+                    let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
+                    self.drift_session.record(watch_secs, ts);
+                    let n = if self.drift_session.start.is_some() {
+                        if self.drift_session.end.is_some() {
+                            "end".to_string()
+                        } else {
+                            "start".to_string()
+                        }
+                    } else {
+                        "start".to_string()
+                    };
+                    self.log.log(format!("Drift sample recorded ({n})"));
+                } else {
+                    self.status = "Fetch NTP time first".to_string();
+                }
+            }
+            if ui.button("Reset").clicked() {
+                self.drift_session.reset();
+                self.log.log("Drift session reset");
+            }
+        });
+        if self.drift_session.ppm != 0.0 {
+            ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
+            if self.drift_session.ppm.abs() < 0.5 {
+                ui.label("The watch is running accurately (within 0.5 ppm).");
+            } else if self.drift_session.ppm > 0.0 {
+                ui.label("The watch is running FAST; apply a negative correction.");
+            } else {
+                ui.label("The watch is running SLOW; apply a positive correction.");
+            }
+        } else if self.drift_session.start.is_some() {
+            ui.weak("Start sample recorded. Record a second sample later.");
+        } else {
+            ui.weak("No samples yet.");
+        }
+
+        // Fuzz testing: run randomized input through the face engine.
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Fuzz Testing");
+        ui.label("Run randomized button/tick sequences through a face to check stability.");
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Iterations:");
+            ui.add(egui::DragValue::new(&mut self.fuzz_iterations).clamp_range(100..=100_000));
+            if ui.button("Run fuzz").clicked() {
+                let faces = self.presets.active_faces();
+                let name = if faces.is_empty() {
+                    "SIMPLE_CLOCK".to_string()
+                } else {
+                    faces[self.sim_face_idx.min(faces.len() - 1)].clone()
+                };
+                let iters = self.fuzz_iterations;
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                match fuzz::fuzz_face(&name, iters, seed) {
+                    Ok(n) => {
+                        self.status = format!("Fuzz passed: {n} iterations on {name}");
+                        self.log
+                            .log(format!("Fuzz passed: {n} iterations on {name}"));
+                    }
+                    Err(e) => {
+                        self.status = format!("Fuzz failed: {e}");
+                        self.log.log(format!("Fuzz failed: {e}"));
+                    }
+                }
+            }
+        });
     }
 
     /// Fetches the current time from the selected NTP server on a background thread.
