@@ -51,6 +51,8 @@ struct StudioApp {
     watch_renderer: watch_display::WatchRenderer,
     /// The simulator display scale (0.5 - 2.0).
     sim_scale: f32,
+    /// The simulator scale used in the Watch Faces panel (defaults smaller).
+    faces_sim_scale: f32,
     /// The watch-face preset manager.
     presets: PresetManager,
     /// The currently selected face in the catalog.
@@ -113,6 +115,7 @@ impl Default for StudioApp {
             sim_last_tick: std::time::Instant::now(),
             watch_renderer: watch_display::WatchRenderer::new(),
             sim_scale: 1.0,
+            faces_sim_scale: 0.5,
             presets: PresetManager::new(),
             selected_face: None,
             selected_preset_face: None,
@@ -274,65 +277,108 @@ impl StudioApp {
         // Split horizontally: simulator on the bottom (resizable), catalog+preset on top.
         egui::TopBottomPanel::bottom("sim")
             .resizable(true)
-            .default_height(ui.available_height() * 0.4)
-            .min_height(120.0)
+            .default_height(ui.available_height() * 0.35)
+            .min_height(100.0)
             .show_inside(ui, |ui| {
-                self.simulator(ui, ctx);
+                self.faces_simulator(ui, ctx);
             });
 
-        // Top half: catalog (left) and active preset (right).
+        // Top half: catalog (left) and active preset (right), both filling space.
         egui::SidePanel::left("catalog")
             .resizable(true)
-            .default_width(ui.available_width() * 0.5)
+            .default_width(ui.available_width() * 0.45)
+            .width_range(180.0..=f32::INFINITY)
             .show_inside(ui, |ui| {
                 ui.heading("Catalog");
                 ui.separator();
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    for (i, face) in self.face_list.iter().enumerate() {
-                        let selected = self.selected_face == Some(i);
-                        if ui
-                            .selectable_label(selected, format!("{} — {}", face.index, face.name))
-                            .clicked()
-                        {
-                            self.selected_face = Some(i);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        for (i, face) in self.face_list.iter().enumerate() {
+                            let selected = self.selected_face == Some(i);
+                            if ui
+                                .selectable_label(
+                                    selected,
+                                    format!("{} — {}", face.index, face.name),
+                                )
+                                .clicked()
+                            {
+                                self.selected_face = Some(i);
+                            }
                         }
-                    }
-                });
+                    });
             });
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-            ui.heading("Active Preset");
-            ui.separator();
-            // Add selected catalog face to the preset.
-            if let Some(i) = self.selected_face {
-                let face = self.face_list[i].name.clone();
-                if ui.button(format!("Add {face} to preset")).clicked() {
-                    self.presets.add_face(&face);
-                    self.log.log(format!("Added {face} to preset"));
-                }
-            }
-            ui.add_space(4.0);
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                let faces = self.presets.active_faces();
-                for (i, face) in faces.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        let selected = self.selected_preset_face == Some(i);
-                        if ui.selectable_label(selected, face).clicked() {
-                            self.selected_preset_face = Some(i);
-                        }
-                        if ui.small_button("Up").clicked() {
-                            self.presets.move_face_up(i);
-                        }
-                        if ui.small_button("Dn").clicked() {
-                            self.presets.move_face_down(i);
-                        }
-                        if ui.small_button("Del").clicked() {
-                            self.presets.remove_face(i);
-                        }
-                    });
+            ui.horizontal(|ui| {
+                ui.heading("Active Preset");
+                ui.separator();
+                // Add selected catalog face to the preset.
+                if let Some(i) = self.selected_face {
+                    let face = self.face_list[i].name.clone();
+                    if ui.button(format!("Add {face}")).clicked() {
+                        self.presets.add_face(&face);
+                        self.log.log(format!("Added {face} to preset"));
+                    }
                 }
             });
+            ui.separator();
+            // Spreadsheet-style grid: # | Face | Up | Dn | Del.
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    egui::Grid::new("preset_grid")
+                        .striped(true)
+                        .spacing([12.0, 4.0])
+                        .show(ui, |ui| {
+                            // Header row.
+                            ui.strong("#");
+                            ui.strong("Face");
+                            ui.strong("Up");
+                            ui.strong("Dn");
+                            ui.strong("Del");
+                            ui.end_row();
+
+                            let faces = self.presets.active_faces();
+                            for (i, face) in faces.iter().enumerate() {
+                                let selected = self.selected_preset_face == Some(i);
+                                if ui.selectable_label(selected, (i + 1).to_string()).clicked() {
+                                    self.selected_preset_face = Some(i);
+                                }
+                                ui.label(face);
+                                if ui.small_button("Up").clicked() {
+                                    self.presets.move_face_up(i);
+                                }
+                                if ui.small_button("Dn").clicked() {
+                                    self.presets.move_face_down(i);
+                                }
+                                if ui.small_button("Del").clicked() {
+                                    self.presets.remove_face(i);
+                                }
+                                ui.end_row();
+                            }
+                        });
+                });
         });
+    }
+
+    /// The simulator used inside the Watch Faces panel (smaller default scale).
+    fn faces_simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.horizontal(|ui| {
+            ui.heading("Simulator");
+            ui.separator();
+            ui.label("Size:");
+            ui.add(
+                egui::Slider::new(&mut self.faces_sim_scale, 0.3..=1.5)
+                    .step_by(0.05)
+                    .suffix("x"),
+            );
+            if ui.button("Reset").clicked() {
+                self.faces_sim_scale = 0.5;
+            }
+        });
+        ui.separator();
+        self.draw_watch(ui, ctx, self.faces_sim_scale);
     }
 
     /// The editor panel: create, edit, or delete watch faces.
@@ -513,7 +559,11 @@ impl StudioApp {
             }
         });
         ui.separator();
+        self.draw_watch(ui, ctx, self.sim_scale);
+    }
 
+    /// Draws the watch SVG at the given scale and the control buttons.
+    fn draw_watch(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, scale: f32) {
         // Advance the stopwatch and button-A hold timer based on elapsed time.
         let now = std::time::Instant::now();
         let dt = now.duration_since(self.sim_last_tick);
@@ -527,10 +577,7 @@ impl StudioApp {
 
         // Render the watch SVG at a size based on the scale.
         let base = 740u32;
-        let size = [
-            (base as f32 * self.sim_scale) as u32,
-            (655.0 * self.sim_scale) as u32,
-        ];
+        let size = [(base as f32 * scale) as u32, (655.0 * scale) as u32];
         let texture = watch_display::render_to_texture(
             &mut self.watch_renderer,
             &self.watch.display,
