@@ -3,8 +3,6 @@
 //! Provides templates and editing support for creating and modifying watch
 //! faces. The editor works on the firmware's `src/movement/` source files.
 
-use std::path::Path;
-
 /// A template for a new watch face.
 pub struct Template {
     pub name: &'static str,
@@ -52,7 +50,7 @@ pub fn generate_face(name: &str, template: &Template) -> String {
 
 /// The path to a face's source file.
 pub fn face_path(name: &str) -> std::path::PathBuf {
-    Path::new(crate::build::FIRMWARE_DIR)
+    crate::build::firmware_dir()
         .join("src/movement")
         .join(format!("{name}.rs"))
 }

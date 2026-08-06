@@ -7,8 +7,33 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-/// The path to the firmware project (relative to the app's workspace root).
-pub const FIRMWARE_DIR: &str = ".";
+/// Resolves the firmware project directory.
+///
+/// The app can be run from anywhere (e.g. double-clicking the exe in
+/// `target/release/`), so we resolve the firmware project relative to the
+/// executable's location rather than the current working directory. We walk up
+/// from the exe until we find a directory containing `Cargo.toml` with the
+/// `sensor-watch` package (the workspace root).
+pub fn firmware_dir() -> PathBuf {
+    // Start from the directory containing the executable.
+    let mut dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    // Walk up looking for the workspace root (contains Cargo.toml).
+    loop {
+        let cargo = dir.join("Cargo.toml");
+        if cargo.exists() {
+            return dir;
+        }
+        if !dir.pop() {
+            break;
+        }
+    }
+    // Fall back to the CWD.
+    PathBuf::from(".")
+}
 
 /// The embedded target triple.
 pub const TARGET: &str = "thumbv6m-none-eabi";
@@ -23,7 +48,7 @@ pub struct BuildResult {
 /// Runs the full firmware build: cargo build, extract the raw binary, and
 /// convert it to a `.uf2` file.
 pub fn build_firmware() -> BuildResult {
-    let firmware_dir = Path::new(FIRMWARE_DIR);
+    let fw_dir = firmware_dir();
 
     // 1. Build the firmware in release mode.
     let status = Command::new("cargo")
@@ -31,7 +56,7 @@ pub fn build_firmware() -> BuildResult {
         .arg("--release")
         .arg("--target")
         .arg(TARGET)
-        .current_dir(firmware_dir)
+        .current_dir(&fw_dir)
         .status();
     match status {
         Ok(s) if s.success() => {}
@@ -52,9 +77,9 @@ pub fn build_firmware() -> BuildResult {
     }
 
     // 2. Locate the ELF and the raw binary.
-    let elf = firmware_dir.join(format!("target/{TARGET}/release/sensor-watch"));
-    let bin = firmware_dir.join(format!("target/{TARGET}/release/sensor-watch.bin"));
-    let uf2 = firmware_dir.join(format!("target/{TARGET}/release/sensor-watch.uf2"));
+    let elf = fw_dir.join(format!("target/{TARGET}/release/sensor-watch"));
+    let bin = fw_dir.join(format!("target/{TARGET}/release/sensor-watch.bin"));
+    let uf2 = fw_dir.join(format!("target/{TARGET}/release/sensor-watch.uf2"));
 
     // 3. Extract the raw binary with rust-objcopy.
     let objcopy = find_objcopy();
@@ -139,7 +164,7 @@ fn find_objcopy() -> Option<PathBuf> {
 
 /// Returns the path to the last-built `.uf2` file, if it exists.
 pub fn last_uf2() -> Option<PathBuf> {
-    let p = Path::new(FIRMWARE_DIR).join(format!("target/{TARGET}/release/sensor-watch.uf2"));
+    let p = firmware_dir().join(format!("target/{TARGET}/release/sensor-watch.uf2"));
     if p.exists() {
         Some(p)
     } else {

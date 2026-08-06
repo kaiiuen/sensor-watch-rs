@@ -3,8 +3,6 @@
 //! Scans the firmware source to enumerate the registered watch faces. This
 //! gives the Watch Faces panel a live list of faces to enable/disable/reorder.
 
-use std::path::Path;
-
 /// A discovered watch face.
 pub struct FaceInfo {
     pub index: usize,
@@ -17,7 +15,7 @@ pub struct FaceInfo {
 /// lines in `src/movement/mod.rs` to build the face list.
 pub fn discover_faces() -> Vec<FaceInfo> {
     let mut faces = Vec::new();
-    let path = Path::new(crate::build::FIRMWARE_DIR).join("src/movement/mod.rs");
+    let path = crate::build::firmware_dir().join("src/movement/mod.rs");
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
         Err(_) => return faces,
