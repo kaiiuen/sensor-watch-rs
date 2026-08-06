@@ -29,6 +29,12 @@ embedded-hal = "0.2"
 libm = "0.2"
 critical-section = "1.2.0"
 
+# flip-link places the stack at the bottom of RAM so a stack overflow triggers
+# an immediate hard fault instead of silently corrupting data. It is used as the
+# linker (see .cargo/config.toml) and must be installed as a build dependency.
+[build-dependencies]
+flip-link = "0.1"
+
 [profile.dev]
 opt-level = 1
 
