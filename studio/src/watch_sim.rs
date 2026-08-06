@@ -80,6 +80,9 @@ pub struct CasioF91W {
     /// Whether a button is held (for repeat).
     pub button_a_held: bool,
     pub button_a_repeat_timer: u32,
+    /// Optional weekday override (0=Sun..6=Sat). When None, the weekday is
+    /// derived from the date.
+    pub weekday_override: Option<u32>,
 }
 
 impl CasioF91W {
@@ -101,6 +104,7 @@ impl CasioF91W {
             display: Display::default(),
             button_a_held: false,
             button_a_repeat_timer: 0,
+            weekday_override: None,
         }
     }
 
@@ -111,6 +115,19 @@ impl CasioF91W {
             .map(|d| d.as_secs() as i64)
             .unwrap_or(0);
         base + self.time_offset
+    }
+
+    /// Sets the watch's displayed date/time to the given civil date.
+    /// The weekday is derived from the date; `time_offset` is adjusted so the
+    /// simulated clock shows exactly this date/time.
+    pub fn set_datetime(&mut self, year: i32, month: u32, day: u32, hour: u32, minute: u32) {
+        let days = days_from_civil(year, month, day);
+        let target = days * 86400 + (hour as i64) * 3600 + (minute as i64) * 60;
+        let base = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        self.time_offset = target - base;
     }
 
     /// Returns the current milliseconds within the second.
@@ -356,8 +373,10 @@ impl CasioF91W {
         let minutes = ((secs % 3600) / 60) as u32;
         let seconds = (secs % 60) as u32;
         // Day of week: 1970-01-01 was a Thursday.
-        let dow = ((days + 4).rem_euclid(7)) as u32; // 0=Sun
-        let weekday = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"][dow as usize];
+        let dow = self
+            .weekday_override
+            .unwrap_or_else(|| ((days + 4).rem_euclid(7)) as u32); // 0=Sun
+        let weekday = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"][(dow % 7) as usize];
         let day = civil_day_of_month(days);
         (weekday.to_string(), day, hours, minutes, seconds)
     }
@@ -445,19 +464,12 @@ impl CasioF91W {
     pub fn button_a(&mut self, is_down: bool) {
         match self.active_menu {
             Menu::DateTime => {
+                // Track the hold state for the 3-second CASIO display; the
+                // actual 12/24 toggle is handled by `toggle_time_mode()` on a
+                // clean click (see main.rs) so it fires exactly once.
+                self.button_a_held = is_down;
                 if is_down {
-                    self.button_a_held = true;
                     self.button_a_repeat_timer = 0;
-                } else {
-                    if self.button_a_held {
-                        // Short press: toggle time mode.
-                        self.time_mode = match self.time_mode {
-                            TimeMode::H24 => TimeMode::H12,
-                            TimeMode::H12 => TimeMode::H24,
-                        };
-                    }
-                    self.button_a_held = false;
-                    self.active_action = Action::Default;
                 }
             }
             Menu::DailyAlarm => {
@@ -526,6 +538,18 @@ impl CasioF91W {
                 // ~3 seconds at 20ms ticks: show CASIO.
                 self.active_action = Action::Casio;
             }
+        }
+    }
+
+    /// Toggles the 12/24 hour mode. Called exactly once per clean click so it
+    /// never flickers or double-fires.
+    pub fn toggle_time_mode(&mut self) {
+        if self.active_menu == Menu::DateTime {
+            self.time_mode = match self.time_mode {
+                TimeMode::H24 => TimeMode::H12,
+                TimeMode::H12 => TimeMode::H24,
+            };
+            self.active_action = Action::Default;
         }
     }
 
@@ -646,4 +670,16 @@ fn civil_day_of_month(days: i64) -> u32 {
 /// Month (1-12) for a day count since the Unix epoch.
 fn civil_month(days: i64) -> u32 {
     civil_from_days(days).1
+}
+
+/// Converts a civil (year, month, day) into a count of days since the Unix
+/// epoch. Inverse of `civil_from_days` (Howard Hinnant's algorithm).
+fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = (y - era * 400) as u64; // [0, 399]
+    let mp = (m + 9) % 12; // [0, 11]
+    let doy = (153 * mp as u64 + 2) / 5 + (d as u64 - 1); // [0, 365]
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+    (era as i64 * 146097 + doe as i64 - 719_468) as i64
 }
