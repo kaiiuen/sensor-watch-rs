@@ -69,9 +69,16 @@ See [`studio/README.md`](studio/README.md) for details.
 
 Prerequisites:
 
-- Rust stable with the `thumbv6m-none-eabi` target:
+- Rust stable with the `thumbv6m-none-eabi` target (the toolchain is pinned in
+  `rust-toolchain.toml`, so `rustup` installs it automatically):
   ```
   rustup target add thumbv6m-none-eabi
+  ```
+- `flip-link` — used as the linker (see `.cargo/config.toml`) to place the
+  stack at the bottom of RAM so a stack overflow triggers an immediate hard
+  fault instead of silently corrupting data:
+  ```
+  cargo install flip-link
   ```
 
 Build (debug):
