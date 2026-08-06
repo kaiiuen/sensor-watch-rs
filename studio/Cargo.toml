@@ -16,3 +16,13 @@ usvg = "0.42"
 
 # Firmware logic (UF2 encoding, date math, settings) — reused from the firmware
 sensor-watch-core = { path = "../core" }
+
+# Settings save/export (serialization)
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# System clipboard for exporting settings JSON
+arboard = "3"
+
+# System resource usage (CPU, RAM, storage, network) for the footer
+sysinfo = { version = "0.35", features = ["network"] }
