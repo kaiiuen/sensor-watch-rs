@@ -94,6 +94,8 @@ pub struct FaceEngine {
     pub diag_test_active: bool,
     /// Whether the clock shows 24-hour time (false = 12-hour).
     pub time_mode_24: bool,
+    /// Power-on time in seconds (uptime), for the diagnostics stats.
+    pub power_on_seconds: u32,
 }
 
 impl FaceEngine {
@@ -115,6 +117,7 @@ impl FaceEngine {
             diag_prev_screen: 10,
             diag_test_active: false,
             time_mode_24: true,
+            power_on_seconds: 0,
         }
     }
 
@@ -171,7 +174,13 @@ impl FaceEngine {
                 if self.diag_screen == 10 {
                     self.diag_cursor = (self.diag_cursor + 1) % 10;
                 } else if matches!(self.diag_screen, 6 | 7 | 8 | 9) {
-                    let max = if self.diag_screen == 9 { 8 } else { 3 };
+                    let max = if self.diag_screen == 9 {
+                        8
+                    } else if self.diag_screen == 7 {
+                        4
+                    } else {
+                        3
+                    };
                     self.diag_subrow = (self.diag_subrow + 1) % max;
                 }
             }
@@ -194,6 +203,7 @@ impl FaceEngine {
 
     /// Advances the face state by one second (called on each tick).
     pub fn tick(&mut self) {
+        self.power_on_seconds = self.power_on_seconds.wrapping_add(1);
         let upper = self.face_name.to_uppercase();
         if upper.contains("STOPWATCH") && self.sw_running {
             self.sw_seconds = (self.sw_seconds + 1) % 3_600_000;
@@ -317,7 +327,18 @@ impl FaceEngine {
                 match self.diag_subrow {
                     0 => d.set_string("LIGHT  0000", 0),
                     1 => d.set_string("MODE   0000", 0),
-                    _ => d.set_string("BUZZER 0000", 0),
+                    2 => d.set_string("BUZZER 0000", 0),
+                    _ => {
+                        // Power-on time (uptime) as HHMMSS.
+                        let s = self.power_on_seconds;
+                        let h = s / 3600;
+                        let m = (s % 3600) / 60;
+                        let sec = s % 60;
+                        let (h2, h1) = two_digits(h % 100);
+                        let (m2, m1) = two_digits(m);
+                        let (s2, s1) = two_digits(sec);
+                        d.chars = ['P', 'W', 'R', ' ', h2, h1, m2, m1, s2, s1];
+                    }
                 }
             }
             8 => {
