@@ -514,6 +514,16 @@ impl eframe::App for StudioApp {
                 let size = ctx.screen_rect().size();
                 ui.monospace(format!("Window: {:.0}x{:.0}", size.x, size.y));
                 ui.separator();
+                // Error/warning counter that jumps to the Bugs tab.
+                let err_count = self.error_log.entries().len();
+                if ui
+                    .button(format!("Errors: {err_count}"))
+                    .on_hover_text("Open the Bugs tab to see recorded errors and warnings.")
+                    .clicked()
+                {
+                    self.current_panel = Panel::Bugs;
+                }
+                ui.separator();
                 ui.label(&self.status);
             });
         });
