@@ -30,6 +30,9 @@ pub struct AppSettings {
     pub watch_config: WatchConfig,
     /// The UI text size (0=small, 1=normal, 2=big).
     pub text_size: u8,
+    /// Persisted Watch Faces panel widths.
+    pub catalog_width: f32,
+    pub preset_height: f32,
 }
 
 impl AppSettings {
@@ -43,6 +46,8 @@ impl AppSettings {
         sim_scale: f32,
         watch_config: &WatchConfig,
         text_size: u8,
+        catalog_width: f32,
+        preset_height: f32,
     ) -> Self {
         AppSettings {
             language: language.name().to_string(),
@@ -53,6 +58,8 @@ impl AppSettings {
             sim_scale,
             watch_config: watch_config.clone(),
             text_size,
+            catalog_width,
+            preset_height,
         }
     }
 

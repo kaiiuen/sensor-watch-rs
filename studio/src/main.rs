@@ -143,6 +143,9 @@ struct StudioApp {
     stats_rate_shared: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The UI text size (0=small, 1=normal, 2=big).
     text_size: u8,
+    /// Persisted panel widths for the Watch Faces layout.
+    catalog_width: f32,
+    preset_height: f32,
     /// The timestamp of the last successful build.
     last_build_time: Option<u64>,
     /// The number of builds performed this session.
@@ -318,6 +321,8 @@ impl Default for StudioApp {
             stats_rate_shared: stats_rate_shared.clone(),
             sys_rx: sysstats::spawn_sampler(stats_rate_shared),
             text_size: 1,
+            catalog_width: 0.0,
+            preset_height: 0.0,
             last_build_time: None,
             build_count: 0,
             build_log: debug::DebugLog::new(),
@@ -1024,15 +1029,28 @@ impl StudioApp {
         ui.separator();
 
         // Left column: catalog (top) and active preset (bottom), stacked.
+        let default_catalog = if self.catalog_width > 0.0 {
+            self.catalog_width
+        } else {
+            ui.available_width() * 0.45
+        };
         egui::SidePanel::left("catalog")
             .resizable(true)
-            .default_width(ui.available_width() * 0.45)
+            .default_width(default_catalog)
             .width_range(180.0..=f32::INFINITY)
             .show_inside(ui, |ui| {
+                self.catalog_width = ui.available_width();
                 // Catalog on top.
+                let default_preset = if self.preset_height > 0.0 {
+                    self.preset_height
+                } else {
+                    ui.available_height() * 0.5
+                };
                 egui::TopBottomPanel::top("catalog_top")
                     .resizable(true)
+                    .default_height(default_preset)
                     .show_inside(ui, |ui| {
+                        self.preset_height = ui.available_height();
                         ui.heading("Catalog");
                         // Search box.
                         ui.horizontal(|ui| {
@@ -2584,6 +2602,8 @@ impl StudioApp {
             self.sim_scale,
             &self.watch_config,
             self.text_size,
+            self.catalog_width,
+            self.preset_height,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -2618,6 +2638,8 @@ impl StudioApp {
             self.sim_scale,
             &self.watch_config,
             self.text_size,
+            self.catalog_width,
+            self.preset_height,
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -2636,6 +2658,8 @@ impl StudioApp {
             self.sim_scale,
             &self.watch_config,
             self.text_size,
+            self.catalog_width,
+            self.preset_height,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -2687,6 +2711,8 @@ impl StudioApp {
         self.sim_scale = s.sim_scale;
         self.watch_config = s.watch_config;
         self.text_size = s.text_size;
+        self.catalog_width = s.catalog_width;
+        self.preset_height = s.preset_height;
         self.save_settings_internal();
     }
 
