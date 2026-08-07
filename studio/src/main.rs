@@ -141,6 +141,8 @@ struct StudioApp {
     stats_rate_ms: u64,
     /// Shared atomic for the sampler thread to read the live rate.
     stats_rate_shared: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// The UI text size (0=small, 1=normal, 2=big).
+    text_size: u8,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -251,6 +253,7 @@ impl Default for StudioApp {
             stats_rate_ms: 1000,
             stats_rate_shared: stats_rate_shared.clone(),
             sys_rx: sysstats::spawn_sampler(stats_rate_shared),
+            text_size: 1,
             catalog_search: String::new(),
             board: Board::Green,
             sim_face_idx: 0,
@@ -293,6 +296,38 @@ impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Apply the theme.
         self.theme.apply(ctx);
+
+        // Apply the text size (small/normal/big).
+        let scale = match self.text_size {
+            0 => 0.85,
+            2 => 1.2,
+            _ => 1.0,
+        };
+        ctx.set_pixels_per_point(ctx.pixels_per_point() * 1.0);
+        ctx.style_mut(|s| {
+            s.text_styles = std::collections::BTreeMap::from([
+                (
+                    egui::TextStyle::Small,
+                    egui::FontId::proportional(11.0 * scale),
+                ),
+                (
+                    egui::TextStyle::Body,
+                    egui::FontId::proportional(14.0 * scale),
+                ),
+                (
+                    egui::TextStyle::Button,
+                    egui::FontId::proportional(14.0 * scale),
+                ),
+                (
+                    egui::TextStyle::Heading,
+                    egui::FontId::proportional(20.0 * scale),
+                ),
+                (
+                    egui::TextStyle::Monospace,
+                    egui::FontId::monospace(13.0 * scale),
+                ),
+            ]);
+        });
 
         // Keep the UI animating even when the cursor leaves the window, so the
         // clock and sim keep running instead of freezing.
@@ -1874,6 +1909,18 @@ impl StudioApp {
                 });
                 ui.end_row();
 
+                // Text size.
+                ui.label("Text size");
+                ui.horizontal(|ui| {
+                    for (v, label) in [(0u8, "Small"), (1, "Normal"), (2, "Big")] {
+                        if ui.selectable_label(self.text_size == v, label).clicked() {
+                            self.text_size = v;
+                            self.log.log(format!("Text size set to {label}"));
+                        }
+                    }
+                });
+                ui.end_row();
+
                 // Firmware project path.
                 ui.label(tr(self.language, Key::FirmwareProject));
                 ui.monospace(build::firmware_dir().display().to_string());
@@ -2141,6 +2188,7 @@ impl StudioApp {
             &self.ntp_servers,
             self.sim_scale,
             &self.watch_config,
+            self.text_size,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -2174,6 +2222,7 @@ impl StudioApp {
             &self.ntp_servers,
             self.sim_scale,
             &self.watch_config,
+            self.text_size,
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -2191,6 +2240,7 @@ impl StudioApp {
             &self.ntp_servers,
             self.sim_scale,
             &self.watch_config,
+            self.text_size,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -2241,6 +2291,7 @@ impl StudioApp {
         self.ntp_servers = s.ntp_servers;
         self.sim_scale = s.sim_scale;
         self.watch_config = s.watch_config;
+        self.text_size = s.text_size;
         self.save_settings_internal();
     }
 

@@ -28,6 +28,8 @@ pub struct AppSettings {
     pub sim_scale: f32,
     /// The watch configuration.
     pub watch_config: WatchConfig,
+    /// The UI text size (0=small, 1=normal, 2=big).
+    pub text_size: u8,
 }
 
 impl AppSettings {
@@ -40,6 +42,7 @@ impl AppSettings {
         ntp_servers: &[(String, String)],
         sim_scale: f32,
         watch_config: &WatchConfig,
+        text_size: u8,
     ) -> Self {
         AppSettings {
             language: language.name().to_string(),
@@ -49,6 +52,7 @@ impl AppSettings {
             ntp_servers: ntp_servers.to_vec(),
             sim_scale,
             watch_config: watch_config.clone(),
+            text_size,
         }
     }
 
