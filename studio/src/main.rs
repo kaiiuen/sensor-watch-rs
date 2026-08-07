@@ -234,6 +234,7 @@ enum Panel {
     Simulator,
     Build,
     Flash,
+    Calibration,
     Debug,
     Bugs,
     Settings,
@@ -265,6 +266,7 @@ impl Panel {
             Panel::Build => tr(lang, Key::Build),
             Panel::Flash => tr(lang, Key::Flash),
             Panel::Debug => tr(lang, Key::DebugOutput),
+            Panel::Calibration => "Calibration",
             Panel::Bugs => "Bugs",
             Panel::Settings => tr(lang, Key::Settings),
         }
@@ -520,6 +522,7 @@ impl eframe::App for StudioApp {
                             Panel::Simulator,
                             Panel::Build,
                             Panel::Flash,
+                            Panel::Calibration,
                             Panel::Debug,
                             Panel::Bugs,
                             Panel::Settings,
@@ -586,6 +589,7 @@ impl eframe::App for StudioApp {
             Panel::Simulator => self.simulator(ui, ctx),
             Panel::Build => self.build(ui),
             Panel::Flash => self.flash(ui),
+            Panel::Calibration => self.calibration(ui),
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
             Panel::Settings => self.settings(ui),
@@ -1686,6 +1690,94 @@ impl StudioApp {
                     let mins = (entry.timestamp / 60) % 60;
                     let hrs = (entry.timestamp / 3600) % 24;
                     ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                }
+            });
+    }
+
+    /// The calibration panel: clock and drift calibration with a beep-on-minute
+    /// rollover helper.
+    fn calibration(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.heading("Calibration");
+                ui.separator();
+                ui.label(
+                    "Calibrate the watch's clock. Fetch the NTP time, then use the\n\
+                     beep-on-minute helper to set the watch precisely at the next\n\
+                     minute boundary.",
+                );
+                ui.add_space(8.0);
+
+                // NTP fetch.
+                ui.horizontal(|ui| {
+                    if ui.button("Fetch NTP time").clicked() {
+                        self.fetch_ntp();
+                    }
+                    if self.ntp_busy {
+                        ui.spinner();
+                    }
+                });
+                if let Some(ts) = self.ntp_time {
+                    let secs = ts as i64;
+                    let rem = secs.rem_euclid(86400);
+                    let h = (rem / 3600) % 24;
+                    let m = (rem / 60) % 60;
+                    let s = rem % 60;
+                    ui.monospace(format!("NTP time: {h:02}:{m:02}:{s:02} UTC"));
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.strong("Clock calibration");
+                if let Some(ts) = self.ntp_time {
+                    let boundary = (ts / 60 + 1) * 60;
+                    let b = boundary as i64;
+                    let rem = b.rem_euclid(86400);
+                    let h = (rem / 3600) % 24;
+                    let m = (rem / 60) % 60;
+                    let s = rem % 60;
+                    let days = b.div_euclid(86400);
+                    let (year, month, day) = watch_sim::civil_from_days(days);
+                    let yy = (year % 100) as u32;
+                    let cmd = format!(
+                        "settime {:02}{:02}{:02}{:02}{:02}{:02}",
+                        yy, month, day, h, m, s
+                    );
+                    ui.monospace(format!("Next minute boundary: {h:02}:{m:02}:{s:02} UTC"));
+                    ui.monospace(format!("Command: {cmd}"));
+                    if ui.button("Copy command").clicked() {
+                        let _ = ui_copy_to_clipboard(&cmd);
+                        self.status = "Calibration command copied".to_string();
+                    }
+                } else {
+                    ui.weak("Fetch NTP time first.");
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.strong("Drift calibration");
+                ui.label(
+                    "Record two samples (watch time vs NTP) some time apart to\n\
+                     measure the crystal drift in parts-per-million.",
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Record sample").clicked() {
+                        if let Some(ts) = self.ntp_time {
+                            let (_, _, _, h, m, s, _) = self.watch.get_time();
+                            let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
+                            self.drift_session.record(watch_secs, ts);
+                            self.log.log("Drift sample recorded");
+                        } else {
+                            self.status = "Fetch NTP time first".to_string();
+                        }
+                    }
+                    if ui.button("Reset").clicked() {
+                        self.drift_session.reset();
+                    }
+                });
+                if self.drift_session.ppm != 0.0 {
+                    ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
                 }
             });
     }
