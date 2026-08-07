@@ -2206,6 +2206,9 @@ impl StudioApp {
             .spacing([16.0, 6.0])
             .num_columns(2)
             .show(ui, |ui| {
+                ui.label("Author");
+                ui.hyperlink_to("kaiiuen", "https://github.com/kaiiuen");
+                ui.end_row();
                 ui.label("Sensor Watch");
                 ui.hyperlink_to(
                     "Original C firmware + hardware by Joey Castillo",
