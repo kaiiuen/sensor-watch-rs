@@ -2079,12 +2079,8 @@ impl StudioApp {
         let fd = self.face_engine.render(&sim_time);
         let mut svg_display = watch_display::face_display_to_svg(&fd);
         // Apply the watch's light and CASIO-override state, which the face
-        // engine does not model. When the light is on, tint it with the
-        // configured LED color.
+        // engine does not model.
         svg_display.light = self.watch.light;
-        if self.watch.light {
-            svg_display.led_color = self.watch_config.led_color();
-        }
         if let Some(text) = &self.watch.override_text {
             let chars: Vec<char> = text.chars().collect();
             let slot = |i: usize| -> char { chars.get(i).copied().unwrap_or(' ') };

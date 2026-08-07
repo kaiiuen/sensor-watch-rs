@@ -420,6 +420,7 @@ fn render_clock(d: &mut FaceDisplay, time: &SimTime, time_mode_24: bool) {
 fn render_stopwatch(d: &mut FaceDisplay, seconds: u32) {
     let (m2, m1) = two_digits((seconds / 60) % 100);
     let (s2, s1) = two_digits(seconds % 60);
+    // MM:SS on the main digits (positions 4-7), seconds on 6-7.
     d.chars = ['S', 'T', ' ', ' ', m2, m1, s2, s1, ' ', ' '];
     d.colon = true;
 }
@@ -431,7 +432,8 @@ fn render_timer(d: &mut FaceDisplay, seconds: u32) {
     let (h2, h1) = two_digits(h);
     let (m2, m1) = two_digits(m);
     let (s2, s1) = two_digits(s);
-    d.chars = ['1', ' ', h2, h1, m2, m1, s2, s1, ' ', ' '];
+    // HH:MM:SS across positions 4-9 (hour 4-5, minute 6-7, second 8-9).
+    d.chars = ['1', ' ', ' ', ' ', h2, h1, m2, m1, s2, s1];
     d.colon = true;
 }
 
@@ -440,6 +442,7 @@ fn render_countdown(d: &mut FaceDisplay, seconds: u32) {
     let s = seconds % 60;
     let (m2, m1) = two_digits(m);
     let (s2, s1) = two_digits(s);
+    // MM:SS on the main digits (positions 4-7).
     d.chars = ['C', 'D', ' ', ' ', m2, m1, s2, s1, ' ', ' '];
     d.colon = true;
 }

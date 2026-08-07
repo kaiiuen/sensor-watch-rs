@@ -82,19 +82,7 @@ fn apply_display_to_svg(svg: &str, d: &Display) -> String {
         if let Some(op) = opacity {
             // Remove any existing `opacity="..."` attribute, then insert ours
             // before the closing `>` (or `/>`) of the tag.
-            let mut cleaned = remove_opacity_attr(tag);
-            // For the light element, also tint the fill with the LED color.
-            if id == "light" && d.light {
-                cleaned = remove_fill_attr(&cleaned);
-                let [r, g, b] = d.led_color;
-                let fill = format!("#{r:02x}{g:02x}{b:02x}");
-                // Insert fill before the closing.
-                if let Some(slash) = cleaned.rfind("/>") {
-                    cleaned = format!("{} fill=\"{fill}\"{}", &cleaned[..slash], &cleaned[slash..]);
-                } else if let Some(gt) = cleaned.rfind('>') {
-                    cleaned = format!("{} fill=\"{fill}\"{}", &cleaned[..gt], &cleaned[gt..]);
-                }
-            }
+            let cleaned = remove_opacity_attr(tag);
             // Find the closing: either `/>` (self-closing) or `>`.
             if let Some(slash) = cleaned.rfind("/>") {
                 out.push_str(&cleaned[..slash]);
@@ -123,20 +111,6 @@ fn remove_opacity_attr(tag: &str) -> String {
     while let Some(pos) = rest.find("opacity=\"") {
         out.push_str(&rest[..pos]);
         rest = &rest[pos + "opacity=\"".len()..];
-        let end = rest.find('"').unwrap_or(rest.len());
-        rest = &rest[end + 1..];
-    }
-    out.push_str(rest);
-    out
-}
-
-/// Removes an existing `fill="..."` attribute from a tag.
-fn remove_fill_attr(tag: &str) -> String {
-    let mut out = String::with_capacity(tag.len());
-    let mut rest = tag;
-    while let Some(pos) = rest.find("fill=\"") {
-        out.push_str(&rest[..pos]);
-        rest = &rest[pos + "fill=\"".len()..];
         let end = rest.find('"').unwrap_or(rest.len());
         rest = &rest[end + 1..];
     }

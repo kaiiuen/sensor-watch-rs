@@ -99,14 +99,6 @@ impl Default for WatchConfig {
 }
 
 impl WatchConfig {
-    /// Returns the LED backlight color as RGB, derived from the red/green
-    /// intensity values (0-15 each).
-    pub fn led_color(&self) -> [u8; 3] {
-        let red = (self.led_red_color as u32 * 255 / 15) as u8;
-        let green = (self.led_green_color as u32 * 255 / 15) as u8;
-        [red, green, 0]
-    }
-
     /// Packs the config into the firmware's single `u32` settings register.
     pub fn to_reg(&self) -> u32 {
         let mut reg = 0u32;
