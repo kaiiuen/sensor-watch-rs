@@ -1606,6 +1606,14 @@ impl StudioApp {
         ui.label(tr(self.language, Key::AssembleFirmware));
         ui.add_space(8.0);
 
+        // Estimated compile/flash times.
+        let selected = self.presets.active_faces().len();
+        let est_compile = 30 + (selected as u32) * 2; // seconds
+        ui.monospace(format!(
+            "Estimated compile: ~{est_compile} s   Estimated flash: ~2 s"
+        ));
+        ui.add_space(8.0);
+
         if self.building {
             ui.spinner();
             ui.label(tr(self.language, Key::Building));
