@@ -26,12 +26,50 @@ sensor-watch-rs/                <- THIS project (firmware + companion app)
 
 The original C sources (`Sensor-Watch` and `Second Movement`) are kept as
 references for behavior, register maps, and documentation; we do not modify
-them.
+them. The Rust rewrite merges features from **Second Movement** (persistent
+settings, primary/secondary faces, DST-aware timezones, buzzer priorities,
+accelerometer support, and many new faces).
 
-The original C sources are kept purely as references for behavior, register maps,
-and documentation. We do not modify them. The Rust rewrite is being merged with
-features from **Second Movement** (persistent settings, primary/secondary faces,
-DST-aware timezones, buzzer priorities, accelerometer support, and many new faces).
+## Architecture at a glance
+
+```mermaid
+graph TD
+    subgraph Firmware[Firmware - src/]
+        HAL[watch/ - hardware abstraction]
+        MV[movement/ - watchface framework]
+        FACES[111 watch faces]
+        MAIN[main.rs - boot & event loop]
+        PANIC[panic.rs - fault recovery]
+        MAIN --> MV
+        MV --> HAL
+        MV --> FACES
+        PANIC --> MAIN
+    end
+
+    subgraph Core[core/ - pure logic]
+        DT[datetime]
+        UF2[uf2 encoding]
+        SET[settings bit-packing]
+        ECC[SECDED error correction]
+    end
+
+    subgraph Studio[studio/ - Firmware Studio GUI]
+        APP[main.rs - panels]
+        SIM[watch_sim + face_sim - simulator]
+        BUILD[build.rs - firmware -> UF2]
+        NTP[ntp.rs - time sync]
+        PERSIST[persist.rs - settings]
+        INTEG[integrity.rs - SHA-256]
+    end
+
+    MV --> Core
+    Studio --> Core
+    Studio --> Firmware
+```
+
+The firmware is a sealed, air-gapped system: the CPU wakes only to react to a
+single event, then returns to STANDBY. The Studio app is the companion that
+builds, simulates, and flashes it.
 
 ## Firmware Studio (companion app)
 
