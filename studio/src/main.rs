@@ -286,6 +286,10 @@ impl eframe::App for StudioApp {
         // Apply the theme.
         self.theme.apply(ctx);
 
+        // Keep the UI animating even when the cursor leaves the window, so the
+        // clock and sim keep running instead of freezing.
+        ctx.request_repaint();
+
         // If a build finished, collect its result.
         if let Some(handle) = self.pending_build.take() {
             if handle.is_finished() {
@@ -385,23 +389,32 @@ impl eframe::App for StudioApp {
                     let _ = webbrowser::open("https://github.com/kaiiuen/sensor-watch-rs");
                 }
                 ui.separator();
-                for panel in [
-                    Panel::Dashboard,
-                    Panel::Faces,
-                    Panel::Editor,
-                    Panel::Simulator,
-                    Panel::Build,
-                    Panel::Flash,
-                    Panel::Debug,
-                    Panel::Settings,
-                ] {
-                    if ui
-                        .selectable_label(self.current_panel == panel, panel.label(self.language))
-                        .clicked()
-                    {
-                        self.current_panel = panel;
-                    }
-                }
+                // The tab bar scrolls horizontally so it never clips when the
+                // window is narrow.
+                egui::ScrollArea::horizontal().show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        for panel in [
+                            Panel::Dashboard,
+                            Panel::Faces,
+                            Panel::Editor,
+                            Panel::Simulator,
+                            Panel::Build,
+                            Panel::Flash,
+                            Panel::Debug,
+                            Panel::Settings,
+                        ] {
+                            if ui
+                                .selectable_label(
+                                    self.current_panel == panel,
+                                    panel.label(self.language),
+                                )
+                                .clicked()
+                            {
+                                self.current_panel = panel;
+                            }
+                        }
+                    });
+                });
             });
         });
 
