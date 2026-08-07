@@ -12,10 +12,11 @@ const NTP_PORT: u16 = 123;
 /// Seconds between the NTP epoch (1900) and the Unix epoch (1970).
 const NTP_TIMESTAMP_DELTA: u64 = 2_208_988_800;
 
-/// A curated list of NTP servers.
+/// A curated list of NTP servers. Cloudflare is first (trusted, stratum 1,
+/// no leap smearing) and is the default auto-fetch target.
 pub const SERVERS: [(&str, &str); 8] = [
-    ("Google", "time.google.com"),
     ("Cloudflare", "time.cloudflare.com"),
+    ("Google", "time.google.com"),
     ("Microsoft", "time.windows.com"),
     ("Apple", "time.apple.com"),
     ("NIST (USA)", "time.nist.gov"),

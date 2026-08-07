@@ -105,6 +105,8 @@ struct StudioApp {
     sys_rx: std::sync::mpsc::Receiver<sysstats::SysStats>,
     /// The catalog search query.
     catalog_search: String,
+    /// The target board revision (green, red/lite, blue, pro).
+    board: Board,
     /// The index of the preset face currently being simulated.
     sim_face_idx: usize,
     /// Simulator date controller: year, month, day, hour, minute, weekday.
@@ -135,6 +137,26 @@ struct StudioApp {
     drift_session: drift::DriftSession,
     /// The number of fuzz iterations to run.
     fuzz_iterations: usize,
+}
+
+/// The supported Sensor Watch board revisions.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Board {
+    Green,
+    RedLite,
+    Blue,
+    Pro,
+}
+
+impl Board {
+    fn label(self) -> &'static str {
+        match self {
+            Board::Green => "Green",
+            Board::RedLite => "Red / Lite",
+            Board::Blue => "Blue",
+            Board::Pro => "Pro",
+        }
+    }
 }
 
 /// The navigation panels.
@@ -222,6 +244,7 @@ impl Default for StudioApp {
             sys_stats: sysstats::SysStats::default(),
             sys_rx: sysstats::spawn_sampler(),
             catalog_search: String::new(),
+            board: Board::Green,
             sim_face_idx: 0,
             sim_year: 2026,
             sim_month: 1,
@@ -251,6 +274,8 @@ impl Default for StudioApp {
             app.apply_settings(saved);
             app.log.log("Loaded persisted settings");
         }
+        // Auto-fetch the time from the default NTP server (Cloudflare) on launch.
+        app.fetch_ntp();
         app.status = tr(app.language, Key::Ready).to_string();
         app
     }
@@ -450,6 +475,25 @@ impl StudioApp {
         ui.monospace(format!(
             "{weekday}, {year:04}-{month:02}-{day:02}  {h:02}:{m:02}:{s:02}"
         ));
+        ui.add_space(8.0);
+
+        // Target board selection.
+        ui.horizontal(|ui| {
+            ui.label("Target board:");
+            for b in [Board::Green, Board::RedLite, Board::Blue, Board::Pro] {
+                if ui.selectable_label(self.board == b, b.label()).clicked() {
+                    self.board = b;
+                    self.log.log(format!("Target board set to {}", b.label()));
+                }
+            }
+        })
+        .response
+        .on_hover_text(
+            "Select which Sensor Watch board revision you're building/flashing for.\n\
+             Different boards (Green, Red/Lite, Blue, Pro) have different LED\n\
+             polarity, buzzer wiring, and optional sensors. The build and flash\n\
+             steps use this selection.",
+        );
         ui.add_space(8.0);
 
         ui.label(tr(self.language, Key::Target));
