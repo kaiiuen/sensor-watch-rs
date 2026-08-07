@@ -92,6 +92,8 @@ pub struct FaceEngine {
     pub diag_subrow: u8,
     pub diag_prev_screen: u8,
     pub diag_test_active: bool,
+    /// Whether the clock shows 24-hour time (false = 12-hour).
+    pub time_mode_24: bool,
 }
 
 impl FaceEngine {
@@ -112,6 +114,7 @@ impl FaceEngine {
             diag_subrow: 0,
             diag_prev_screen: 10,
             diag_test_active: false,
+            time_mode_24: true,
         }
     }
 
@@ -209,7 +212,7 @@ impl FaceEngine {
         let mut d = FaceDisplay::default();
 
         if upper.contains("SIMPLE_CLOCK") || upper.contains("CLOCK") {
-            render_clock(&mut d, time);
+            render_clock(&mut d, time, self.time_mode_24);
         } else if upper.contains("STOPWATCH") {
             render_stopwatch(&mut d, self.sw_seconds);
         } else if upper.contains("TIMER") {
@@ -277,11 +280,13 @@ impl FaceEngine {
                 d.set_string(s, 0);
             }
             3 => {
-                let s = "HARDWRSAML2";
+                // Hardware: use the short form for legibility on 7-segment.
+                let s = "HW  SAML22";
                 d.set_string(s, 0);
             }
             4 => {
-                let s = "SOFTWRRST";
+                // Software: use the short form for legibility on 7-segment.
+                let s = "SW  RUST";
                 d.set_string(s, 0);
             }
             5 => {
@@ -343,10 +348,20 @@ fn two_digits(v: u32) -> (char, char) {
     )
 }
 
-fn render_clock(d: &mut FaceDisplay, time: &SimTime) {
+fn render_clock(d: &mut FaceDisplay, time: &SimTime, time_mode_24: bool) {
     let wd = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"][(time.weekday % 7) as usize];
     let (d2, d1) = two_digits(time.day);
-    let (h2, h1) = two_digits(time.hour);
+    // Apply 12-hour conversion if needed.
+    let mut hour = time.hour;
+    let mut pm = false;
+    if !time_mode_24 {
+        pm = hour >= 12;
+        hour %= 12;
+        if hour == 0 {
+            hour = 12;
+        }
+    }
+    let (h2, h1) = two_digits(hour);
     let (m2, m1) = two_digits(time.minute);
     let (s2, s1) = two_digits(time.second);
     d.chars = [
@@ -362,7 +377,8 @@ fn render_clock(d: &mut FaceDisplay, time: &SimTime) {
         s1,
     ];
     d.colon = true;
-    d.h24 = true;
+    d.h24 = time_mode_24;
+    d.pm = pm;
 }
 
 fn render_stopwatch(d: &mut FaceDisplay, seconds: u32) {

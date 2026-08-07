@@ -178,6 +178,13 @@ fn char_segments(display_id: &str, c: char) -> Vec<&'static str> {
             out.push(seg_names[i]);
         }
     }
+    // Legibility overrides: render 'T' as a backwards 7 (top + right verticals)
+    // and 'I' as a left-side bar, which read better on the 7-segment LCD.
+    if c == 'T' {
+        out = vec!["A", "B", "C"];
+    } else if c == 'I' {
+        out = vec!["E", "F"];
+    }
     // Keep the special mode_1/mode_2 handling for the F-91W weekday display.
     if display_id == "mode_1" {
         return match c {
