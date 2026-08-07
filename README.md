@@ -18,15 +18,15 @@ in a sealed, air-gapped system and must manage itself.
 ## Project layout
 
 ```
-kaiwentek/
-├── sensor-watch/
-│   ├── sensor-watch-rs/          <- THIS project (firmware + companion app)
-│   │   ├── src/                  <- the firmware (Rust rewrite)
-│   │   ├── core/                 <- pure logic (UF2, date math, settings)
-│   │   └── studio/               <- Firmware Studio GUI companion app
-│   ├── sensor-watch-reference/   <- clone of the original C repo (reference only)
-│   └── second-movement-reference/<- clone of the Second Movement C repo (reference only)
+sensor-watch-rs/                <- THIS project (firmware + companion app)
+├── src/                        <- the firmware (Rust rewrite)
+├── core/                       <- pure logic (UF2, date math, settings)
+└── studio/                     <- Firmware Studio GUI companion app
 ```
+
+The original C sources (`Sensor-Watch` and `Second Movement`) are kept as
+references for behavior, register maps, and documentation; we do not modify
+them.
 
 The original C sources are kept purely as references for behavior, register maps,
 and documentation. We do not modify them. The Rust rewrite is being merged with

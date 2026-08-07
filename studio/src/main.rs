@@ -382,6 +382,16 @@ impl eframe::App for StudioApp {
 impl StudioApp {
     /// The dashboard: an overview of the project, health, and NTP time.
     fn dashboard(&mut self, ui: &mut egui::Ui) {
+        // The dashboard is long; wrap it in a scroll area so it never clips.
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                self.dashboard_body(ui);
+            });
+    }
+
+    /// The scrollable body of the dashboard.
+    fn dashboard_body(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr(self.language, Key::Dashboard));
         ui.separator();
 
@@ -1655,6 +1665,8 @@ impl StudioApp {
                 // Alarm button on press.
                 if a_act == SimAction::Press {
                     self.watch.toggle_time_mode();
+                    self.face_engine.time_mode_24 =
+                        self.watch.time_mode == watch_sim::TimeMode::H24;
                     self.face_engine.press(face_sim::FaceButton::Alarm);
                 }
                 // A button: holding for ~1s shows the CASIO logo for as long as
