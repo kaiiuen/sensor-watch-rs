@@ -175,6 +175,56 @@ impl Board {
     }
 }
 
+/// Country/timezone names aligned with `TIMEZONE_OFFSETS` (index = time_zone).
+const COUNTRIES: [&str; 41] = [
+    "UTC",
+    "UK / Ireland",
+    "Central Europe",
+    "Eastern Europe",
+    "Iran",
+    "Moscow",
+    "Pakistan",
+    "India",
+    "Sri Lanka",
+    "Nepal",
+    "Bangladesh",
+    "Indochina",
+    "China / Singapore",
+    "Japan / Korea",
+    "Australia East",
+    "Australia Central",
+    "Australia West",
+    "New Zealand",
+    "Samoa",
+    "Hawaii",
+    "Alaska",
+    "Pacific US",
+    "Mountain US",
+    "Central US",
+    "Eastern US",
+    "Atlantic",
+    "Brazil East",
+    "Argentina",
+    "Newfoundland",
+    "Venezuela",
+    "Bolivia",
+    "Paraguay",
+    "Colombia / Peru",
+    "Ecuador",
+    "Central America",
+    "Mexico",
+    "US Mountain (no DST)",
+    "Pacific Mexico",
+    "French Polynesia",
+    "Marquesas",
+    "Gambier",
+];
+
+/// Returns the country label for a timezone index.
+fn country_label(index: u8) -> &'static str {
+    COUNTRIES.get(index as usize).copied().unwrap_or("UTC")
+}
+
 /// The navigation panels.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Panel {
@@ -1125,6 +1175,28 @@ impl StudioApp {
                                 let sign = if off < 0 { '-' } else { '+' };
                                 let abs = off.unsigned_abs();
                                 ui.label(format!("UTC{sign}{:02}:{:02}", abs / 60, abs % 60));
+                            });
+                            // Country dropdown for quick timezone selection.
+                            ui.horizontal(|ui| {
+                                ui.label("Country:");
+                                egui::ComboBox::from_id_source("country_tz")
+                                    .selected_text(country_label(self.watch_config.time_zone))
+                                    .show_ui(ui, |ui| {
+                                        for (i, name) in COUNTRIES.iter().enumerate() {
+                                            if ui
+                                                .selectable_value(
+                                                    &mut self.watch_config.time_zone,
+                                                    i as u8,
+                                                    *name,
+                                                )
+                                                .changed()
+                                            {
+                                                self.log.log(format!(
+                                                    "Time zone set to {name} (index {i})"
+                                                ));
+                                            }
+                                        }
+                                    });
                             });
                             ui.end_row();
 
