@@ -68,6 +68,7 @@ pub fn spawn_sampler() -> mpsc::Receiver<SysStats> {
 
         loop {
             sys.refresh_cpu_usage();
+            sys.refresh_cpu_frequency();
             sys.refresh_memory();
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
             networks.refresh(true);
@@ -98,11 +99,16 @@ pub fn spawn_sampler() -> mpsc::Receiver<SysStats> {
             prev_net_tx = net_tx;
 
             if let Some(proc) = sys.process(pid) {
-                stats.cpu_percent = proc.cpu_usage();
+                // sysinfo's cpu_usage() is per-core (100% = one full core) and
+                // can exceed 100 on multi-core use. Normalize to a 0-100 total
+                // by dividing by the core count.
+                let cores = cores.max(1) as f32;
+                stats.cpu_percent = (proc.cpu_usage() / cores).min(100.0);
                 stats.mem_bytes = proc.memory();
                 stats.virtual_mem_bytes = proc.virtual_memory();
                 stats.run_time_secs = proc.run_time();
-                stats.threads = proc.tasks().map(|t| t.len()).unwrap_or(0);
+                // Thread count: fall back to 1 if tasks() is unavailable.
+                stats.threads = proc.tasks().map(|t| t.len()).unwrap_or(1);
 
                 let du = proc.disk_usage();
                 stats.disk_read_bytes = du.total_read_bytes;
