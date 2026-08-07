@@ -27,6 +27,7 @@ impl Language {
 /// Each variant maps to a string in every language. Adding a new UI string
 /// means adding a variant here and a translation in `tr`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Key {
     // App
     AppTitle,

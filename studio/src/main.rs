@@ -235,8 +235,7 @@ enum Panel {
     Faces,
     Editor,
     Simulator,
-    Build,
-    Flash,
+    BuildFlash,
     Calibration,
     Debug,
     Bugs,
@@ -266,10 +265,9 @@ impl Panel {
             Panel::Faces => tr(lang, Key::WatchFaces),
             Panel::Editor => "Editor",
             Panel::Simulator => "Simulator",
-            Panel::Build => tr(lang, Key::Build),
-            Panel::Flash => tr(lang, Key::Flash),
-            Panel::Debug => tr(lang, Key::DebugOutput),
+            Panel::BuildFlash => "Build & Flash",
             Panel::Calibration => "Calibration",
+            Panel::Debug => tr(lang, Key::DebugOutput),
             Panel::Bugs => "Bugs",
             Panel::Settings => tr(lang, Key::Settings),
         }
@@ -525,8 +523,7 @@ impl eframe::App for StudioApp {
                             Panel::Faces,
                             Panel::Editor,
                             Panel::Simulator,
-                            Panel::Build,
-                            Panel::Flash,
+                            Panel::BuildFlash,
                             Panel::Calibration,
                             Panel::Debug,
                             Panel::Bugs,
@@ -592,8 +589,7 @@ impl eframe::App for StudioApp {
             Panel::Faces => self.faces(ui, ctx),
             Panel::Editor => self.editor(ui),
             Panel::Simulator => self.simulator(ui, ctx),
-            Panel::Build => self.build(ui),
-            Panel::Flash => self.flash(ui),
+            Panel::BuildFlash => self.build_flash(ui),
             Panel::Calibration => self.calibration(ui),
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
@@ -1602,124 +1598,110 @@ impl StudioApp {
             });
     }
 
-    /// The build panel: assemble the firmware into a .uf2.
-    fn build(&mut self, ui: &mut egui::Ui) {
-        ui.heading(tr(self.language, Key::Build));
-        ui.separator();
-        ui.label(tr(self.language, Key::AssembleFirmware));
-        ui.add_space(8.0);
-
-        // Estimated compile/flash times.
-        let selected = self.presets.active_faces().len();
-        let est_compile = 30 + (selected as u32) * 2; // seconds
-        ui.monospace(format!(
-            "Estimated compile: ~{est_compile} s   Estimated flash: ~2 s"
-        ));
-        ui.add_space(8.0);
-
-        if self.building {
-            ui.spinner();
-            ui.label(tr(self.language, Key::Building));
-        } else {
-            if ui.button(tr(self.language, Key::BuildUf2)).clicked() {
-                self.building = true;
-                self.build_message = tr(self.language, Key::Building).to_string();
-                self.log.log("Starting firmware build");
-                let handle = std::thread::spawn(build::build_firmware);
-                self.pending_build = Some(handle);
-            }
-        }
-
-        if !self.build_message.is_empty() {
-            ui.add_space(8.0);
-            ui.label(&self.build_message);
-        }
-        if let Some(uf2) = &self.last_uf2 {
-            ui.add_space(8.0);
-            ui.label(tr(self.language, Key::Output).replace("{path}", &uf2.display().to_string()));
-        }
-
-        // Dedicated build log.
-        ui.add_space(12.0);
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.strong("Build log");
-            if ui.small_button("Clear").clicked() {
-                self.build_log.clear();
-            }
-        });
-        egui::ScrollArea::vertical()
+    /// The combined build & flash panel.
+    fn build_flash(&mut self, ui: &mut egui::Ui) {
+        egui::ScrollArea::both()
             .auto_shrink([false, false])
-            .max_height(200.0)
             .show(ui, |ui| {
-                if self.build_log.is_empty() {
-                    ui.weak("(no build activity yet)");
-                }
-                for entry in self.build_log.entries() {
-                    let secs = entry.timestamp % 60;
-                    let mins = (entry.timestamp / 60) % 60;
-                    let hrs = (entry.timestamp / 3600) % 24;
-                    ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
-                }
-            });
-    }
-
-    /// The flash panel: flash the firmware to the watch.
-    fn flash(&mut self, ui: &mut egui::Ui) {
-        ui.heading(tr(self.language, Key::Flash));
-        ui.separator();
-        ui.label(tr(self.language, Key::FlashFirmware));
-        ui.add_space(8.0);
-        // Watch detection.
-        match self.detect_watch() {
-            Some(root) => {
-                ui.colored_label(
-                    egui::Color32::from_rgb(80, 200, 120),
-                    format!("Watch detected at {root}"),
+                ui.heading("Build & Flash");
+                ui.label(
+                    "Build the firmware into a .uf2, then flash it to the watch.\n\
+                     Build compiles the firmware; Flash copies the .uf2 to the\n\
+                     watch's USB drive (bootloader mode).",
                 );
-            }
-            None => {
-                ui.colored_label(
-                    egui::Color32::from_rgb(220, 160, 80),
-                    "No watch detected. Put it in bootloader mode (USB connected).",
-                );
-            }
-        }
-        ui.add_space(8.0);
-        if let Some(uf2) = &self.last_uf2 {
-            let uf2 = uf2.clone();
-            ui.label(
-                tr(self.language, Key::Firmware).replace("{path}", &uf2.display().to_string()),
-            );
-            if ui.button(tr(self.language, Key::CopyToWatch)).clicked() {
-                self.copy_to_watch(&uf2);
-            }
-        } else {
-            ui.label(tr(self.language, Key::NoBuildYet));
-        }
+                ui.add_space(8.0);
 
-        // Dedicated flash log.
-        ui.add_space(12.0);
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.strong("Flash log");
-            if ui.small_button("Clear").clicked() {
-                self.flash_log.clear();
-            }
-        });
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .max_height(200.0)
-            .show(ui, |ui| {
-                if self.flash_log.is_empty() {
-                    ui.weak("(no flash activity yet)");
+                // Estimated times.
+                let selected = self.presets.active_faces().len();
+                let est_compile = 30 + (selected as u32) * 2;
+                ui.monospace(format!(
+                    "Estimated compile: ~{est_compile} s   Estimated flash: ~2 s"
+                ));
+                ui.add_space(8.0);
+
+                // Build.
+                ui.strong("Build");
+                if self.building {
+                    ui.spinner();
+                    ui.label(tr(self.language, Key::Building));
+                } else if ui.button(tr(self.language, Key::BuildUf2)).clicked() {
+                    self.building = true;
+                    self.build_message = tr(self.language, Key::Building).to_string();
+                    self.log.log("Starting firmware build");
+                    let handle = std::thread::spawn(build::build_firmware);
+                    self.pending_build = Some(handle);
                 }
-                for entry in self.flash_log.entries() {
-                    let secs = entry.timestamp % 60;
-                    let mins = (entry.timestamp / 60) % 60;
-                    let hrs = (entry.timestamp / 3600) % 24;
-                    ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                if !self.build_message.is_empty() {
+                    ui.label(&self.build_message);
                 }
+                if let Some(uf2) = &self.last_uf2 {
+                    ui.label(
+                        tr(self.language, Key::Output)
+                            .replace("{path}", &uf2.display().to_string()),
+                    );
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                // Flash.
+                ui.strong("Flash");
+                match self.detect_watch() {
+                    Some(root) => {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(80, 200, 120),
+                            format!("Watch detected at {root}"),
+                        );
+                    }
+                    None => {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 160, 80),
+                            "No watch detected. Put it in bootloader mode (USB connected).",
+                        );
+                    }
+                }
+                if let Some(uf2) = &self.last_uf2 {
+                    let uf2 = uf2.clone();
+                    if ui.button(tr(self.language, Key::CopyToWatch)).clicked() {
+                        self.copy_to_watch(&uf2);
+                    }
+                } else {
+                    ui.label(tr(self.language, Key::NoBuildYet));
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                // Combined log.
+                ui.horizontal(|ui| {
+                    ui.strong("Build & flash log");
+                    if ui.small_button("Clear").clicked() {
+                        self.build_log.clear();
+                        self.flash_log.clear();
+                    }
+                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(200.0)
+                    .show(ui, |ui| {
+                        let mut entries: Vec<_> = self
+                            .build_log
+                            .entries()
+                            .iter()
+                            .chain(self.flash_log.entries().iter())
+                            .collect();
+                        entries.sort_by_key(|e| e.timestamp);
+                        if entries.is_empty() {
+                            ui.weak("(no activity yet)");
+                        }
+                        for entry in entries {
+                            let secs = entry.timestamp % 60;
+                            let mins = (entry.timestamp / 60) % 60;
+                            let hrs = (entry.timestamp / 3600) % 24;
+                            ui.monospace(format!(
+                                "[{hrs:02}:{mins:02}:{secs:02}] {}",
+                                entry.message
+                            ));
+                        }
+                    });
             });
     }
 
