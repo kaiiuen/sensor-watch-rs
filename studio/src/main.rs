@@ -147,6 +147,10 @@ struct StudioApp {
     last_build_time: Option<u64>,
     /// The number of builds performed this session.
     build_count: u32,
+    /// Dedicated log for the build panel.
+    build_log: debug::DebugLog,
+    /// Dedicated log for the flash panel.
+    flash_log: debug::DebugLog,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -260,6 +264,8 @@ impl Default for StudioApp {
             text_size: 1,
             last_build_time: None,
             build_count: 0,
+            build_log: debug::DebugLog::new(),
+            flash_log: debug::DebugLog::new(),
             catalog_search: String::new(),
             board: Board::Green,
             sim_face_idx: 0,
@@ -352,6 +358,7 @@ impl eframe::App for StudioApp {
                             tr(self.language, Key::BuildFailed).to_string()
                         };
                         self.log.log(&result.message);
+                        self.build_log.log(&result.message);
                         if result.success {
                             self.last_uf2 = result.uf2_path;
                             self.last_build_time = Some(
@@ -363,6 +370,8 @@ impl eframe::App for StudioApp {
                             self.build_count += 1;
                             if let Some(p) = &self.last_uf2 {
                                 self.log.log(format!("UF2 written to {}", p.display()));
+                                self.build_log
+                                    .log(format!("UF2 written to {}", p.display()));
                             }
                         }
                     }
@@ -1486,6 +1495,30 @@ impl StudioApp {
             ui.add_space(8.0);
             ui.label(tr(self.language, Key::Output).replace("{path}", &uf2.display().to_string()));
         }
+
+        // Dedicated build log.
+        ui.add_space(12.0);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.strong("Build log");
+            if ui.small_button("Clear").clicked() {
+                self.build_log.clear();
+            }
+        });
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .max_height(200.0)
+            .show(ui, |ui| {
+                if self.build_log.is_empty() {
+                    ui.weak("(no build activity yet)");
+                }
+                for entry in self.build_log.entries() {
+                    let secs = entry.timestamp % 60;
+                    let mins = (entry.timestamp / 60) % 60;
+                    let hrs = (entry.timestamp / 3600) % 24;
+                    ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                }
+            });
     }
 
     /// The flash panel: flash the firmware to the watch.
@@ -1505,6 +1538,30 @@ impl StudioApp {
         } else {
             ui.label(tr(self.language, Key::NoBuildYet));
         }
+
+        // Dedicated flash log.
+        ui.add_space(12.0);
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.strong("Flash log");
+            if ui.small_button("Clear").clicked() {
+                self.flash_log.clear();
+            }
+        });
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .max_height(200.0)
+            .show(ui, |ui| {
+                if self.flash_log.is_empty() {
+                    ui.weak("(no flash activity yet)");
+                }
+                for entry in self.flash_log.entries() {
+                    let secs = entry.timestamp % 60;
+                    let mins = (entry.timestamp / 60) % 60;
+                    let hrs = (entry.timestamp / 3600) % 24;
+                    ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                }
+            });
     }
 
     /// The debug panel: show the background activity log.
@@ -2341,11 +2398,14 @@ impl StudioApp {
     fn copy_to_watch(&mut self, uf2: &std::path::Path) {
         self.log
             .log(format!("Attempting to flash {}", uf2.display()));
+        self.flash_log
+            .log(format!("Attempting to flash {}", uf2.display()));
         let data = match std::fs::read(uf2) {
             Ok(d) => d,
             Err(e) => {
                 self.status = format!("Failed to read uf2: {e}");
                 self.log.log(format!("Failed to read uf2: {e}"));
+                self.flash_log.log(format!("Failed to read uf2: {e}"));
                 return;
             }
         };
