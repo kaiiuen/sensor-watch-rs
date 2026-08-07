@@ -151,6 +151,8 @@ struct StudioApp {
     build_log: debug::DebugLog,
     /// Dedicated log for the flash panel.
     flash_log: debug::DebugLog,
+    /// Dedicated log for errors/warnings (shown in the Bugs tab).
+    error_log: debug::DebugLog,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -183,6 +185,7 @@ enum Panel {
     Build,
     Flash,
     Debug,
+    Bugs,
     Settings,
 }
 
@@ -212,6 +215,7 @@ impl Panel {
             Panel::Build => tr(lang, Key::Build),
             Panel::Flash => tr(lang, Key::Flash),
             Panel::Debug => tr(lang, Key::DebugOutput),
+            Panel::Bugs => "Bugs",
             Panel::Settings => tr(lang, Key::Settings),
         }
     }
@@ -266,6 +270,7 @@ impl Default for StudioApp {
             build_count: 0,
             build_log: debug::DebugLog::new(),
             flash_log: debug::DebugLog::new(),
+            error_log: debug::DebugLog::new(),
             catalog_search: String::new(),
             board: Board::Green,
             sim_face_idx: 0,
@@ -406,7 +411,7 @@ impl eframe::App for StudioApp {
                     Ok(Err(e)) => {
                         self.ntp_busy = false;
                         self.status = format!("NTP error: {e}");
-                        self.log.log(format!("NTP error: {e}"));
+                        self.log_error(&format!("NTP error: {e}"));
                     }
                     Err(_) => {
                         self.ntp_busy = false;
@@ -429,7 +434,7 @@ impl eframe::App for StudioApp {
                     }
                     Ok(Err(e)) => {
                         self.status = format!("Checksum unavailable: {e}");
-                        self.log.log(format!("Checksum unavailable: {e}"));
+                        self.log_error(&format!("Checksum unavailable: {e}"));
                     }
                     Err(_) => {
                         self.status = "Checksum thread panicked".to_string();
@@ -466,6 +471,7 @@ impl eframe::App for StudioApp {
                             Panel::Build,
                             Panel::Flash,
                             Panel::Debug,
+                            Panel::Bugs,
                             Panel::Settings,
                         ] {
                             if ui
@@ -521,6 +527,7 @@ impl eframe::App for StudioApp {
             Panel::Build => self.build(ui),
             Panel::Flash => self.flash(ui),
             Panel::Debug => self.debug(ui),
+            Panel::Bugs => self.bugs(ui),
             Panel::Settings => self.settings(ui),
         });
     }
@@ -1626,6 +1633,45 @@ impl StudioApp {
             });
     }
 
+    /// The bugs panel: show errors/warnings and app state for troubleshooting.
+    fn bugs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("Bugs & Diagnostics");
+            if ui.button("Clear").clicked() {
+                self.error_log.clear();
+            }
+            if ui.button("Copy all").clicked() {
+                let text = self
+                    .error_log
+                    .entries()
+                    .iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = ui_copy_to_clipboard(&text);
+            }
+        });
+        ui.separator();
+        ui.label(
+            "Errors and warnings encountered by the app. Use this to report bugs or\n\
+             troubleshoot issues. The full activity log is in the Debug tab.",
+        );
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if self.error_log.is_empty() {
+                    ui.weak("(no errors recorded)");
+                }
+                for entry in self.error_log.entries() {
+                    let secs = entry.timestamp % 60;
+                    let mins = (entry.timestamp / 60) % 60;
+                    let hrs = (entry.timestamp / 3600) % 24;
+                    ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                }
+            });
+    }
+
     /// The simulator panel: render the watch and handle its buttons.
     fn simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.horizontal(|ui| {
@@ -2284,6 +2330,12 @@ impl StudioApp {
         ui.label(
             "MIT OR Apache-2.0 (this rewrite). The reference C projects have their own licenses.",
         );
+    }
+
+    /// Logs an error to both the main log and the dedicated error log.
+    fn log_error(&mut self, msg: &str) {
+        self.log.log(msg);
+        self.error_log.log(msg);
     }
 
     /// Saves the current settings to a JSON file in the app data directory.
