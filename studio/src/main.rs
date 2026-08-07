@@ -2097,6 +2097,38 @@ impl StudioApp {
                 );
                 ui.end_row();
             });
+
+        // Code statistics.
+        ui.add_space(12.0);
+        ui.strong("Project statistics");
+        ui.separator();
+        let (files, lines, chars, bytes) = code_stats();
+        egui::Grid::new("code_stats_grid")
+            .striped(true)
+            .spacing([24.0, 4.0])
+            .num_columns(2)
+            .show(ui, |ui| {
+                ui.label("Source files");
+                ui.monospace(files.to_string());
+                ui.end_row();
+                ui.label("Lines of code");
+                ui.monospace(lines.to_string());
+                ui.end_row();
+                ui.label("Characters");
+                ui.monospace(chars.to_string());
+                ui.end_row();
+                ui.label("Total size");
+                ui.monospace(fmt_bytes(bytes));
+                ui.end_row();
+            });
+
+        // License.
+        ui.add_space(12.0);
+        ui.strong("License");
+        ui.separator();
+        ui.label(
+            "MIT OR Apache-2.0 (this rewrite). The reference C projects have their own licenses.",
+        );
     }
 
     /// Saves the current settings to a JSON file in the app data directory.
@@ -2291,6 +2323,35 @@ impl StudioApp {
         // UF2 adds ~512-byte headers; estimate flash + 10% overhead.
         self.estimate_flash_kb(selected) + self.estimate_flash_kb(selected) / 10
     }
+}
+
+/// Counts the source files, lines, characters, and bytes in the project's Rust
+/// source (firmware + core + studio).
+fn code_stats() -> (usize, usize, usize, u64) {
+    let root = build::firmware_dir();
+    let mut files = 0usize;
+    let mut lines = 0usize;
+    let mut chars = 0usize;
+    let mut bytes = 0u64;
+    let mut stack = vec![root.join("src"), root.join("core"), root.join("studio")];
+    while let Some(dir) = stack.pop() {
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if path.extension().map(|e| e == "rs").unwrap_or(false) {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        files += 1;
+                        lines += content.lines().count();
+                        chars += content.chars().count();
+                        bytes += content.len() as u64;
+                    }
+                }
+            }
+        }
+    }
+    (files, lines, chars, bytes)
 }
 
 /// Formats a byte count into a human-readable string.
