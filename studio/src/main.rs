@@ -91,6 +91,12 @@ struct StudioApp {
     ntp_busy: bool,
     /// The handle to the background NTP query.
     pending_ntp: Option<std::thread::JoinHandle<Result<ntp::NtpResult, String>>>,
+    /// The expected SHA-256 from the GitHub release, if fetched.
+    release_sha256: Option<String>,
+    /// Whether a release checksum fetch is in flight.
+    checksum_busy: bool,
+    /// The handle to the background checksum fetch.
+    pending_checksum: Option<std::thread::JoinHandle<Result<String, String>>>,
     /// The watch configuration (mirrors the firmware Settings register).
     watch_config: watch_config::WatchConfig,
     /// The latest system resource snapshot for the footer.
@@ -209,6 +215,9 @@ impl Default for StudioApp {
             ntp_offset: 0.0,
             ntp_busy: false,
             pending_ntp: None,
+            release_sha256: None,
+            checksum_busy: false,
+            pending_checksum: None,
             watch_config: watch_config::WatchConfig::default(),
             sys_stats: sysstats::SysStats::default(),
             sys_rx: sysstats::spawn_sampler(),
@@ -312,6 +321,28 @@ impl eframe::App for StudioApp {
                 }
             } else {
                 self.pending_ntp = Some(handle);
+            }
+        }
+
+        // If a release checksum fetch finished, collect its result.
+        if let Some(handle) = self.pending_checksum.take() {
+            if handle.is_finished() {
+                self.checksum_busy = false;
+                match handle.join() {
+                    Ok(Ok(sha)) => {
+                        self.release_sha256 = Some(sha);
+                        self.status = "Release checksum fetched".to_string();
+                    }
+                    Ok(Err(e)) => {
+                        self.status = format!("Checksum unavailable: {e}");
+                        self.log.log(format!("Checksum unavailable: {e}"));
+                    }
+                    Err(_) => {
+                        self.status = "Checksum thread panicked".to_string();
+                    }
+                }
+            } else {
+                self.pending_checksum = Some(handle);
             }
         }
 
@@ -705,6 +736,16 @@ impl StudioApp {
         let server = ntp::SERVERS[self.ntp_server].1.to_string();
         let handle = std::thread::spawn(move || ntp::query_ntp(&server));
         self.pending_ntp = Some(handle);
+    }
+
+    /// Fetches the expected SHA-256 from the GitHub release on a background thread.
+    fn fetch_release_checksum(&mut self) {
+        if self.checksum_busy {
+            return;
+        }
+        self.checksum_busy = true;
+        let handle = std::thread::spawn(|| fetch_release_sha256());
+        self.pending_checksum = Some(handle);
     }
 
     /// The watch-faces panel: catalog (left) and active preset (right), both
@@ -1903,20 +1944,61 @@ impl StudioApp {
              is intentionally excluded since it changes at runtime.",
         )
         .on_hover_text(
-            "This computes a checksum of the running .exe so you can confirm it\n\
-             matches the official release. User-defined data (settings file, custom\n\
+            "This computes a SHA-256 checksum of the running .exe so you can confirm\n\
+             it matches the official release. User-defined data (settings file, custom\n\
              NTP servers, watch faces) is NOT hashed, because those are expected\n\
-             to differ between users and change as you use the app.",
+             to differ between users and change as you use the app.\n\n\
+             A running exe can't prove its own authenticity, so the real check is\n\
+             against the SHA-256 published on the GitHub release. If you're offline,\n\
+             the app shows that the checksum could not be validated.",
         );
         ui.add_space(8.0);
-        if let Some(h) = integrity::exe_hash() {
-            ui.monospace(format!("SHA (FNV-1a): {}", integrity::format_hash(h)));
+        if let Some(h) = integrity::exe_sha256() {
+            ui.monospace(format!("SHA-256: {h}"));
             if ui.button("Copy hash").clicked() {
-                let _ = ui_copy_to_clipboard(&integrity::format_hash(h));
+                let _ = ui_copy_to_clipboard(&h);
                 self.status = "Integrity hash copied".to_string();
             }
         } else {
             ui.weak("Could not read the executable.");
+        }
+
+        // Release checksum verification.
+        ui.add_space(8.0);
+        ui.horizontal(|ui| {
+            if ui.button("Verify against release").clicked() {
+                self.fetch_release_checksum();
+            }
+            if self.checksum_busy {
+                ui.spinner();
+                ui.label("Checking...");
+            }
+        });
+        if let Some(expected) = &self.release_sha256 {
+            let local = integrity::exe_sha256();
+            match local {
+                Some(local) => {
+                    if *expected == local {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(80, 200, 120),
+                            "Checksum matches the official release.",
+                        );
+                    } else {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 80, 80),
+                            "Checksum MISMATCH — this executable differs from the official release.",
+                        );
+                    }
+                }
+                None => {
+                    ui.weak("Could not read the local executable.");
+                }
+            }
+        } else if !self.checksum_busy {
+            ui.weak(
+                "No release checksum fetched yet. Press 'Verify against release' (requires internet).\n\
+                 If offline, the checksum cannot be validated.",
+            );
         }
 
         ui.add_space(16.0);
@@ -2221,6 +2303,25 @@ fn ui_copy_to_clipboard(text: &str) -> Result<(), String> {
 fn ui_paste_from_clipboard() -> Result<String, String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
     clipboard.get_text().map_err(|e| e.to_string())
+}
+
+/// Fetches the expected SHA-256 for the current release from GitHub.
+///
+/// The release asset is named `sensor-watch-studio.sha256` and contains the
+/// hash of the release executable. Returns an error if offline or unavailable.
+fn fetch_release_sha256() -> Result<String, String> {
+    let url = "https://raw.githubusercontent.com/kaiiuen/sensor-watch-rs/master/release/sensor-watch-studio.sha256";
+    let resp = ureq::get(url)
+        .timeout(std::time::Duration::from_secs(10))
+        .call()
+        .map_err(|e| e.to_string())?;
+    let body = resp.into_string().map_err(|e| e.to_string())?;
+    let sha = body.trim().to_string();
+    if sha.len() == 64 {
+        Ok(sha)
+    } else {
+        Err("Unexpected checksum format".to_string())
+    }
 }
 
 /// Parses a hex color string like "#00FF88" into an egui color.

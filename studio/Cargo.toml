@@ -26,3 +26,6 @@ arboard = "3"
 
 # System resource usage (CPU, RAM, storage, network) for the footer
 sysinfo = { version = "0.35", features = ["network"] }
+
+# HTTP client for fetching the release checksum
+ureq = "2"
