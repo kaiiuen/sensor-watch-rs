@@ -26,6 +26,8 @@ pub struct Display {
     pub lap: bool,
     pub dots: bool,
     pub light: bool,
+    /// The LED backlight color (RGB), used when the light is on.
+    pub led_color: [u8; 3],
     pub mode_2: char,
     pub mode_1: char,
     pub day_2: char,
