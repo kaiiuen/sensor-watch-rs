@@ -137,6 +137,10 @@ struct StudioApp {
     drift_session: drift::DriftSession,
     /// The number of fuzz iterations to run.
     fuzz_iterations: usize,
+    /// The stats sampling rate in milliseconds.
+    stats_rate_ms: u64,
+    /// Shared atomic for the sampler thread to read the live rate.
+    stats_rate_shared: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -205,6 +209,8 @@ impl Panel {
 
 impl Default for StudioApp {
     fn default() -> Self {
+        // Shared atomic for the stats sampler's live rate.
+        let stats_rate_shared = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1000));
         let mut app = StudioApp {
             current_panel: Panel::Dashboard,
             status: String::new(),
@@ -242,7 +248,9 @@ impl Default for StudioApp {
             pending_checksum: None,
             watch_config: watch_config::WatchConfig::default(),
             sys_stats: sysstats::SysStats::default(),
-            sys_rx: sysstats::spawn_sampler(),
+            stats_rate_ms: 1000,
+            stats_rate_shared: stats_rate_shared.clone(),
+            sys_rx: sysstats::spawn_sampler(stats_rate_shared),
             catalog_search: String::new(),
             board: Board::Green,
             sim_face_idx: 0,
@@ -1875,106 +1883,71 @@ impl StudioApp {
         ui.add_space(16.0);
         ui.separator();
         ui.heading("App Resource Usage");
-        ui.label("How much of the system this app is currently using (updates every second).");
+        ui.horizontal(|ui| {
+            ui.label("How much of the system this app is using.");
+            ui.separator();
+            ui.label("Update rate:");
+            egui::ComboBox::from_id_source("stats_rate")
+                .selected_text(self.stats_rate_label())
+                .show_ui(ui, |ui| {
+                    for (label, ms) in [
+                        ("Real-time (0.25s)", 250u64),
+                        ("0.5s", 500),
+                        ("1s", 1000),
+                        ("2s", 2000),
+                    ] {
+                        if ui
+                            .selectable_label(self.stats_rate_ms == ms, label)
+                            .clicked()
+                        {
+                            self.stats_rate_ms = ms;
+                            self.stats_rate_shared
+                                .store(ms, std::sync::atomic::Ordering::Relaxed);
+                            self.log.log(format!("Stats rate set to {label}"));
+                        }
+                    }
+                });
+        });
         ui.add_space(8.0);
 
-        // Side-by-side: App on the left, System on the right, as a plain grid.
+        // App-only stats (no system column).
         egui::Grid::new("app_resources_grid")
             .striped(true)
-            .spacing([40.0, 6.0])
-            .num_columns(4)
+            .spacing([24.0, 6.0])
+            .num_columns(2)
             .show(ui, |ui| {
-                // Headers.
-                ui.strong("App");
-                ui.label("");
-                ui.strong("System");
-                ui.label("");
-                ui.end_row();
-
-                // CPU.
                 ui.label("CPU");
                 ui.monospace(format!("{:.1}%", self.sys_stats.cpu_percent));
-                ui.label("CPU");
-                ui.monospace(format!("{:.1}%", self.sys_stats.sys_cpu_percent));
                 ui.end_row();
-
-                // CPU speed / cores.
                 ui.label("CPU speed");
                 ui.monospace(format!("{} MHz", self.sys_stats.cpu_freq_mhz));
-                ui.label("Cores");
-                ui.monospace(format!("{}", self.sys_stats.physical_cores));
                 ui.end_row();
-
-                // Threads.
                 ui.label("Threads");
                 ui.monospace(format!("{}", self.sys_stats.threads));
-                ui.label("");
-                ui.label("");
                 ui.end_row();
-
-                // Memory.
                 ui.label("Memory");
                 ui.monospace(fmt_bytes(self.sys_stats.mem_bytes));
-                ui.label("Memory");
-                let total = self.sys_stats.total_mem_bytes.max(1);
-                let pct = self.sys_stats.sys_mem_used_bytes as f64 / total as f64 * 100.0;
-                ui.monospace(format!(
-                    "{} / {} ({pct:.1}%)",
-                    fmt_bytes(self.sys_stats.sys_mem_used_bytes),
-                    fmt_bytes(self.sys_stats.total_mem_bytes)
-                ));
                 ui.end_row();
-
-                // Virtual memory.
                 ui.label("Virtual memory");
                 ui.monospace(fmt_bytes(self.sys_stats.virtual_mem_bytes));
-                ui.label("");
-                ui.label("");
                 ui.end_row();
-
-                // Disk read.
                 ui.label("Disk read");
                 ui.monospace(format!(
                     "{}  ({} total)",
                     fmt_bytes(self.sys_stats.disk_read_rate),
                     fmt_bytes(self.sys_stats.disk_read_bytes)
                 ));
-                ui.label("");
-                ui.label("");
                 ui.end_row();
-
-                // Disk write.
                 ui.label("Disk write");
                 ui.monospace(format!(
                     "{}  ({} total)",
                     fmt_bytes(self.sys_stats.disk_write_rate),
                     fmt_bytes(self.sys_stats.disk_write_bytes)
                 ));
-                ui.label("");
-                ui.label("");
                 ui.end_row();
-
-                // Network.
-                ui.label("");
-                ui.label("");
-                ui.label("Network");
-                ui.monospace(format!(
-                    "↓ {}  ↑ {}",
-                    fmt_bytes(self.sys_stats.sys_net_rx_rate),
-                    fmt_bytes(self.sys_stats.sys_net_tx_rate)
-                ));
-                ui.end_row();
-
-                // Run time.
                 ui.label("Run time");
                 ui.monospace(format!("{} s", self.sys_stats.run_time_secs));
-                ui.label("");
-                ui.label("");
                 ui.end_row();
-
-                // GPU.
-                ui.label("GPU");
-                ui.monospace("N/A (Windows)");
                 ui.label("GPU");
                 ui.monospace("N/A (Windows)");
                 ui.end_row();
@@ -2295,6 +2268,16 @@ impl StudioApp {
     /// The watch OS/framework baseline is ~40 KB; each face adds ~2 KB.
     fn estimate_flash_kb(&self, selected: usize) -> u32 {
         40 + (selected as u32) * 2
+    }
+
+    /// The label for the current stats sampling rate.
+    fn stats_rate_label(&self) -> &'static str {
+        match self.stats_rate_ms {
+            250 => "Real-time (0.25s)",
+            500 => "0.5s",
+            2000 => "2s",
+            _ => "1s",
+        }
     }
 
     /// Rough estimate of the firmware RAM usage in KB for the selected faces.

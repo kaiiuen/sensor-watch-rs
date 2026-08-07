@@ -32,37 +32,23 @@ pub struct SysStats {
     pub disk_write_rate: u64,
     /// App run time in seconds.
     pub run_time_secs: u64,
-
-    // System (whole machine).
-    /// Total system CPU usage as a percentage (0-100).
-    pub sys_cpu_percent: f32,
-    /// Total system memory used in bytes.
-    pub sys_mem_used_bytes: u64,
-    /// Total system memory in bytes.
-    pub total_mem_bytes: u64,
-    /// Number of physical CPU cores.
-    pub physical_cores: usize,
-    /// Total system network received bytes since last sample (rate).
-    pub sys_net_rx_rate: u64,
-    /// Total system network transmitted bytes since last sample (rate).
-    pub sys_net_tx_rate: u64,
 }
 
 /// Starts a background thread that periodically samples resource usage and
-/// sends snapshots over the returned channel.
-pub fn spawn_sampler() -> mpsc::Receiver<SysStats> {
+/// sends snapshots over the returned channel. The sampling rate (in ms) is read
+/// from the shared atomic so it can be changed live.
+pub fn spawn_sampler(
+    rate_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
+) -> mpsc::Receiver<SysStats> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut sys = sysinfo::System::new_all();
         sys.refresh_all();
-        let mut networks = sysinfo::Networks::new_with_refreshed_list();
         let pid = sysinfo::Pid::from_u32(std::process::id());
 
         // Keep previous counters to compute rates.
         let mut prev_disk_read = 0u64;
         let mut prev_disk_write = 0u64;
-        let mut prev_net_rx = 0u64;
-        let mut prev_net_tx = 0u64;
         let mut cpu_accum = 0.0f32;
         let mut samples = 0u32;
 
@@ -71,32 +57,10 @@ pub fn spawn_sampler() -> mpsc::Receiver<SysStats> {
             sys.refresh_cpu_frequency();
             sys.refresh_memory();
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
-            networks.refresh(true);
 
-            let sys_cpu = sys.global_cpu_usage();
-            let total_mem = sys.total_memory();
-            let used_mem = sys.used_memory();
             let cores = sysinfo::System::physical_core_count().unwrap_or(0);
 
-            // Sum network rates across all interfaces.
-            let mut net_rx = 0u64;
-            let mut net_tx = 0u64;
-            for data in networks.list().values() {
-                net_rx += data.received();
-                net_tx += data.transmitted();
-            }
-
-            let mut stats = SysStats {
-                sys_cpu_percent: sys_cpu,
-                sys_mem_used_bytes: used_mem,
-                total_mem_bytes: total_mem,
-                physical_cores: cores,
-                sys_net_rx_rate: net_rx.saturating_sub(prev_net_rx),
-                sys_net_tx_rate: net_tx.saturating_sub(prev_net_tx),
-                ..Default::default()
-            };
-            prev_net_rx = net_rx;
-            prev_net_tx = net_tx;
+            let mut stats = SysStats::default();
 
             if let Some(proc) = sys.process(pid) {
                 // sysinfo's cpu_usage() is per-core (100% = one full core) and
@@ -134,7 +98,8 @@ pub fn spawn_sampler() -> mpsc::Receiver<SysStats> {
             if tx.send(stats).is_err() {
                 break;
             }
-            std::thread::sleep(Duration::from_millis(1000));
+            let ms = rate_ms.load(std::sync::atomic::Ordering::Relaxed).max(50);
+            std::thread::sleep(Duration::from_millis(ms));
         }
     });
     rx
