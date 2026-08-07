@@ -1571,6 +1571,31 @@ impl StudioApp {
             if ui.button(tr(self.language, Key::Clear)).clicked() {
                 self.log.clear();
             }
+            if ui.button("Copy all").clicked() {
+                let text = self
+                    .log
+                    .entries()
+                    .iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = ui_copy_to_clipboard(&text);
+                self.status = "Debug log copied".to_string();
+            }
+            if ui.button("Export log").clicked() {
+                let text = self
+                    .log
+                    .entries()
+                    .iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let path = std::path::Path::new("debug.log");
+                if std::fs::write(path, text).is_ok() {
+                    self.status = format!("Log exported to {}", path.display());
+                    self.log.log(format!("Log exported to {}", path.display()));
+                }
+            }
         });
         ui.separator();
         egui::ScrollArea::vertical()
