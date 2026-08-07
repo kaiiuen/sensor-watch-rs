@@ -1911,16 +1911,36 @@ impl StudioApp {
                 ui.monospace(&faces[idx]);
             }
             ui.separator();
-            // Show which preset face is being simulated.
-            let faces = self.presets.active_faces();
-            let idx = self.sim_face_idx.min(faces.len().saturating_sub(1));
-            ui.label(format!(
-                "Face: {} / {}",
-                if faces.is_empty() { 0 } else { idx + 1 },
-                faces.len()
-            ));
-            if !faces.is_empty() {
-                ui.monospace(&faces[idx]);
+            // Fuzz the current face.
+            if ui
+                .button("Fuzz face")
+                .on_hover_text(
+                    "Run randomized button/tick sequences through the current face to\n\
+                 check it never panics or produces a broken display.",
+                )
+                .clicked()
+            {
+                let name = if faces.is_empty() {
+                    "SIMPLE_CLOCK".to_string()
+                } else {
+                    faces[idx].clone()
+                };
+                let iters = self.fuzz_iterations;
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                match fuzz::fuzz_face(&name, iters, seed) {
+                    Ok(n) => {
+                        self.status = format!("Fuzz passed: {n} iterations on {name}");
+                        self.log
+                            .log(format!("Fuzz passed: {n} iterations on {name}"));
+                    }
+                    Err(e) => {
+                        self.status = format!("Fuzz failed: {e}");
+                        self.log_error(&format!("Fuzz failed: {e}"));
+                    }
+                }
             }
         });
         ui.separator();
