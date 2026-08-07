@@ -374,7 +374,16 @@ impl eframe::App for StudioApp {
         // Top navigation bar.
         egui::TopBottomPanel::top("nav").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.heading(tr(self.language, Key::AppTitle));
+                // Clicking the title opens the project's GitHub repo.
+                let title = ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(tr(self.language, Key::AppTitle)).strong(),
+                    )
+                    .sense(egui::Sense::click()),
+                );
+                if title.clicked() {
+                    let _ = webbrowser::open("https://github.com/kaiiuen/sensor-watch-rs");
+                }
                 ui.separator();
                 for panel in [
                     Panel::Dashboard,
@@ -416,6 +425,10 @@ impl eframe::App for StudioApp {
                     "~{} KB compiled",
                     self.estimate_compiled_kb(selected)
                 ));
+                ui.separator();
+                // Window size.
+                let size = ctx.screen_rect().size();
+                ui.monospace(format!("Window: {:.0}x{:.0}", size.x, size.y));
                 ui.separator();
                 ui.label(&self.status);
             });
@@ -2303,7 +2316,9 @@ fn fmt_bytes(bytes: u64) -> String {
 
 fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([900.0, 600.0]),
+        // Launch at 640x480 (480p, 4:3) so there's ample space by default while
+        // remaining adjustable.
+        viewport: egui::ViewportBuilder::default().with_inner_size([640.0, 480.0]),
         ..Default::default()
     };
     eframe::run_native(

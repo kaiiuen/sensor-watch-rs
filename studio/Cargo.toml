@@ -29,3 +29,6 @@ sysinfo = { version = "0.35", features = ["network"] }
 
 # HTTP client for fetching the release checksum
 ureq = "2"
+
+# Open the GitHub repo in the default browser when the title is clicked
+webbrowser = "1"
