@@ -96,6 +96,8 @@ pub struct FaceEngine {
     pub time_mode_24: bool,
     /// Power-on time in seconds (uptime), for the diagnostics stats.
     pub power_on_seconds: u32,
+    /// Whether the coin-flip face shows heads (true) or tails (false).
+    pub coin_heads: bool,
 }
 
 impl FaceEngine {
@@ -118,6 +120,7 @@ impl FaceEngine {
             diag_test_active: false,
             time_mode_24: true,
             power_on_seconds: 0,
+            coin_heads: true,
         }
     }
 
@@ -155,6 +158,11 @@ impl FaceEngine {
             match button {
                 FaceButton::Alarm => self.alarm_enabled = !self.alarm_enabled,
                 FaceButton::Light => {}
+            }
+        } else if upper.contains("SIMPLE_COIN_FLIP") || upper.contains("TOSS_UP") {
+            // A press flips the coin.
+            if button == FaceButton::Alarm {
+                self.coin_heads = !self.coin_heads;
             }
         } else if upper.contains("DIAGNOSTICS") || upper.contains("SETTINGS") {
             self.diag_press(button);
@@ -235,6 +243,13 @@ impl FaceEngine {
             render_world_clock(&mut d, time, self.world_offset);
         } else if upper.contains("COUNTER") {
             render_counter(&mut d, self.counter);
+        } else if upper.contains("FLASHLIGHT") {
+            // Flashlight: show LIGHT in the main display.
+            d.set_string("LIGHT", 2);
+        } else if upper.contains("SIMPLE_COIN_FLIP") || upper.contains("TOSS_UP") {
+            render_coin_flip(&mut d, self.coin_heads);
+        } else if upper.contains("MOON_PHASE") {
+            d.set_string("MOON", 3);
         } else if upper.contains("DIAGNOSTICS") || upper.contains("SETTINGS") {
             self.render_diag(&mut d, time);
         } else {
@@ -468,4 +483,12 @@ fn render_counter(d: &mut FaceDisplay, counter: u32) {
         (b'0' + (c % 10) as u8) as char,
     );
     d.chars = ['C', 'T', ' ', a, b, c2, d2, e, f, ' '];
+}
+
+fn render_coin_flip(d: &mut FaceDisplay, heads: bool) {
+    if heads {
+        d.set_string("HEADS", 2);
+    } else {
+        d.set_string("TAILS", 2);
+    }
 }
