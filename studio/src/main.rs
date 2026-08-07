@@ -143,6 +143,10 @@ struct StudioApp {
     stats_rate_shared: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The UI text size (0=small, 1=normal, 2=big).
     text_size: u8,
+    /// The timestamp of the last successful build.
+    last_build_time: Option<u64>,
+    /// The number of builds performed this session.
+    build_count: u32,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -254,6 +258,8 @@ impl Default for StudioApp {
             stats_rate_shared: stats_rate_shared.clone(),
             sys_rx: sysstats::spawn_sampler(stats_rate_shared),
             text_size: 1,
+            last_build_time: None,
+            build_count: 0,
             catalog_search: String::new(),
             board: Board::Green,
             sim_face_idx: 0,
@@ -348,6 +354,13 @@ impl eframe::App for StudioApp {
                         self.log.log(&result.message);
                         if result.success {
                             self.last_uf2 = result.uf2_path;
+                            self.last_build_time = Some(
+                                std::time::SystemTime::now()
+                                    .duration_since(std::time::UNIX_EPOCH)
+                                    .map(|d| d.as_secs())
+                                    .unwrap_or(0),
+                            );
+                            self.build_count += 1;
                             if let Some(p) = &self.last_uf2 {
                                 self.log.log(format!("UF2 written to {}", p.display()));
                             }
@@ -574,6 +587,16 @@ impl StudioApp {
             ui.label(
                 tr(self.language, Key::LastBuild).replace("{path}", &uf2.display().to_string()),
             );
+            if let Some(t) = self.last_build_time {
+                let secs = (t as i64).rem_euclid(86400);
+                let h = (secs / 3600) % 24;
+                let m = (secs / 60) % 60;
+                let s = secs % 60;
+                ui.monospace(format!(
+                    "Last build: {h:02}:{m:02}:{s:02}  ({} builds this session)",
+                    self.build_count
+                ));
+            }
         } else {
             ui.label(tr(self.language, Key::NoBuildYet));
         }
