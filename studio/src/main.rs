@@ -789,6 +789,27 @@ impl StudioApp {
             ui.weak("No time fetched yet.");
         }
 
+        // Server info table.
+        ui.add_space(8.0);
+        ui.collapsing("Server list", |ui| {
+            egui::Grid::new("ntp_server_list")
+                .striped(true)
+                .spacing([16.0, 2.0])
+                .num_columns(3)
+                .show(ui, |ui| {
+                    ui.strong("#");
+                    ui.strong("Name");
+                    ui.strong("Host");
+                    ui.end_row();
+                    for (i, (name, host)) in all_servers.iter().enumerate() {
+                        ui.monospace(i.to_string());
+                        ui.label(name);
+                        ui.monospace(host);
+                        ui.end_row();
+                    }
+                });
+        });
+
         // Clock calibration: compute the next-minute-boundary timestamp from the
         // NTP time and generate a `settime` command for the serial shell.
         ui.add_space(16.0);
