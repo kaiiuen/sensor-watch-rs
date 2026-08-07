@@ -1616,6 +1616,22 @@ impl StudioApp {
         ui.separator();
         ui.label(tr(self.language, Key::FlashFirmware));
         ui.add_space(8.0);
+        // Watch detection.
+        match self.detect_watch() {
+            Some(root) => {
+                ui.colored_label(
+                    egui::Color32::from_rgb(80, 200, 120),
+                    format!("Watch detected at {root}"),
+                );
+            }
+            None => {
+                ui.colored_label(
+                    egui::Color32::from_rgb(220, 160, 80),
+                    "No watch detected. Put it in bootloader mode (USB connected).",
+                );
+            }
+        }
+        ui.add_space(8.0);
         if let Some(uf2) = &self.last_uf2 {
             let uf2 = uf2.clone();
             ui.label(
@@ -2583,13 +2599,38 @@ impl StudioApp {
                     if std::fs::write(&dest, &data).is_ok() {
                         self.status = format!("Flashed to {dest}");
                         self.log.log(format!("Flashed to {dest}"));
+                        self.flash_log.log(format!("Flashed to {dest}"));
+                        return;
+                    } else {
+                        self.status = format!("Failed to write to {dest}");
+                        self.log_error(&format!("Failed to write to {dest}"));
+                        self.flash_log.log(format!("Failed to write to {dest}"));
                         return;
                     }
                 }
             }
         }
         self.status = "Watch not found (is it in bootloader mode?)".to_string();
-        self.log.log("Watch not found (is it in bootloader mode?)");
+        self.log_error("Watch not found (is it in bootloader mode?)");
+        self.flash_log
+            .log("Watch not found (is it in bootloader mode?)");
+    }
+
+    /// Detects whether a Sensor Watch is mounted as a USB drive.
+    fn detect_watch(&self) -> Option<String> {
+        for drive in 'A'..='Z' {
+            let root = format!("{drive}:\\");
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                let is_watch = entries.flatten().any(|e| {
+                    let name = e.file_name().to_string_lossy().to_lowercase();
+                    name == "info_uf2.txt" || name == "current.uf2"
+                });
+                if is_watch {
+                    return Some(root);
+                }
+            }
+        }
+        None
     }
 
     /// Rough estimate of the firmware flash size in KB for the selected faces.
