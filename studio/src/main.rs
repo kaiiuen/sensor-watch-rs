@@ -1067,13 +1067,14 @@ impl StudioApp {
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
-                                // Spreadsheet-style grid: # | Face | Add.
+                                // Spreadsheet-style grid: # | Face | Description | Add.
                                 egui::Grid::new("catalog_grid")
                                     .striped(true)
                                     .spacing([12.0, 4.0])
                                     .show(ui, |ui| {
                                         ui.strong("#");
                                         ui.strong("Face");
+                                        ui.strong("Description");
                                         ui.strong("Add");
                                         ui.end_row();
                                         for (i, face) in self.face_list.iter().enumerate() {
@@ -1081,6 +1082,7 @@ impl StudioApp {
                                             if !query.is_empty()
                                                 && !face.name.to_lowercase().contains(&query)
                                                 && !face.index.to_string().contains(&query)
+                                                && !face.description.to_lowercase().contains(&query)
                                             {
                                                 continue;
                                             }
@@ -1091,7 +1093,8 @@ impl StudioApp {
                                             {
                                                 self.selected_face = Some(i);
                                             }
-                                            ui.label(&face.name);
+                                            ui.label(&face.name).on_hover_text(&face.description);
+                                            ui.label(&face.description);
                                             if ui.small_button("+").clicked() {
                                                 self.presets.add_face(&face.name);
                                                 self.log

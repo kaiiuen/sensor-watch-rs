@@ -7,6 +7,8 @@
 pub struct FaceInfo {
     pub index: usize,
     pub name: String,
+    /// A short description from the face's module doc comment, if available.
+    pub description: String,
 }
 
 /// Scans the firmware's `app_setup()` for registered faces.
@@ -33,6 +35,7 @@ pub fn discover_faces() -> Vec<FaceInfo> {
                             let name = after[..name_end].to_string();
                             faces.push(FaceInfo {
                                 index,
+                                description: face_description(&name),
                                 name: name.clone(),
                             });
                         }
@@ -43,6 +46,28 @@ pub fn discover_faces() -> Vec<FaceInfo> {
     }
     faces.sort_by_key(|f| f.index);
     faces
+}
+
+/// Reads a short description from a face's source file (the first `//!` doc
+/// comment line), falling back to an empty string.
+fn face_description(name: &str) -> String {
+    let path = crate::build::firmware_dir()
+        .join("src/movement")
+        .join(format!("{name}.rs"));
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return String::new(),
+    };
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("//!") {
+            let rest = rest.trim();
+            if !rest.is_empty() {
+                return rest.to_string();
+            }
+        }
+    }
+    String::new()
 }
 
 #[cfg(test)]
@@ -64,6 +89,7 @@ mod tests {
                                 let name = after[..name_end].to_string();
                                 faces.push(FaceInfo {
                                     index,
+                                    description: String::new(),
                                     name: name.clone(),
                                 });
                             }
