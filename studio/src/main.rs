@@ -2649,7 +2649,8 @@ impl StudioApp {
         match parts[0].to_lowercase().as_str() {
             "help" => {
                 self.terminal_history.push(
-                    "Commands: help, status, faces, build, flash, fuzz, time, clear".to_string(),
+                    "Commands: help, status, faces, board, build, flash, fuzz, time, clear"
+                        .to_string(),
                 );
             }
             "status" => {
@@ -2702,6 +2703,28 @@ impl StudioApp {
                 let (_, _, _, h, m, s, _) = self.watch.get_time();
                 self.terminal_history
                     .push(format!("Sim time: {h:02}:{m:02}:{s:02}"));
+            }
+            "board" => {
+                if let Some(b) = parts.get(1) {
+                    let next = match b.to_lowercase().as_str() {
+                        "green" => Some(Board::Green),
+                        "red" | "lite" => Some(Board::RedLite),
+                        "blue" => Some(Board::Blue),
+                        "pro" => Some(Board::Pro),
+                        _ => None,
+                    };
+                    if let Some(nb) = next {
+                        self.board = nb;
+                        self.terminal_history
+                            .push(format!("Board set to {}", nb.label()));
+                    } else {
+                        self.terminal_history
+                            .push("Unknown board (green/red/blue/pro)".to_string());
+                    }
+                } else {
+                    self.terminal_history
+                        .push(format!("Board: {}", self.board.label()));
+                }
             }
             "clear" => self.terminal_history.clear(),
             _ => self
