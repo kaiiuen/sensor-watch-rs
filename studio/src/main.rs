@@ -3140,6 +3140,9 @@ impl StudioApp {
                         self.status = format!("Flashed to {dest}");
                         self.log.log(format!("Flashed to {dest}"));
                         self.flash_log.log(format!("Flashed to {dest}"));
+                        // Auto-fetch NTP time after flashing for sync.
+                        self.fetch_ntp();
+                        self.flash_log.log("Fetching NTP time for sync...");
                         return;
                     } else {
                         self.status = format!("Failed to write to {dest}");
