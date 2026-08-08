@@ -66,6 +66,8 @@ pub struct WatchConfig {
     pub raise_to_wake_light: bool,
     /// Whether the light uses red at night instead of the day color.
     pub night_light_red: bool,
+    /// The buzzer sound type (0=click, 1=beep, 2=double, 3=chime).
+    pub buzzer_type: u8,
 }
 
 impl Default for WatchConfig {
@@ -94,6 +96,7 @@ impl Default for WatchConfig {
             raise_to_wake: false,
             raise_to_wake_light: false,
             night_light_red: false,
+            buzzer_type: 0,
         }
     }
 }
@@ -147,6 +150,7 @@ impl WatchConfig {
             raise_to_wake: false,
             raise_to_wake_light: false,
             night_light_red: false,
+            buzzer_type: 0,
         }
     }
 }

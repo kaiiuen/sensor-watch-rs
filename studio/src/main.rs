@@ -1426,6 +1426,23 @@ impl StudioApp {
                                 ui.label(format!("{:.1} V", self.watch_config.piezo_voltage));
                             });
                             ui.end_row();
+
+                            // Buzzer sound type.
+                            ui.label("Buzzer sound");
+                            ui.horizontal(|ui| {
+                                for (v, label) in
+                                    [(0u8, "Click"), (1, "Beep"), (2, "Double"), (3, "Chime")]
+                                {
+                                    if ui
+                                        .selectable_label(self.watch_config.buzzer_type == v, label)
+                                        .clicked()
+                                    {
+                                        self.watch_config.buzzer_type = v;
+                                        self.log.log(format!("Buzzer sound set to {label}"));
+                                    }
+                                }
+                            });
+                            ui.end_row();
                         });
 
                     ui.add_space(12.0);
