@@ -168,6 +168,8 @@ struct StudioApp {
     flash_log: debug::DebugLog,
     /// Dedicated log for errors/warnings (shown in the Bugs tab).
     error_log: debug::DebugLog,
+    /// Dedicated log for the Watch Faces tab.
+    faces_log: debug::DebugLog,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -340,6 +342,7 @@ impl Default for StudioApp {
             build_log: debug::DebugLog::new(),
             flash_log: debug::DebugLog::new(),
             error_log: debug::DebugLog::new(),
+            faces_log: debug::DebugLog::new(),
             catalog_search: String::new(),
             catalog_category: String::new(),
             board: Board::Green,
@@ -1053,6 +1056,30 @@ impl StudioApp {
         ui.heading(tr(self.language, Key::WatchFaces));
         ui.separator();
 
+        // Per-tab debug output.
+        ui.collapsing("Faces debug log", |ui| {
+            ui.horizontal(|ui| {
+                if ui.small_button("Clear").clicked() {
+                    self.faces_log.clear();
+                }
+            });
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .max_height(120.0)
+                .show(ui, |ui| {
+                    if self.faces_log.is_empty() {
+                        ui.weak("(no faces activity yet)");
+                    }
+                    for entry in self.faces_log.entries() {
+                        let secs = entry.timestamp % 60;
+                        let mins = (entry.timestamp / 60) % 60;
+                        let hrs = (entry.timestamp / 3600) % 24;
+                        ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                    }
+                });
+        });
+        ui.separator();
+
         // Preset management sub-tabs along the top.
         ui.horizontal(|ui| {
             ui.label("Presets:");
@@ -1066,6 +1093,8 @@ impl StudioApp {
             }
             if ui.button("+").clicked() {
                 self.presets.add_preset(&self.new_preset_name);
+                self.faces_log
+                    .log(format!("Added preset {}", self.new_preset_name));
                 self.new_preset_name.clear();
             }
             if ui.button("Rename").clicked() {
@@ -1077,6 +1106,7 @@ impl StudioApp {
             }
             if ui.button("Delete").clicked() {
                 self.presets.delete_active();
+                self.faces_log.log("Deleted active preset");
             }
         });
         ui.horizontal(|ui| {
