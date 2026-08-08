@@ -285,7 +285,7 @@ enum SimAction {
 }
 
 /// Which simulator button is being handled.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum ButtonId {
     L,
     C,
@@ -2788,6 +2788,28 @@ impl StudioApp {
     }
 
     /// Runs a command typed into the terminal.
+    /// Simulates a single button press on the active face (used by the terminal).
+    fn press_sim_button(&mut self, btn: ButtonId) {
+        match btn {
+            ButtonId::L => {
+                self.watch.light = true;
+                self.face_engine.press(face_sim::FaceButton::Light);
+                self.watch.light = false;
+            }
+            ButtonId::C => {
+                let faces = self.presets.active_faces();
+                if !faces.is_empty() {
+                    self.sim_face_idx = (self.sim_face_idx + 1) % faces.len();
+                }
+            }
+            ButtonId::A => {
+                self.watch.toggle_time_mode();
+                self.face_engine.time_mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
+                self.face_engine.press(face_sim::FaceButton::Alarm);
+            }
+        }
+    }
+
     fn run_terminal_command(&mut self, cmd: &str) {
         self.terminal_history.push(format!("> {cmd}"));
         let parts: Vec<&str> = cmd.split_whitespace().collect();
@@ -2797,7 +2819,8 @@ impl StudioApp {
         match parts[0].to_lowercase().as_str() {
             "help" => {
                 self.terminal_history.push(
-                    "Commands: help, status, faces, board, build, flash, fuzz, time, clear"
+                    "Commands: help, status, faces, board, build, flash, fuzz, time,\
+                     clear, modules, errors, bugreport, sim, theme, lang"
                         .to_string(),
                 );
             }
@@ -2875,6 +2898,87 @@ impl StudioApp {
                 }
             }
             "clear" => self.terminal_history.clear(),
+            "modules" => {
+                if self.modules.modules.is_empty() {
+                    self.terminal_history
+                        .push("No custom modules registered".to_string());
+                }
+                for m in &self.modules.modules {
+                    self.terminal_history.push(format!(
+                        "{} [{}] {}",
+                        if m.enabled { "ON " } else { "OFF" },
+                        m.target,
+                        m.name
+                    ));
+                }
+            }
+            "errors" => {
+                let n = self.error_log.entries().len();
+                self.terminal_history.push(format!("{n} errors recorded"));
+                for e in self.error_log.entries().iter().rev().take(10) {
+                    self.terminal_history.push(format!("  {}", e.message));
+                }
+            }
+            "bugreport" => {
+                let report = self.build_bug_report();
+                let _ = ui_copy_to_clipboard(&report);
+                self.terminal_history
+                    .push("Bug report copied to clipboard".to_string());
+            }
+            "sim" => {
+                if let Some(b) = parts.get(1) {
+                    let btn = match b.to_lowercase().as_str() {
+                        "a" => Some(ButtonId::A),
+                        "b" | "l" => Some(ButtonId::L),
+                        "c" | "m" => Some(ButtonId::C),
+                        _ => None,
+                    };
+                    if let Some(btn) = btn {
+                        self.press_sim_button(btn);
+                        self.terminal_history.push(format!("Pressed {:?}", btn));
+                    } else {
+                        self.terminal_history
+                            .push("Unknown button (a/b/c)".to_string());
+                    }
+                } else {
+                    self.terminal_history.push("Usage: sim <a|b|c>".to_string());
+                }
+            }
+            "theme" => {
+                if let Some(t) = parts.get(1) {
+                    let next = Theme::ALL
+                        .iter()
+                        .find(|t2| t2.name().to_lowercase() == t.to_lowercase());
+                    if let Some(t2) = next {
+                        self.theme = *t2;
+                        self.terminal_history
+                            .push(format!("Theme set to {}", t2.name()));
+                    } else {
+                        self.terminal_history.push("Unknown theme".to_string());
+                    }
+                } else {
+                    self.terminal_history
+                        .push(format!("Theme: {}", self.theme.name()));
+                }
+            }
+            "lang" => {
+                if let Some(l) = parts.get(1) {
+                    let next = Language::ALL
+                        .iter()
+                        .find(|l2| l2.name().to_lowercase() == l.to_lowercase());
+                    if let Some(l2) = next {
+                        self.language = *l2;
+                        self.terminal_history
+                            .push(format!("Language set to {}", l2.name()));
+                    } else {
+                        self.terminal_history
+                            .push("Unknown language (English/简体中文/繁體中文)".to_string());
+                    }
+                } else {
+                    self.terminal_history
+                        .push(format!("Language: {}", self.language.name()));
+                }
+            }
             _ => self
                 .terminal_history
                 .push(format!("Unknown command: {cmd} (try 'help')")),
