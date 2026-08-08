@@ -186,6 +186,8 @@ impl FaceEngine {
                         8
                     } else if self.diag_screen == 7 {
                         4
+                    } else if self.diag_screen == 6 {
+                        4
                     } else {
                         3
                     };
@@ -334,6 +336,7 @@ impl FaceEngine {
                 match self.diag_subrow {
                     0 => d.set_string("LED   GREEN", 0),
                     1 => d.set_string("BUZZER 9.0V", 0),
+                    2 => d.set_string("DST   AUTO", 0),
                     _ => d.set_string("POWER  OFF", 0),
                 }
             }
