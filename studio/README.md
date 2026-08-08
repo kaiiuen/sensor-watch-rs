@@ -1,8 +1,8 @@
 # Firmware Studio
 
 A **GUI companion app** for the Sensor-Watch firmware. This is the end-goal
-product: an editor, debugger, and assembler that produces the final `.uf2`
-firmware file.
+product: an editor, debugger, simulator, and assembler that produces the final
+`.uf2` firmware file and flashes it to the watch.
 
 Built with **egui/eframe** (pure Rust, cross-platform GUI).
 
@@ -11,29 +11,54 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Dashboard** — project overview and health: target board selection
   (Green/Red-Lite/Blue/Pro), flash/RAM estimates, last build time + build count,
   current OS date/time, NTP time fetch (auto-fetches from Cloudflare on launch),
-  custom NTP server management, clock calibration, drift calibration, fuzz
-  testing, and a server list.
+  custom NTP server management (add/edit/delete), a server list, clock
+  calibration, drift calibration, and fuzz testing. All sections are collapsible.
 - **Watch Faces** — lists all faces registered in the firmware (scanned from
-  `src/movement/mod.rs`) with a **search box**, preset management
-  (create/rename/delete presets, add/reorder/remove faces, spreadsheet-style
-  grids), and the **Watch Settings** panel (clock mode, sound/buzzer, LED,
-  power/motion, timezone with a country dropdown).
-- **Editor** — create, edit, or delete watch faces from templates.
+  `src/movement/mod.rs`) with a **search box**, **category filter**, preset
+  management (create/rename/delete presets, add/reorder/remove faces via
+  drag-and-drop, spreadsheet-style grids), and the **Watch Settings** panel
+  (clock mode, sound/buzzer, LED/backlight, power/motion, timezone with a
+  country dropdown). The catalog and active preset are stacked on the left and
+  watch settings on the right; panel sizes are persisted.
+- **Editor** — a self-IDE for creating, editing, or deleting watch faces from
+  templates, with a collapsible "How to make a watch face" guide and a
+  **description** field that shows up in the catalog.
 - **Simulator** — 1:1 F-91W replica (SVG) with clickable button hotspots, a
   **date/time controller**, and face cycling through the active preset. Faces
   are **fully interactive** via the `face_sim` engine: the clock ticks live,
   the stopwatch/timer/counter run, the alarm toggles, and the diagnostics face
   is navigable (including a power-on uptime stat). Text renders with the
-  firmware's real 7-segment character set.
-- **Build** — assembles the firmware into a `.uf2` with a dedicated **build log**.
-- **Flash** — copies the built `.uf2` to the watch's USB drive, with **watch
-  detection** and a dedicated **flash log**.
+  firmware's real 7-segment character set. Shows both the sim's face counter
+  and the engine's actual loaded face for catching face-switching bugs.
+- **Build & Flash** — combined panel: select the target board, build the
+  firmware into a `.uf2` (with estimated compile/flash times), then flash it to
+  the watch. The app **auto-detects** the watch's USB drive and auto-selects
+  the board from its `INFO_UF2.TXT`, copies the `.uf2`, and auto-fetches NTP
+  time for sync. Has a combined build & flash log.
+- **Calibration** — clock calibration (generates a `settime` command for the
+  next minute boundary), a **beep-on-minute-rollover** helper, and drift
+  calibration (parts-per-million).
+- **Modules** — register custom hardware modules for modded boards (e.g. a BLE
+  board instead of the accelerometer). Each module targets a HAL file in
+  `src/watch/`; modules are persisted and can be enabled/disabled/removed.
 - **Debug** — background activity log with Copy All / Export / Clear.
-- **Bugs** — dedicated error/warning log for troubleshooting.
-- **Settings** — language, theme, text size (small/normal/big), app resource
-  usage (app-only, adjustable update rate), settings save/export/import,
-  source export, integrity (SHA-256 + release checksum verification), credits
-  with code statistics, and license.
+- **Bugs** — dedicated error/warning log, plus a **Generate bug report** button
+  that copies a structured report (app state + recent errors/activity) to the
+  clipboard.
+- **Settings** — language (English, 简体中文, 繁體中文), theme, text size
+  (small/normal/big), app resource usage (app-only, adjustable update rate),
+  settings save/export/import, source export, integrity (SHA-256 + release
+  checksum verification), credits with code statistics, and license.
+
+## Terminal
+
+A collapsible **terminal** sits above the footer and persists across all tabs.
+It accepts commands for power users and for testing the app:
+
+```
+help, status, faces, board, build, flash, fuzz, time, clear,
+modules, errors, bugreport, sim <a|b|c>, theme, lang
+```
 
 ## Footer
 
@@ -49,7 +74,8 @@ cargo build --release
 ```
 
 The binary is `target/release/sensor-watch-studio`. It is fully self-contained
-(the watch SVG is embedded), so it can be copied anywhere and run.
+(the watch SVG is embedded), so it can be copied anywhere and run. The app
+launches at a 480p (640x480) default window size and is resizable.
 
 ## Reusing the firmware logic
 
@@ -79,7 +105,7 @@ invokes the firmware's own `cargo build` and uses the core crate's
 - `faces.rs` — discovers faces from the firmware `mod.rs`
 - `editor.rs` — face templates + read/write/delete
 - `presets.rs` — preset manager
-- `i18n.rs` — language (English)
+- `i18n.rs` — language (English, Simplified/Traditional Chinese)
 - `theme.rs` — Light/Dark/Auto
 - `debug.rs` — ring-buffer log
 - `ntp.rs` — NTP time client
@@ -88,6 +114,7 @@ invokes the firmware's own `cargo build` and uses the core crate's
 - `integrity.rs` — SHA-256 hashing and release checksum verification
 - `sysstats.rs` — app resource usage
 - `watch_config.rs` — watch configuration (mirrors the firmware Settings register)
+- `modules.rs` — custom hardware module registry
 - `drift.rs` — drift calibration
 - `fuzz.rs` — face-engine fuzz testing
 
