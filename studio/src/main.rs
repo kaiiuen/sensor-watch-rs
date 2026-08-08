@@ -261,6 +261,7 @@ enum Panel {
     Simulator,
     BuildFlash,
     Calibration,
+    Modules,
     Debug,
     Bugs,
     Settings,
@@ -291,6 +292,7 @@ impl Panel {
             Panel::Simulator => "Simulator",
             Panel::BuildFlash => "Build & Flash",
             Panel::Calibration => "Calibration",
+            Panel::Modules => "Modules",
             Panel::Debug => tr(lang, Key::DebugOutput),
             Panel::Bugs => "Bugs",
             Panel::Settings => tr(lang, Key::Settings),
@@ -579,6 +581,7 @@ impl eframe::App for StudioApp {
                             Panel::Simulator,
                             Panel::BuildFlash,
                             Panel::Calibration,
+                            Panel::Modules,
                             Panel::Debug,
                             Panel::Bugs,
                             Panel::Settings,
@@ -700,6 +703,7 @@ impl eframe::App for StudioApp {
             Panel::Simulator => self.simulator(ui, ctx),
             Panel::BuildFlash => self.build_flash(ui),
             Panel::Calibration => self.calibration(ui),
+            Panel::Modules => self.modules(ui),
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
             Panel::Settings => self.settings(ui),
@@ -2144,6 +2148,23 @@ impl StudioApp {
                     ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
                 }
             });
+    }
+
+    /// The modules panel: manage custom hardware modules (e.g. BLE boards).
+    fn modules(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Modules");
+        ui.separator();
+        ui.label(
+            "Add custom hardware modules (e.g. a BLE board instead of the\n\
+             accelerometer). This is where you'd register a custom HAL or\n\
+             peripheral driver for a modded board.",
+        );
+        ui.add_space(8.0);
+        ui.weak(
+            "Module management is a planned feature. The firmware HAL is\n\
+                 modular (one module per peripheral in src/watch/), so a custom\n\
+                 module can be added there and registered here.",
+        );
     }
 
     /// The debug panel: show the background activity log.
