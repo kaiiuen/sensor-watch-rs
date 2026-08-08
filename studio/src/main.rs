@@ -793,135 +793,136 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
-        ui.heading("NTP Time");
-        ui.label("Select a server and fetch the current time. Add your own servers below.")
-            .on_hover_text(
-                "Network Time Protocol (NTP) synchronizes the watch's clock to an\n\
-                 atomic time source over the internet. Pick a server, press Fetch,\n\
-                 and the app shows the exact UTC time plus the network latency.",
-            );
-        ui.add_space(4.0);
+        ui.collapsing("NTP Time", |ui| {
+            ui.label("Select a server and fetch the current time. Add your own servers below.")
+                .on_hover_text(
+                    "Network Time Protocol (NTP) synchronizes the watch's clock to an\n\
+                     atomic time source over the internet. Pick a server, press Fetch,\n\
+                     and the app shows the exact UTC time plus the network latency.",
+                );
+            ui.add_space(4.0);
 
-        // Build the full server list: built-in + custom.
-        let mut all_servers: Vec<(String, String)> = ntp::SERVERS
-            .iter()
-            .map(|(n, h)| (n.to_string(), h.to_string()))
-            .collect();
-        all_servers.extend(self.ntp_servers.iter().cloned());
-        if self.ntp_server >= all_servers.len() {
-            self.ntp_server = 0;
-        }
+            // Build the full server list: built-in + custom.
+            let mut all_servers: Vec<(String, String)> = ntp::SERVERS
+                .iter()
+                .map(|(n, h)| (n.to_string(), h.to_string()))
+                .collect();
+            all_servers.extend(self.ntp_servers.iter().cloned());
+            if self.ntp_server >= all_servers.len() {
+                self.ntp_server = 0;
+            }
 
-        // Server selection.
-        ui.horizontal(|ui| {
-            ui.label("Server:");
-            egui::ComboBox::from_id_source("ntp_server")
-                .selected_text(&all_servers[self.ntp_server].0)
-                .show_ui(ui, |ui| {
-                    for (i, (name, _)) in all_servers.iter().enumerate() {
-                        ui.selectable_value(&mut self.ntp_server, i, name);
+            // Server selection.
+            ui.horizontal(|ui| {
+                ui.label("Server:");
+                egui::ComboBox::from_id_source("ntp_server")
+                    .selected_text(&all_servers[self.ntp_server].0)
+                    .show_ui(ui, |ui| {
+                        for (i, (name, _)) in all_servers.iter().enumerate() {
+                            ui.selectable_value(&mut self.ntp_server, i, name);
+                        }
+                    });
+                if ui.button("Fetch time").clicked() {
+                    self.fetch_ntp();
+                }
+            });
+
+            // Custom server management.
+            ui.add_space(4.0);
+            ui.collapsing("Manage custom servers", |ui| {
+                ui.horizontal(|ui| {
+                    ui.label("Name:");
+                    ui.text_edit_singleline(&mut self.ntp_edit_name);
+                    ui.label("Host:");
+                    ui.text_edit_singleline(&mut self.ntp_edit_host);
+                    if ui.button("Add").clicked() {
+                        let name = self.ntp_edit_name.trim().to_string();
+                        let host = self.ntp_edit_host.trim().to_string();
+                        if !name.is_empty() && !host.is_empty() {
+                            self.ntp_servers.push((name, host));
+                            self.ntp_edit_name.clear();
+                            self.ntp_edit_host.clear();
+                            self.log.log("Added custom NTP server");
+                            self.save_settings_internal();
+                        }
                     }
                 });
-            if ui.button("Fetch time").clicked() {
-                self.fetch_ntp();
-            }
-        });
-
-        // Custom server management.
-        ui.add_space(4.0);
-        ui.collapsing("Manage custom servers", |ui| {
-            ui.horizontal(|ui| {
-                ui.label("Name:");
-                ui.text_edit_singleline(&mut self.ntp_edit_name);
-                ui.label("Host:");
-                ui.text_edit_singleline(&mut self.ntp_edit_host);
-                if ui.button("Add").clicked() {
-                    let name = self.ntp_edit_name.trim().to_string();
-                    let host = self.ntp_edit_host.trim().to_string();
-                    if !name.is_empty() && !host.is_empty() {
-                        self.ntp_servers.push((name, host));
-                        self.ntp_edit_name.clear();
-                        self.ntp_edit_host.clear();
-                        self.log.log("Added custom NTP server");
+                // List custom servers with edit/delete.
+                let mut to_delete: Option<usize> = None;
+                for (i, (name, host)) in self.ntp_servers.iter().enumerate() {
+                    ui.horizontal(|ui| {
+                        ui.monospace(format!("{name}  ({host})"));
+                        if ui.small_button("Edit").clicked() {
+                            self.ntp_edit_name = name.clone();
+                            self.ntp_edit_host = host.clone();
+                            to_delete = Some(i); // reuse: remove then re-add on Add
+                        }
+                        if ui.small_button("Del").clicked() {
+                            to_delete = Some(i);
+                        }
+                    });
+                }
+                if let Some(i) = to_delete {
+                    if i < self.ntp_servers.len() {
+                        self.ntp_servers.remove(i);
+                        if self.ntp_server >= ntp::SERVERS.len() + self.ntp_servers.len() {
+                            self.ntp_server = 0;
+                        }
+                        self.log.log("Removed custom NTP server");
                         self.save_settings_internal();
                     }
                 }
             });
-            // List custom servers with edit/delete.
-            let mut to_delete: Option<usize> = None;
-            for (i, (name, host)) in self.ntp_servers.iter().enumerate() {
-                ui.horizontal(|ui| {
-                    ui.monospace(format!("{name}  ({host})"));
-                    if ui.small_button("Edit").clicked() {
-                        self.ntp_edit_name = name.clone();
-                        self.ntp_edit_host = host.clone();
-                        to_delete = Some(i); // reuse: remove then re-add on Add
-                    }
-                    if ui.small_button("Del").clicked() {
-                        to_delete = Some(i);
-                    }
-                });
-            }
-            if let Some(i) = to_delete {
-                if i < self.ntp_servers.len() {
-                    self.ntp_servers.remove(i);
-                    if self.ntp_server >= ntp::SERVERS.len() + self.ntp_servers.len() {
-                        self.ntp_server = 0;
-                    }
-                    self.log.log("Removed custom NTP server");
-                    self.save_settings_internal();
-                }
-            }
-        });
 
-        // Show the fetched time.
-        if let Some(ts) = self.ntp_time {
-            let secs = ts as i64;
-            let days = secs.div_euclid(86400);
-            let rem = secs.rem_euclid(86400);
-            let h = (rem / 3600) % 24;
-            let m = (rem / 60) % 60;
-            let s = rem % 60;
-            // Day of week: 1970-01-01 was Thursday.
-            let dow = ((days + 4).rem_euclid(7)) as usize;
-            let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][dow];
-            ui.add_space(8.0);
-            ui.monospace(format!(
-                "{weekday}  {:02}:{:02}:{:02} UTC   (ping {:.1} ms, offset {:+.2} ms)",
-                h,
-                m,
-                s,
-                self.ntp_ping,
-                self.ntp_offset * 1000.0
-            ));
-        } else if self.ntp_busy {
-            ui.add_space(8.0);
-            ui.spinner();
-            ui.label("Fetching...");
-        } else {
-            ui.add_space(8.0);
-            ui.weak("No time fetched yet.");
-        }
+            // Show the fetched time.
+            if let Some(ts) = self.ntp_time {
+                let secs = ts as i64;
+                let days = secs.div_euclid(86400);
+                let rem = secs.rem_euclid(86400);
+                let h = (rem / 3600) % 24;
+                let m = (rem / 60) % 60;
+                let s = rem % 60;
+                // Day of week: 1970-01-01 was Thursday.
+                let dow = ((days + 4).rem_euclid(7)) as usize;
+                let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][dow];
+                ui.add_space(8.0);
+                ui.monospace(format!(
+                    "{weekday}  {:02}:{:02}:{:02} UTC   (ping {:.1} ms, offset {:+.2} ms)",
+                    h,
+                    m,
+                    s,
+                    self.ntp_ping,
+                    self.ntp_offset * 1000.0
+                ));
+            } else if self.ntp_busy {
+                ui.add_space(8.0);
+                ui.spinner();
+                ui.label("Fetching...");
+            } else {
+                ui.add_space(8.0);
+                ui.weak("No time fetched yet.");
+            }
 
-        // Server info table.
-        ui.add_space(8.0);
-        ui.collapsing("Server list", |ui| {
-            egui::Grid::new("ntp_server_list")
-                .striped(true)
-                .spacing([16.0, 2.0])
-                .num_columns(3)
-                .show(ui, |ui| {
-                    ui.strong("#");
-                    ui.strong("Name");
-                    ui.strong("Host");
-                    ui.end_row();
-                    for (i, (name, host)) in all_servers.iter().enumerate() {
-                        ui.monospace(i.to_string());
-                        ui.label(name);
-                        ui.monospace(host);
+            // Server info table.
+            ui.add_space(8.0);
+            ui.collapsing("Server list", |ui| {
+                egui::Grid::new("ntp_server_list")
+                    .striped(true)
+                    .spacing([16.0, 2.0])
+                    .num_columns(3)
+                    .show(ui, |ui| {
+                        ui.strong("#");
+                        ui.strong("Name");
+                        ui.strong("Host");
                         ui.end_row();
-                    }
-                });
+                        for (i, (name, host)) in all_servers.iter().enumerate() {
+                            ui.monospace(i.to_string());
+                            ui.label(name);
+                            ui.monospace(host);
+                            ui.end_row();
+                        }
+                    });
+            });
         });
 
         // Clock calibration: compute the next-minute-boundary timestamp from the
