@@ -109,6 +109,8 @@ struct StudioApp {
     sys_rx: std::sync::mpsc::Receiver<sysstats::SysStats>,
     /// The catalog search query.
     catalog_search: String,
+    /// The catalog category filter (empty = all).
+    catalog_category: String,
     /// The target board revision (green, red/lite, blue, pro).
     board: Board,
     /// The index of the preset face currently being simulated.
@@ -333,6 +335,7 @@ impl Default for StudioApp {
             flash_log: debug::DebugLog::new(),
             error_log: debug::DebugLog::new(),
             catalog_search: String::new(),
+            catalog_category: String::new(),
             board: Board::Green,
             sim_face_idx: 0,
             sim_year: 2026,
@@ -1064,6 +1067,41 @@ impl StudioApp {
                                 }
                             }
                         });
+                        // Category filter.
+                        ui.horizontal(|ui| {
+                            ui.label("Category:");
+                            egui::ComboBox::from_id_source("catalog_cat")
+                                .selected_text(if self.catalog_category.is_empty() {
+                                    "All".to_string()
+                                } else {
+                                    self.catalog_category.clone()
+                                })
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_label(self.catalog_category.is_empty(), "All")
+                                        .clicked()
+                                    {
+                                        self.catalog_category.clear();
+                                    }
+                                    for cat in [
+                                        "Time",
+                                        "Timers & Alarms",
+                                        "Games",
+                                        "Tools",
+                                        "Sensors",
+                                        "Astronomy",
+                                        "System",
+                                        "Other",
+                                    ] {
+                                        if ui
+                                            .selectable_label(self.catalog_category == cat, cat)
+                                            .clicked()
+                                        {
+                                            self.catalog_category = cat.to_string();
+                                        }
+                                    }
+                                });
+                        });
                         ui.separator();
                         let query = self.catalog_search.trim().to_lowercase();
                         egui::ScrollArea::vertical()
@@ -1080,6 +1118,12 @@ impl StudioApp {
                                         ui.strong("Add");
                                         ui.end_row();
                                         for (i, face) in self.face_list.iter().enumerate() {
+                                            // Filter by category.
+                                            if !self.catalog_category.is_empty()
+                                                && face.category != self.catalog_category
+                                            {
+                                                continue;
+                                            }
                                             // Filter by search query.
                                             if !query.is_empty()
                                                 && !face.name.to_lowercase().contains(&query)

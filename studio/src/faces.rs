@@ -9,6 +9,8 @@ pub struct FaceInfo {
     pub name: String,
     /// A short description from the face's module doc comment, if available.
     pub description: String,
+    /// A category label derived from the face name.
+    pub category: &'static str,
 }
 
 /// Scans the firmware's `app_setup()` for registered faces.
@@ -36,6 +38,7 @@ pub fn discover_faces() -> Vec<FaceInfo> {
                             faces.push(FaceInfo {
                                 index,
                                 description: face_description(&name),
+                                category: face_category(&name),
                                 name: name.clone(),
                             });
                         }
@@ -70,6 +73,78 @@ fn face_description(name: &str) -> String {
     String::new()
 }
 
+/// Classifies a face into a category based on its name.
+fn face_category(name: &str) -> &'static str {
+    let n = name.to_uppercase();
+    if n.contains("CLOCK")
+        || n.contains("TIME")
+        || n.contains("WORLD")
+        || n.contains("SOLAR")
+        || n.contains("MARS")
+        || n.contains("WEEK")
+        || n.contains("BEATS")
+    {
+        "Time"
+    } else if n.contains("ALARM")
+        || n.contains("TIMER")
+        || n.contains("STOPWATCH")
+        || n.contains("COUNTDOWN")
+        || n.contains("METRONOME")
+    {
+        "Timers & Alarms"
+    } else if n.contains("GAME")
+        || n.contains("SIMON")
+        || n.contains("INVADERS")
+        || n.contains("BLACKJACK")
+        || n.contains("LANDER")
+        || n.contains("TAROT")
+        || n.contains("WORDLE")
+        || n.contains("TOSS")
+        || n.contains("COIN")
+        || n.contains("HIGHER")
+        || n.contains("ENDLESS")
+        || n.contains("BUTTERFLY")
+    {
+        "Games"
+    } else if n.contains("CALC")
+        || n.contains("CONVERSION")
+        || n.contains("MORSE")
+        || n.contains("TOTP")
+        || n.contains("DATABANK")
+    {
+        "Tools"
+    } else if n.contains("THERM")
+        || n.contains("TEMP")
+        || n.contains("LIGHT")
+        || n.contains("ACCEL")
+        || n.contains("LIS2DW")
+        || n.contains("BATTERY")
+        || n.contains("VOLTAGE")
+    {
+        "Sensors"
+    } else if n.contains("ASTRONOMY")
+        || n.contains("MOON")
+        || n.contains("SUNRISE")
+        || n.contains("SOLSTICE")
+        || n.contains("ORRERY")
+        || n.contains("TIDE")
+        || n.contains("PLANET")
+    {
+        "Astronomy"
+    } else if n.contains("DIAGNOSTIC")
+        || n.contains("SETTINGS")
+        || n.contains("PREFERENCE")
+        || n.contains("FINETUNE")
+        || n.contains("FREQUENCY")
+        || n.contains("SAVE")
+        || n.contains("SET_TIME")
+    {
+        "System"
+    } else {
+        "Other"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -90,6 +165,7 @@ mod tests {
                                 faces.push(FaceInfo {
                                     index,
                                     description: String::new(),
+                                    category: "Other",
                                     name: name.clone(),
                                 });
                             }
