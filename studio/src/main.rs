@@ -1591,6 +1591,31 @@ impl StudioApp {
                             );
                             ui.end_row();
 
+                            // Light sensor auto-sleep.
+                            ui.label("Light sensor sleep");
+                            ui.checkbox(
+                                &mut self.watch_config.light_sensor_sleep,
+                                "Sleep when covered (saves power)",
+                            )
+                            .on_hover_text(
+                                "When the light sensor is covered (e.g. under a sleeve),\n\
+                                 the watch disables seconds and waits for light to return.\n\
+                                 This saves significant battery at night.",
+                            );
+                            ui.end_row();
+
+                            // Reset keybind.
+                            ui.label("Reset keybind");
+                            ui.checkbox(
+                                &mut self.watch_config.reset_keybind,
+                                "Enable HAL reset keybind",
+                            )
+                            .on_hover_text(
+                                "A keybind that resets the watch at the HAL level, in case\n\
+                                 the UI glitches or the panic handler doesn't run.",
+                            );
+                            ui.end_row();
+
                             // Alarm enabled.
                             ui.label("Alarm enabled");
                             ui.checkbox(&mut self.watch_config.alarm_enabled, "");

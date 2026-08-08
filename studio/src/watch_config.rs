@@ -68,6 +68,10 @@ pub struct WatchConfig {
     pub night_light_red: bool,
     /// The buzzer sound type (0=click, 1=beep, 2=double, 3=chime).
     pub buzzer_type: u8,
+    /// Whether the light sensor auto-sleeps the watch when covered.
+    pub light_sensor_sleep: bool,
+    /// Whether a keybind can reset the watch at the HAL level.
+    pub reset_keybind: bool,
 }
 
 impl Default for WatchConfig {
@@ -97,6 +101,8 @@ impl Default for WatchConfig {
             raise_to_wake_light: false,
             night_light_red: false,
             buzzer_type: 0,
+            light_sensor_sleep: false,
+            reset_keybind: false,
         }
     }
 }
@@ -151,6 +157,8 @@ impl WatchConfig {
             raise_to_wake_light: false,
             night_light_red: false,
             buzzer_type: 0,
+            light_sensor_sleep: false,
+            reset_keybind: false,
         }
     }
 }
