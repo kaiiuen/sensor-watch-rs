@@ -2625,6 +2625,15 @@ impl StudioApp {
             ["Click", "Beep", "Double", "Chime"][self.watch_config.buzzer_type as usize % 4],
             self.board.label()
         ));
+        ui.label(format!(
+            "LED: {}  Gradient: {}",
+            self.watch_config.led_color_hex,
+            if self.watch_config.led_gradient {
+                "on"
+            } else {
+                "off"
+            }
+        ));
 
         // Request a repaint so the clock ticks.
         ctx.request_repaint();
