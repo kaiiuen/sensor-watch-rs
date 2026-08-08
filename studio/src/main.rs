@@ -2391,6 +2391,12 @@ impl StudioApp {
                     .join("\n");
                 let _ = ui_copy_to_clipboard(&text);
             }
+            if ui.button("Generate bug report").clicked() {
+                let report = self.build_bug_report();
+                let _ = ui_copy_to_clipboard(&report);
+                self.status = "Bug report copied to clipboard".to_string();
+                self.log.log("Bug report generated and copied to clipboard");
+            }
         });
         ui.separator();
         ui.label(
@@ -3206,6 +3212,48 @@ impl StudioApp {
     fn log_error(&mut self, msg: &str) {
         self.log.log(msg);
         self.error_log.log(msg);
+    }
+
+    /// Builds a structured bug report with app state and recent errors.
+    fn build_bug_report(&self) -> String {
+        let mut out = String::new();
+        out.push_str("Firmware Studio bug report\n");
+        out.push_str("=========================\n\n");
+        out.push_str(&format!("Language: {}\n", self.language.name()));
+        out.push_str(&format!("Theme: {}\n", self.theme.name()));
+        out.push_str(&format!("Board: {}\n", self.board.label()));
+        out.push_str(&format!(
+            "Active faces: {}\n",
+            self.presets.active_faces().len()
+        ));
+        out.push_str(&format!("Catalog faces: {}\n", self.face_list.len()));
+        out.push_str(&format!("Custom modules: {}\n", self.modules.modules.len()));
+        out.push_str(&format!("NTP servers: {}\n", self.ntp_servers.len() + 1));
+        out.push_str(&format!("Last build: {}\n", self.build_message));
+        out.push_str("\n--- Error log ---\n");
+        if self.error_log.is_empty() {
+            out.push_str("(no errors recorded)\n");
+        }
+        for entry in self.error_log.entries() {
+            let secs = entry.timestamp % 60;
+            let mins = (entry.timestamp / 60) % 60;
+            let hrs = (entry.timestamp / 3600) % 24;
+            out.push_str(&format!(
+                "[{hrs:02}:{mins:02}:{secs:02}] {}\n",
+                entry.message
+            ));
+        }
+        out.push_str("\n--- Recent activity ---\n");
+        for entry in self.log.entries().iter().rev().take(20) {
+            let secs = entry.timestamp % 60;
+            let mins = (entry.timestamp / 60) % 60;
+            let hrs = (entry.timestamp / 3600) % 24;
+            out.push_str(&format!(
+                "[{hrs:02}:{mins:02}:{secs:02}] {}\n",
+                entry.message
+            ));
+        }
+        out
     }
 
     /// Saves the current settings to a JSON file in the app data directory.
