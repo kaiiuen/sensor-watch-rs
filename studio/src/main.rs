@@ -149,6 +149,12 @@ struct StudioApp {
     terminal_open: bool,
     /// The terminal output history.
     terminal_history: Vec<String>,
+    /// The latest commit message from GitHub (for update notifications).
+    latest_commit: Option<String>,
+    /// Whether the update check is in flight.
+    update_checking: bool,
+    /// The handle to the background update check.
+    pending_update: Option<std::thread::JoinHandle<Result<String, String>>>,
     /// The stats sampling rate in milliseconds.
     stats_rate_ms: u64,
     /// Shared atomic for the sampler thread to read the live rate.
@@ -368,6 +374,9 @@ impl Default for StudioApp {
             terminal_input: String::new(),
             terminal_open: false,
             terminal_history: Vec::new(),
+            latest_commit: None,
+            update_checking: false,
+            pending_update: None,
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -380,6 +389,8 @@ impl Default for StudioApp {
         }
         // Auto-fetch the time from the default NTP server (Cloudflare) on launch.
         app.fetch_ntp();
+        // Check for updates on launch.
+        app.check_for_updates();
         app.status = tr(app.language, Key::Ready).to_string();
         app
     }
@@ -521,6 +532,22 @@ impl eframe::App for StudioApp {
             }
         }
 
+        // If an update check finished, collect its result.
+        if let Some(handle) = self.pending_update.take() {
+            if handle.is_finished() {
+                self.update_checking = false;
+                match handle.join() {
+                    Ok(Ok(msg)) => {
+                        self.latest_commit = Some(msg.clone());
+                        self.log.log(format!("Latest commit: {msg}"));
+                    }
+                    _ => {}
+                }
+            } else {
+                self.pending_update = Some(handle);
+            }
+        }
+
         // Top navigation bar.
         egui::TopBottomPanel::top("nav").show(ctx, |ui| {
             ui.horizontal(|ui| {
@@ -562,6 +589,18 @@ impl eframe::App for StudioApp {
                         }
                     });
                 });
+                // Update notification.
+                if let Some(commit) = &self.latest_commit {
+                    ui.separator();
+                    ui.colored_label(
+                        egui::Color32::from_rgb(120, 180, 240),
+                        format!("New update: {commit}"),
+                    )
+                    .on_hover_text(
+                        "A new commit was pushed to the repo. Click the title to\n\
+                         open GitHub and download the latest release.",
+                    );
+                }
             });
         });
 
@@ -1048,6 +1087,16 @@ impl StudioApp {
         self.checksum_busy = true;
         let handle = std::thread::spawn(|| fetch_release_sha256());
         self.pending_checksum = Some(handle);
+    }
+
+    /// Fetches the latest commit message from GitHub for update notifications.
+    fn check_for_updates(&mut self) {
+        if self.update_checking {
+            return;
+        }
+        self.update_checking = true;
+        let handle = std::thread::spawn(|| fetch_latest_commit());
+        self.pending_update = Some(handle);
     }
 
     /// The watch-faces panel: catalog (left) and active preset (right), both
@@ -3266,6 +3315,25 @@ fn fetch_release_sha256() -> Result<String, String> {
     } else {
         Err("Unexpected checksum format".to_string())
     }
+}
+
+/// Fetches the latest commit message from the GitHub API for update notifications.
+fn fetch_latest_commit() -> Result<String, String> {
+    let url = "https://api.github.com/repos/kaiiuen/sensor-watch-rs/commits/master";
+    let resp = ureq::get(url)
+        .set("User-Agent", "Firmware-Studio")
+        .timeout(std::time::Duration::from_secs(10))
+        .call()
+        .map_err(|e| e.to_string())?;
+    let body = resp.into_string().map_err(|e| e.to_string())?;
+    // Extract the commit message from the JSON (best-effort).
+    if let Some(idx) = body.find("\"message\":\"") {
+        let rest = &body[idx + "\"message\":\"".len()..];
+        if let Some(end) = rest.find('"') {
+            return Ok(rest[..end].to_string());
+        }
+    }
+    Err("Could not parse commit".to_string())
 }
 
 /// Parses a hex color string like "#00FF88" into an egui color.
