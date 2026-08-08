@@ -2490,6 +2490,12 @@ impl StudioApp {
         ui.add_space(8.0);
         ui.label(format!("Time mode: {:?}", self.watch.time_mode));
         ui.label(format!("Light: {}", self.watch.light));
+        ui.label(format!(
+            "Buzzer: {:.1} V ({})   Board: {}",
+            self.watch_config.piezo_voltage,
+            ["Click", "Beep", "Double", "Chime"][self.watch_config.buzzer_type as usize % 4],
+            self.board.label()
+        ));
 
         // Request a repaint so the clock ticks.
         ctx.request_repaint();
