@@ -2421,6 +2421,12 @@ impl StudioApp {
 
     /// The simulator panel: render the watch and handle its buttons.
     fn simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        ui.label(
+            "Simulate the watch: press the on-screen buttons, adjust the date/time,\n\
+             and watch the active face react. The simulator reflects the faces and\n\
+             settings configured in the Watch Faces tab.",
+        );
+        ui.separator();
         ui.horizontal(|ui| {
             ui.heading("Simulator");
             ui.separator();
@@ -2438,14 +2444,17 @@ impl StudioApp {
             // Show which preset face is being simulated.
             let faces = self.presets.active_faces();
             let idx = self.sim_face_idx.min(faces.len().saturating_sub(1));
+            // Dual counters: what the sim thinks it's on vs the actual face.
             ui.label(format!(
-                "Face: {} / {}",
+                "Sim face: {} / {}",
                 if faces.is_empty() { 0 } else { idx + 1 },
                 faces.len()
             ));
             if !faces.is_empty() {
                 ui.monospace(&faces[idx]);
             }
+            ui.separator();
+            ui.label(format!("Engine face: {}", self.face_engine.face_name));
             ui.separator();
             // Fuzz the current face.
             if ui
