@@ -1586,6 +1586,20 @@ impl StudioApp {
                                         egui::Sense::hover(),
                                     );
                                     ui.painter().rect_filled(rect, 2.0, col);
+                                    // Color picker.
+                                    let mut c = [
+                                        col.r() as f32 / 255.0,
+                                        col.g() as f32 / 255.0,
+                                        col.b() as f32 / 255.0,
+                                    ];
+                                    if ui.color_edit_button_rgb(&mut c).changed() {
+                                        self.watch_config.led_color_hex = format!(
+                                            "#{:02x}{:02x}{:02x}",
+                                            (c[0] * 255.0) as u8,
+                                            (c[1] * 255.0) as u8,
+                                            (c[2] * 255.0) as u8
+                                        );
+                                    }
                                 }
                             });
                             ui.end_row();
