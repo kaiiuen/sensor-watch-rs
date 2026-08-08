@@ -933,149 +933,152 @@ impl StudioApp {
         // NTP time and generate a `settime` command for the serial shell.
         ui.add_space(16.0);
         ui.separator();
-        ui.heading("Clock Calibration");
-        ui.label(
-            "Generate a precise set-time command. The watch's serial shell accepts\n\
-             `settime YYMMDDHHMMSS`; send it at the exact minute boundary.",
-        )
-        .on_hover_text(
-            "The watch's RTC drifts slightly over time. To calibrate it precisely:\n\
-             1. Fetch the NTP time above.\n\
-             2. This generates a `settime` command for the exact next minute.\n\
-             3. Send it to the watch's serial shell at that moment.\n\n\
-             NOTE: Over USB the watch appears as a file drive (UF2 bootloader), not\n\
-             a serial port. The serial shell is used over the debug UART pins, or\n\
-             via the Studio app when a serial connection is available.",
-        );
-        ui.add_space(4.0);
-        if let Some(ts) = self.ntp_time {
-            // Compute the next minute boundary in UTC.
-            let boundary = (ts / 60 + 1) * 60;
-            let b = boundary as i64;
-            let days = b.div_euclid(86400);
-            let rem = b.rem_euclid(86400);
-            let h = (rem / 3600) % 24;
-            let m = (rem / 60) % 60;
-            let s = rem % 60;
-            let (year, month, day) = watch_sim::civil_from_days(days);
-            let yy = (year % 100) as u32;
-            let cmd = format!(
-                "settime {:02}{:02}{:02}{:02}{:02}{:02}",
-                yy, month, day, h, m, s
+        ui.collapsing("Clock Calibration", |ui| {
+            ui.label(
+                "Generate a precise set-time command. The watch's serial shell accepts\n\
+                 `settime YYMMDDHHMMSS`; send it at the exact minute boundary.",
+            )
+            .on_hover_text(
+                "The watch's RTC drifts slightly over time. To calibrate it precisely:\n\
+                 1. Fetch the NTP time above.\n\
+                 2. This generates a `settime` command for the exact next minute.\n\
+                 3. Send it to the watch's serial shell at that moment.\n\n\
+                 NOTE: Over USB the watch appears as a file drive (UF2 bootloader), not\n\
+                 a serial port. The serial shell is used over the debug UART pins, or\n\
+                 via the Studio app when a serial connection is available.",
             );
-            ui.monospace(format!(
-                "Next minute boundary: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
-                year, month, day, h, m, s
-            ));
-            ui.monospace(format!("Command: {cmd}"));
-            if ui.button("Copy command").clicked() {
-                let _ = ui_copy_to_clipboard(&cmd);
-                self.status = "Calibration command copied".to_string();
-                self.log.log(format!("Calibration command: {cmd}"));
+            ui.add_space(4.0);
+            if let Some(ts) = self.ntp_time {
+                // Compute the next minute boundary in UTC.
+                let boundary = (ts / 60 + 1) * 60;
+                let b = boundary as i64;
+                let days = b.div_euclid(86400);
+                let rem = b.rem_euclid(86400);
+                let h = (rem / 3600) % 24;
+                let m = (rem / 60) % 60;
+                let s = rem % 60;
+                let (year, month, day) = watch_sim::civil_from_days(days);
+                let yy = (year % 100) as u32;
+                let cmd = format!(
+                    "settime {:02}{:02}{:02}{:02}{:02}{:02}",
+                    yy, month, day, h, m, s
+                );
+                ui.monospace(format!(
+                    "Next minute boundary: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                    year, month, day, h, m, s
+                ));
+                ui.monospace(format!("Command: {cmd}"));
+                if ui.button("Copy command").clicked() {
+                    let _ = ui_copy_to_clipboard(&cmd);
+                    self.status = "Calibration command copied".to_string();
+                    self.log.log(format!("Calibration command: {cmd}"));
+                }
+            } else {
+                ui.weak("Fetch NTP time first to generate a calibration command.");
             }
-        } else {
-            ui.weak("Fetch NTP time first to generate a calibration command.");
-        }
+        });
 
         // Drift calibration: measure the watch's drift against NTP over time.
         ui.add_space(16.0);
         ui.separator();
-        ui.heading("Drift Calibration");
-        ui.label(
-            "Measure the watch's crystal drift (PPM) by recording two samples\n\
-             (watch time vs NTP reference) some time apart.",
-        )
-        .on_hover_text(
-            "Every watch crystal runs slightly fast or slow (measured in parts-per-\n\
-             million, PPM). To measure yours:\n\
-             1. Fetch the NTP time.\n\
-             2. Press 'Record sample' now.\n\
-             3. Wait hours or days.\n\
-             4. Fetch NTP again and press 'Record sample' again.\n\
-             The app computes the drift, which you can apply as a frequency\n\
-             correction to the RTC.",
-        );
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            if ui.button("Record sample").clicked() {
-                if let Some(ts) = self.ntp_time {
-                    // Use the sim watch's live time as the "watch" reading.
-                    let (_, _, _, h, m, s, _) = self.watch.get_time();
-                    let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
-                    self.drift_session.record(watch_secs, ts);
-                    let n = if self.drift_session.start.is_some() {
-                        if self.drift_session.end.is_some() {
-                            "end".to_string()
+        ui.collapsing("Drift Calibration", |ui| {
+            ui.label(
+                "Measure the watch's crystal drift (PPM) by recording two samples\n\
+                 (watch time vs NTP reference) some time apart.",
+            )
+            .on_hover_text(
+                "Every watch crystal runs slightly fast or slow (measured in parts-per-\n\
+                 million, PPM). To measure yours:\n\
+                 1. Fetch the NTP time.\n\
+                 2. Press 'Record sample' now.\n\
+                 3. Wait hours or days.\n\
+                 4. Fetch NTP again and press 'Record sample' again.\n\
+                 The app computes the drift, which you can apply as a frequency\n\
+                 correction to the RTC.",
+            );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                if ui.button("Record sample").clicked() {
+                    if let Some(ts) = self.ntp_time {
+                        // Use the sim watch's live time as the "watch" reading.
+                        let (_, _, _, h, m, s, _) = self.watch.get_time();
+                        let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
+                        self.drift_session.record(watch_secs, ts);
+                        let n = if self.drift_session.start.is_some() {
+                            if self.drift_session.end.is_some() {
+                                "end".to_string()
+                            } else {
+                                "start".to_string()
+                            }
                         } else {
                             "start".to_string()
-                        }
+                        };
+                        self.log.log(format!("Drift sample recorded ({n})"));
                     } else {
-                        "start".to_string()
-                    };
-                    self.log.log(format!("Drift sample recorded ({n})"));
-                } else {
-                    self.status = "Fetch NTP time first".to_string();
+                        self.status = "Fetch NTP time first".to_string();
+                    }
                 }
-            }
-            if ui.button("Reset").clicked() {
-                self.drift_session.reset();
-                self.log.log("Drift session reset");
+                if ui.button("Reset").clicked() {
+                    self.drift_session.reset();
+                    self.log.log("Drift session reset");
+                }
+            });
+            if self.drift_session.ppm != 0.0 {
+                ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
+                if self.drift_session.ppm.abs() < 0.5 {
+                    ui.label("The watch is running accurately (within 0.5 ppm).");
+                } else if self.drift_session.ppm > 0.0 {
+                    ui.label("The watch is running FAST; apply a negative correction.");
+                } else {
+                    ui.label("The watch is running SLOW; apply a positive correction.");
+                }
+            } else if self.drift_session.start.is_some() {
+                ui.weak("Start sample recorded. Record a second sample later.");
+            } else {
+                ui.weak("No samples yet.");
             }
         });
-        if self.drift_session.ppm != 0.0 {
-            ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
-            if self.drift_session.ppm.abs() < 0.5 {
-                ui.label("The watch is running accurately (within 0.5 ppm).");
-            } else if self.drift_session.ppm > 0.0 {
-                ui.label("The watch is running FAST; apply a negative correction.");
-            } else {
-                ui.label("The watch is running SLOW; apply a positive correction.");
-            }
-        } else if self.drift_session.start.is_some() {
-            ui.weak("Start sample recorded. Record a second sample later.");
-        } else {
-            ui.weak("No samples yet.");
-        }
 
         // Fuzz testing: run randomized input through the face engine.
         ui.add_space(16.0);
         ui.separator();
-        ui.heading("Fuzz Testing");
-        ui.label("Run randomized button/tick sequences through a face to check stability.")
-            .on_hover_text(
-                "Fuzzing throws random button presses, ticks, and time changes at a\n\
-                 watch face to make sure it never panics or produces a broken\n\
-                 display. It's a quick way to find crashes before they happen on\n\
-                 your wrist. Higher iterations = more thorough but slower.",
-            );
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            ui.label("Iterations:");
-            ui.add(egui::DragValue::new(&mut self.fuzz_iterations).clamp_range(100..=100_000));
-            if ui.button("Run fuzz").clicked() {
-                let faces = self.presets.active_faces();
-                let name = if faces.is_empty() {
-                    "SIMPLE_CLOCK".to_string()
-                } else {
-                    faces[self.sim_face_idx.min(faces.len() - 1)].clone()
-                };
-                let iters = self.fuzz_iterations;
-                let seed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0);
-                match fuzz::fuzz_face(&name, iters, seed) {
-                    Ok(n) => {
-                        self.status = format!("Fuzz passed: {n} iterations on {name}");
-                        self.log
-                            .log(format!("Fuzz passed: {n} iterations on {name}"));
-                    }
-                    Err(e) => {
-                        self.status = format!("Fuzz failed: {e}");
-                        self.log.log(format!("Fuzz failed: {e}"));
+        ui.collapsing("Fuzz Testing", |ui| {
+            ui.label("Run randomized button/tick sequences through a face to check stability.")
+                .on_hover_text(
+                    "Fuzzing throws random button presses, ticks, and time changes at a\n\
+                     watch face to make sure it never panics or produces a broken\n\
+                     display. It's a quick way to find crashes before they happen on\n\
+                     your wrist. Higher iterations = more thorough but slower.",
+                );
+            ui.add_space(4.0);
+            ui.horizontal(|ui| {
+                ui.label("Iterations:");
+                ui.add(egui::DragValue::new(&mut self.fuzz_iterations).clamp_range(100..=100_000));
+                if ui.button("Run fuzz").clicked() {
+                    let faces = self.presets.active_faces();
+                    let name = if faces.is_empty() {
+                        "SIMPLE_CLOCK".to_string()
+                    } else {
+                        faces[self.sim_face_idx.min(faces.len() - 1)].clone()
+                    };
+                    let iters = self.fuzz_iterations;
+                    let seed = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_nanos() as u64)
+                        .unwrap_or(0);
+                    match fuzz::fuzz_face(&name, iters, seed) {
+                        Ok(n) => {
+                            self.status = format!("Fuzz passed: {n} iterations on {name}");
+                            self.log
+                                .log(format!("Fuzz passed: {n} iterations on {name}"));
+                        }
+                        Err(e) => {
+                            self.status = format!("Fuzz failed: {e}");
+                            self.log.log(format!("Fuzz failed: {e}"));
+                        }
                     }
                 }
-            }
+            });
         });
     }
 
