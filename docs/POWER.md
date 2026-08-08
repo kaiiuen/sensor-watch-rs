@@ -1,4 +1,4 @@
-# Sensor-Watch Firmware — Power Management Deep-Dive
+# Sensor-Watch Firmware - Power Management Deep-Dive
 
 This document explains the power-management architecture in detail: the power
 states, the event-driven model, the resource budget, and the "totalitarian"
@@ -25,7 +25,7 @@ The SAM L22 has these states. This firmware uses **STANDBY** as its primary mode
 
 | State | CPU | Main clock | RAM | RTC | Peripherals | Wake |
 |-------|-----|-----------|-----|-----|-------------|------|
-| **ACTIVE** | ✅ | ✅ 4 MHz | ✅ | ✅ | ✅ all | — |
+| **ACTIVE** | ✅ | ✅ 4 MHz | ✅ | ✅ | ✅ all | - |
 | **IDLE** | ⏸ | ✅ | ✅ | ✅ | ✅ all | any interrupt |
 | **STANDBY** | ⏸ | ❌ off | ✅ retained | ✅ | ⚠️ selective | any interrupt |
 | **BACKUP** | ❌ | ❌ off | ❌ **lost** | ✅ | ❌ none | RTC alarm, A2/A4 |
@@ -54,7 +54,7 @@ Interrupt fires
   └─► enter_standby()  (SysTick-safe STANDBY)
 ```
 
-The CPU is active for **microseconds to a couple milliseconds** per event —
+The CPU is active for **microseconds to a couple milliseconds** per event -
 just long enough to update the display or handle a button. Then it sleeps.
 
 ### Why SysTick-safe standby?
@@ -68,12 +68,12 @@ right after waking, eliminating that race.
 
 The CPU wakes only for one of these:
 
-- `Activate` — a face entered the foreground
-- `Tick` — the RTC ticked
-- `BackgroundTask` — a scheduled task is due
-- `Button(button, event)` — a button was pressed
-- `SingleTap` / `DoubleTap` — the accelerometer detected a tap
-- `AccelerometerWake` — the accelerometer detected motion
+- `Activate` - a face entered the foreground
+- `Tick` - the RTC ticked
+- `BackgroundTask` - a scheduled task is due
+- `Button(button, event)` - a button was pressed
+- `SingleTap` / `DoubleTap` - the accelerometer detected a tap
+- `AccelerometerWake` - the accelerometer detected motion
 
 A **closed enum** means every event is known and handled. No ambiguity.
 
@@ -146,7 +146,7 @@ only lever is **active time per event**.
 - At **500 ms per wake**, 86,400 daily ticks cost ~86 mAh/day → ~1 week.
 
 So the goal is: **keep every wake under ~1 ms.** The event-driven model does
-this — a reaction is a handful of register writes.
+this - a reaction is a handful of register writes.
 
 ---
 

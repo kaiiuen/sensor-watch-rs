@@ -1,4 +1,4 @@
-# Sensor-Watch Firmware — Getting Started & Contributing
+# Sensor-Watch Firmware - Getting Started & Contributing
 
 This guide covers how to build, test, and contribute to the Sensor-Watch firmware
 rewrite in Rust.
@@ -105,12 +105,12 @@ sensor-watch-rs/
 1. Create a new file `src/movement/<name>.rs`.
 2. Define a state struct with a `new_static()` const constructor.
 3. Implement the `WatchFace` trait:
-   - `setup()` — one-time init
-   - `activate()` — prepare to go on-screen
-   - `loop_()` — react to events, update the display
-   - `resign()` — prepare to go off-screen
-   - `wants_background_task()` — optional
-   - `advise()` — optional, called once per minute for all faces
+   - `setup()` - one-time init
+   - `activate()` - prepare to go on-screen
+   - `loop_()` - react to events, update the display
+   - `resign()` - prepare to go off-screen
+   - `wants_background_task()` - optional
+   - `advise()` - optional, called once per minute for all faces
 4. Add the module to `src/movement/mod.rs`.
 5. Add a `static` instance and register it in `app_setup()`.
 6. If you add a face, bump `MOVEMENT_NUM_FACES` in `types.rs` to match.

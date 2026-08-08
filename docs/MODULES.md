@@ -1,4 +1,4 @@
-# Sensor-Watch Firmware — Module Reference
+# Sensor-Watch Firmware - Module Reference
 
 This document is a **symbol-by-symbol reference** for every module in the
 firmware. For each public item, it explains what it is, why it exists, and how
@@ -6,7 +6,7 @@ it's used. It complements `ARCHITECTURE.md` (the high-level overview).
 
 ---
 
-## `src/main.rs` — Entry point
+## `src/main.rs` - Entry point
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -22,7 +22,7 @@ BOD33 → framework → faces → tick → loop.
 
 ---
 
-## `src/panic.rs` — Panic handler
+## `src/panic.rs` - Panic handler
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -35,7 +35,7 @@ uses `panic = "abort"` to keep the binary small.
 
 ---
 
-## `src/watch/mod.rs` — HAL root
+## `src/watch/mod.rs` - HAL root
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -43,7 +43,7 @@ uses `panic = "abort"` to keep the binary small.
 
 ---
 
-## `src/watch/irq.rs` — Interrupt priorities
+## `src/watch/irq.rs` - Interrupt priorities
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -54,7 +54,7 @@ tick (1). Lower value = higher urgency on ARMv6-M.
 
 ---
 
-## `src/watch/clock.rs` — Clock init
+## `src/watch/clock.rs` - Clock init
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -67,7 +67,7 @@ tick (1). Lower value = higher urgency on ARMv6-M.
 
 ---
 
-## `src/watch/rtc.rs` — Real-Time Clock
+## `src/watch/rtc.rs` - Real-Time Clock
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -94,7 +94,7 @@ sleep while the RTC tracks elapsed time. All register writes wait for `SYNCBUSY`
 
 ---
 
-## `src/watch/slcd.rs` — Segment LCD
+## `src/watch/slcd.rs` - Segment LCD
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -115,14 +115,14 @@ visible while the CPU sleeps.
 
 ---
 
-## `src/watch/gpio.rs` — GPIO
+## `src/watch/gpio.rs` - GPIO
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
 | `Pin` | struct | A `(port, pin)` pair. |
 | `Direction` | enum | Off, In, Out. |
 | `PullMode` | enum | Off, Up, Down. |
-| `Function` | enum | Off, A, Mux(u8) — peripheral function. |
+| `Function` | enum | Off, A, Mux(u8) - peripheral function. |
 | `set_pin_direction()` | fn | Set direction. |
 | `set_pin_pull_mode()` | fn | Set pull. |
 | `set_pin_function()` | fn | Set peripheral function. |
@@ -134,7 +134,7 @@ visible while the CPU sleeps.
 
 ---
 
-## `src/watch/extint.rs` — Buttons / EIC
+## `src/watch/extint.rs` - Buttons / EIC
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -150,7 +150,7 @@ visible while the CPU sleeps.
 
 ---
 
-## `src/watch/led.rs` — LED
+## `src/watch/led.rs` - LED
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -165,7 +165,7 @@ visible while the CPU sleeps.
 
 ---
 
-## `src/watch/buzzer.rs` — Buzzer
+## `src/watch/buzzer.rs` - Buzzer
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -180,7 +180,7 @@ visible while the CPU sleeps.
 
 ---
 
-## `src/watch/adc.rs` — ADC
+## `src/watch/adc.rs` - ADC
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -197,7 +197,7 @@ reference, so the raw value *rises* as the battery weakens. The formula
 
 ---
 
-## `src/watch/i2c.rs` — I2C
+## `src/watch/i2c.rs` - I2C
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -208,7 +208,7 @@ reference, so the raw value *rises* as the battery weakens. The formula
 
 ---
 
-## `src/watch/spi.rs` — SPI
+## `src/watch/spi.rs` - SPI
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -217,7 +217,7 @@ reference, so the raw value *rises* as the battery weakens. The formula
 
 ---
 
-## `src/watch/uart.rs` — UART
+## `src/watch/uart.rs` - UART
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -227,7 +227,7 @@ reference, so the raw value *rises* as the battery weakens. The formula
 
 ---
 
-## `src/watch/storage.rs` — Flash storage
+## `src/watch/storage.rs` - Flash storage
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -240,7 +240,7 @@ reference, so the raw value *rises* as the battery weakens. The formula
 
 ---
 
-## `src/watch/deepsleep.rs` — Sleep control
+## `src/watch/deepsleep.rs` - Sleep control
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -253,7 +253,7 @@ reference, so the raw value *rises* as the battery weakens. The formula
 
 ---
 
-## `src/watch/timeout.rs` — Bounded waits
+## `src/watch/timeout.rs` - Bounded waits
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -265,7 +265,7 @@ hanging the CPU.
 
 ---
 
-## `src/watch/wdt.rs` — Watchdog
+## `src/watch/wdt.rs` - Watchdog
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -277,7 +277,7 @@ hanging the CPU.
 
 ---
 
-## `src/watch/crc.rs` — CRC-32 integrity
+## `src/watch/crc.rs` - CRC-32 integrity
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -288,7 +288,7 @@ hanging the CPU.
 
 ---
 
-## `src/watch/ecc.rs` — SECDED error correction
+## `src/watch/ecc.rs` - SECDED error correction
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -297,7 +297,7 @@ hanging the CPU.
 
 ---
 
-## `src/watch/shell.rs` — Serial command shell
+## `src/watch/shell.rs` - Serial command shell
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -308,7 +308,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/watch/memory.rs` — Memory usage
+## `src/watch/memory.rs` - Memory usage
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -318,7 +318,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/watch/utility.rs` — Utility
+## `src/watch/utility.rs` - Utility
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -334,7 +334,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/watch/utz.rs` / `watch/zones.rs` — DST timezones
+## `src/watch/utz.rs` / `watch/zones.rs` - DST timezones
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -346,7 +346,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/watch/lis2dw.rs` — LIS2DW accelerometer
+## `src/watch/lis2dw.rs` - LIS2DW accelerometer
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -359,7 +359,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/watch/rtc.rs` — Compare-callback queue
+## `src/watch/rtc.rs` - Compare-callback queue
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -370,7 +370,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/movement/types.rs` — Core types
+## `src/movement/types.rs` - Core types
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -388,11 +388,11 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 | `MOVEMENT_SECONDARY_FACE_INDEX` | const | Start of the secondary face list. |
 | `TIMEZONE_OFFSETS` | const | Timezone table (41 entries). |
 
-**Why a closed `Event` enum:** deterministic — every event is known and handled.
+**Why a closed `Event` enum:** deterministic - every event is known and handled.
 
 ---
 
-## `src/movement/mod.rs` — Dispatcher
+## `src/movement/mod.rs` - Dispatcher
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -411,7 +411,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/movement/debounce.rs` — Debouncing
+## `src/movement/debounce.rs` - Debouncing
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -422,7 +422,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/movement/fault.rs` — Fault system
+## `src/movement/fault.rs` - Fault system
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -438,7 +438,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/movement/persist.rs` — Persistence
+## `src/movement/persist.rs` - Persistence
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -447,7 +447,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/movement/board.rs` — Board config
+## `src/movement/board.rs` - Board config
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -458,7 +458,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/movement/stats.rs` — Statistics
+## `src/movement/stats.rs` - Statistics
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -469,7 +469,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 
 ---
 
-## `src/movement/battery.rs` — Battery config
+## `src/movement/battery.rs` - Battery config
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
@@ -513,7 +513,7 @@ There are **111 registered faces**. Highlights:
 | Stopwatch | `stopwatch.rs` | Stopwatch. |
 | Timer | `timer.rs` | Multi-slot countdown timer. |
 | Moon phase | `moon_phase.rs` | Lunar phase. |
-| + 74 more | — | Games, calculators, astronomy, sensors, and more. |
+| + 74 more | - | Games, calculators, astronomy, sensors, and more. |
 
 ---
 

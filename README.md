@@ -4,15 +4,15 @@ A from-scratch **Rust rewrite** of the [Sensor-Watch](https://github.com/joeycas
 firmware for the Microchip **SAM L22J18A** (ARM Cortex-M0+), the board replacement
 for the classic Casio F-91W.
 
-The goal is to reimplement the entire firmware in Rust — the hardware abstraction
-layer, the watchface framework, and the watch faces — and then extend it with new
+The goal is to reimplement the entire firmware in Rust - the hardware abstraction
+layer, the watchface framework, and the watch faces - and then extend it with new
 faces and features. The rewrite is built around a single idea:
 
 > **The CPU is a start/stop resource. It wakes only to react to a single event,
 > then immediately returns to STANDBY. All timekeeping is owned by the RTC,
 > never by the CPU.**
 
-This makes the firmware power-efficient, self-managing, and resilient — it runs
+This makes the firmware power-efficient, self-managing, and resilient - it runs
 in a sealed, air-gapped system and must manage itself.
 
 ## Project layout
@@ -112,7 +112,7 @@ Prerequisites:
   ```
   rustup target add thumbv6m-none-eabi
   ```
-- `flip-link` — used as the linker (see `.cargo/config.toml`) to place the
+- `flip-link` - used as the linker (see `.cargo/config.toml`) to place the
   stack at the bottom of RAM so a stack overflow triggers an immediate hard
   fault instead of silently corrupting data:
   ```

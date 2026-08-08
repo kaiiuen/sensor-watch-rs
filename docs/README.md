@@ -1,4 +1,4 @@
-# Sensor-Watch Firmware — Documentation Index
+# Sensor-Watch Firmware - Documentation Index
 
 This directory contains the complete documentation for the Sensor-Watch firmware
 rewrite in Rust.
@@ -13,6 +13,7 @@ rewrite in Rust.
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, test, and contribute, including how to add a new watch face. |
 | [TESTING.md](TESTING.md) | The hardware test plan: power, RTC accuracy, flash wear, faces, faults, and peripherals. |
 | [BACKBURNER.md](BACKBURNER.md) | Ideas captured for later: companion app, clock calibration, drift, raise-to-wake, BACKUP mode. |
+| [MODULES.md](MODULES.md) | Symbol-by-symbol module reference. |
 
 ## Companion app
 
@@ -22,15 +23,15 @@ its panels, features, and dependencies.
 
 ## Quick orientation
 
-- **`src/watch/`** — the hardware abstraction layer (HAL). One module per
+- **`src/watch/`** - the hardware abstraction layer (HAL). One module per
   peripheral (RTC, LCD, GPIO, buttons, LED, buzzer, ADC, I2C, SPI, UART,
   storage, deep-sleep, watchdog, CRC, memory, LIS2DW, utility).
-- **`src/movement/`** — the watchface framework and the faces. The dispatcher
+- **`src/movement/`** - the watchface framework and the faces. The dispatcher
   (`mod.rs`) reacts to events; each face implements the `WatchFace` trait.
-- **`core/`** — pure logic (date math, settings bit-packing, UF2 encoding) that
+- **`core/`** - pure logic (date math, settings bit-packing, UF2 encoding) that
   is host-testable.
-- **`src/main.rs`** — the entry point and boot sequence.
-- **`src/panic.rs`** — the self-recovering panic handler.
+- **`src/main.rs`** - the entry point and boot sequence.
+- **`src/panic.rs`** - the self-recovering panic handler.
 
 ## The one idea to remember
 
