@@ -332,7 +332,7 @@ impl FaceEngine {
                 d.set_string(s, 0);
             }
             5 => {
-                // System: show the current time.
+                // System: show the current time and power-on uptime.
                 let (h2, h1) = two_digits(time.hour);
                 let (m2, m1) = two_digits(time.minute);
                 d.chars[0] = 'S';
