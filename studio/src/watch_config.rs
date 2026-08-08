@@ -72,6 +72,10 @@ pub struct WatchConfig {
     pub light_sensor_sleep: bool,
     /// Whether a keybind can reset the watch at the HAL level.
     pub reset_keybind: bool,
+    /// Whether daylight-saving time is applied automatically.
+    pub auto_dst: bool,
+    /// A manual temperature offset in degrees C (for calibration).
+    pub temp_offset: f32,
 }
 
 impl Default for WatchConfig {
@@ -103,6 +107,8 @@ impl Default for WatchConfig {
             buzzer_type: 0,
             light_sensor_sleep: false,
             reset_keybind: false,
+            auto_dst: false,
+            temp_offset: 0.0,
         }
     }
 }
@@ -159,6 +165,8 @@ impl WatchConfig {
             buzzer_type: 0,
             light_sensor_sleep: false,
             reset_keybind: false,
+            auto_dst: false,
+            temp_offset: 0.0,
         }
     }
 }

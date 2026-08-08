@@ -1343,6 +1343,14 @@ impl StudioApp {
                             ui.label("Imperial units");
                             ui.checkbox(&mut self.watch_config.use_imperial_units, "");
                             ui.end_row();
+
+                            // Auto DST.
+                            ui.label("Auto DST");
+                            ui.checkbox(
+                                &mut self.watch_config.auto_dst,
+                                "Apply daylight-saving time automatically",
+                            );
+                            ui.end_row();
                         });
 
                     ui.add_space(12.0);
@@ -1613,6 +1621,25 @@ impl StudioApp {
                             .on_hover_text(
                                 "A keybind that resets the watch at the HAL level, in case\n\
                                  the UI glitches or the panic handler doesn't run.",
+                            );
+                            ui.end_row();
+
+                            // Temperature offset calibration.
+                            ui.label("Temp offset");
+                            ui.horizontal(|ui| {
+                                ui.add(
+                                    egui::Slider::new(
+                                        &mut self.watch_config.temp_offset,
+                                        -10.0..=10.0,
+                                    )
+                                    .step_by(0.1),
+                                );
+                                ui.label(format!("{:.1} C", self.watch_config.temp_offset));
+                            })
+                            .response
+                            .on_hover_text(
+                                "Adjusts the temperature reading to match a reference\n\
+                                 thermometer when everything is at rest.",
                             );
                             ui.end_row();
 
