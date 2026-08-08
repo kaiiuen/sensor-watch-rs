@@ -98,6 +98,10 @@ pub struct FaceEngine {
     pub power_on_seconds: u32,
     /// Whether the coin-flip face shows heads (true) or tails (false).
     pub coin_heads: bool,
+    /// Diagnostics settings state.
+    pub diag_led_green: bool,
+    pub diag_buzzer_v: u8,
+    pub diag_auto_dst: bool,
 }
 
 impl FaceEngine {
@@ -121,6 +125,9 @@ impl FaceEngine {
             time_mode_24: true,
             power_on_seconds: 0,
             coin_heads: true,
+            diag_led_green: true,
+            diag_buzzer_v: 90,
+            diag_auto_dst: true,
         }
     }
 
@@ -203,6 +210,14 @@ impl FaceEngine {
                 } else if self.diag_screen == 9 {
                     // Run the selected test.
                     self.diag_test_active = true;
+                } else if self.diag_screen == 6 {
+                    // Settings: toggle the selected setting.
+                    match self.diag_subrow {
+                        0 => self.diag_led_green = !self.diag_led_green,
+                        1 => self.diag_buzzer_v = (self.diag_buzzer_v + 1) % 91,
+                        2 => self.diag_auto_dst = !self.diag_auto_dst,
+                        _ => self.diag_screen = 10,
+                    }
                 } else {
                     // Exit back to the main menu.
                     self.diag_screen = 10;
@@ -332,11 +347,29 @@ impl FaceEngine {
                 d.chars[9] = m1;
             }
             6 => {
-                // Settings: LED color / buzzer voltage / power.
+                // Settings: LED color / buzzer voltage / DST / power.
                 match self.diag_subrow {
-                    0 => d.set_string("LED   GREEN", 0),
-                    1 => d.set_string("BUZZER 9.0V", 0),
-                    2 => d.set_string("DST   AUTO", 0),
+                    0 => d.set_string(
+                        if self.diag_led_green {
+                            "LED   GREEN"
+                        } else {
+                            "LED   RED  "
+                        },
+                        0,
+                    ),
+                    1 => {
+                        let v = self.diag_buzzer_v;
+                        let (t, o) = (b'0' + v / 10, b'0' + v % 10);
+                        d.chars = ['B', 'U', 'Z', ' ', t as char, '.', o as char, 'V', ' ', ' '];
+                    }
+                    2 => d.set_string(
+                        if self.diag_auto_dst {
+                            "DST   AUTO"
+                        } else {
+                            "DST   OFF "
+                        },
+                        0,
+                    ),
                     _ => d.set_string("POWER  OFF", 0),
                 }
             }
