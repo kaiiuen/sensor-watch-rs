@@ -143,6 +143,12 @@ struct StudioApp {
     drift_session: drift::DriftSession,
     /// The number of fuzz iterations to run.
     fuzz_iterations: usize,
+    /// The terminal input line.
+    terminal_input: String,
+    /// Whether the terminal panel is expanded.
+    terminal_open: bool,
+    /// The terminal output history.
+    terminal_history: Vec<String>,
     /// The stats sampling rate in milliseconds.
     stats_rate_ms: u64,
     /// Shared atomic for the sampler thread to read the live rate.
@@ -235,7 +241,7 @@ fn country_label(index: u8) -> &'static str {
 }
 
 /// The navigation panels.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Panel {
     Dashboard,
     Faces,
@@ -356,6 +362,9 @@ impl Default for StudioApp {
             face_tick_accum: 0.0,
             drift_session: drift::DriftSession::new(),
             fuzz_iterations: 5000,
+            terminal_input: String::new(),
+            terminal_open: false,
+            terminal_history: Vec::new(),
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -551,6 +560,49 @@ impl eframe::App for StudioApp {
                     });
                 });
             });
+        });
+
+        // Terminal panel (collapsible) above the footer.
+        egui::TopBottomPanel::bottom("terminal").show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                if ui
+                    .selectable_label(
+                        self.terminal_open,
+                        if self.terminal_open {
+                            "Terminal ▼"
+                        } else {
+                            "Terminal ▲"
+                        },
+                    )
+                    .clicked()
+                {
+                    self.terminal_open = !self.terminal_open;
+                }
+                if ui.small_button("Clear").clicked() {
+                    self.terminal_history.clear();
+                }
+            });
+            if self.terminal_open {
+                ui.separator();
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(120.0)
+                    .show(ui, |ui| {
+                        for line in &self.terminal_history {
+                            ui.monospace(line);
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label(">");
+                    let resp = ui.text_edit_singleline(&mut self.terminal_input);
+                    let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if submit {
+                        let cmd = self.terminal_input.trim().to_string();
+                        self.terminal_input.clear();
+                        self.run_terminal_command(&cmd);
+                    }
+                });
+            }
         });
 
         // Status bar at the bottom.
@@ -2411,6 +2463,77 @@ impl StudioApp {
 
         // Request a repaint so the clock ticks.
         ctx.request_repaint();
+    }
+
+    /// Runs a command typed into the terminal.
+    fn run_terminal_command(&mut self, cmd: &str) {
+        self.terminal_history.push(format!("> {cmd}"));
+        let parts: Vec<&str> = cmd.split_whitespace().collect();
+        if parts.is_empty() {
+            return;
+        }
+        match parts[0].to_lowercase().as_str() {
+            "help" => {
+                self.terminal_history.push(
+                    "Commands: help, status, faces, build, flash, fuzz, time, clear".to_string(),
+                );
+            }
+            "status" => {
+                self.terminal_history.push(format!(
+                    "Panel: {:?}, Board: {:?}",
+                    self.current_panel, self.board
+                ));
+            }
+            "faces" => {
+                let faces = self.presets.active_faces();
+                self.terminal_history
+                    .push(format!("{} faces in active preset", faces.len()));
+                for f in faces {
+                    self.terminal_history.push(format!("  {f}"));
+                }
+            }
+            "build" => {
+                self.terminal_history.push("Starting build...".to_string());
+                self.building = true;
+                self.build_message = "Building...".to_string();
+                let handle = std::thread::spawn(build::build_firmware);
+                self.pending_build = Some(handle);
+            }
+            "flash" => {
+                if let Some(uf2) = self.last_uf2.clone() {
+                    self.copy_to_watch(&uf2);
+                } else {
+                    self.terminal_history.push("No build yet".to_string());
+                }
+            }
+            "fuzz" => {
+                let faces = self.presets.active_faces();
+                let name = if faces.is_empty() {
+                    "SIMPLE_CLOCK".to_string()
+                } else {
+                    faces[self.sim_face_idx.min(faces.len() - 1)].clone()
+                };
+                let seed = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_nanos() as u64)
+                    .unwrap_or(0);
+                match fuzz::fuzz_face(&name, self.fuzz_iterations, seed) {
+                    Ok(n) => self
+                        .terminal_history
+                        .push(format!("Fuzz passed: {n} iterations on {name}")),
+                    Err(e) => self.terminal_history.push(format!("Fuzz failed: {e}")),
+                }
+            }
+            "time" => {
+                let (_, _, _, h, m, s, _) = self.watch.get_time();
+                self.terminal_history
+                    .push(format!("Sim time: {h:02}:{m:02}:{s:02}"));
+            }
+            "clear" => self.terminal_history.clear(),
+            _ => self
+                .terminal_history
+                .push(format!("Unknown command: {cmd} (try 'help')")),
+        }
     }
 
     /// The settings panel: configure the app and the watch.
