@@ -29,8 +29,9 @@ pub const TEMPLATES: [Template; 3] = [
     },
 ];
 
-/// Generates the source for a new face from a template.
-pub fn generate_face(name: &str, template: &Template) -> String {
+/// Generates the source for a new face from a template, optionally including
+/// a human-readable description as a doc comment.
+pub fn generate_face(name: &str, template: &Template, description: &str) -> String {
     // Convert "my_face" to "MyFace" for the struct name.
     let struct_name = name
         .split('_')
@@ -42,10 +43,20 @@ pub fn generate_face(name: &str, template: &Template) -> String {
             }
         })
         .collect::<String>();
-    template
+    let desc = if description.trim().is_empty() {
+        String::new()
+    } else {
+        format!("\n/// Description: {}\n", description.trim())
+    };
+    let mut out = template
         .code
         .replace("{NAME}", &name.to_uppercase())
-        .replace("{Name}", &struct_name)
+        .replace("{Name}", &struct_name);
+    // Insert the description after the leading `//! {NAME} watch face.` line.
+    if let Some(pos) = out.find("\n") {
+        out.insert_str(pos, &desc);
+    }
+    out
 }
 
 /// The path to a face's source file.

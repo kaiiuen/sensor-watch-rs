@@ -76,6 +76,8 @@ struct StudioApp {
     editor_name: String,
     /// The editor's current source.
     editor_source: String,
+    /// The editor's face description (shown to users in the catalog).
+    editor_description: String,
     /// The selected editor template.
     editor_template: usize,
     /// The selected NTP server index.
@@ -328,6 +330,7 @@ impl Default for StudioApp {
             new_preset_name: String::new(),
             editor_name: String::new(),
             editor_source: String::new(),
+            editor_description: String::new(),
             editor_template: 0,
             ntp_server: 0,
             ntp_servers: Vec::new(),
@@ -1845,6 +1848,31 @@ impl StudioApp {
         ui.label("Create, edit, or delete watch faces.");
         ui.add_space(8.0);
 
+        // Self-IDE help so new users understand the workflow without docs.
+        egui::CollapsingHeader::new("How to make a watch face")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.label(
+                    "1. Pick a template below (Simple Clock, Counter, or Blank).\n\
+                     2. Type a snake_case name, e.g. my_face.\n\
+                     3. Optionally add a description shown to users in the catalog.\n\
+                     4. Click \"Generate from template\" to fill the editor.\n\
+                     5. Edit the Rust source. The WatchFace trait has five methods:\n\
+                        setup, activate, loop_, resign, and new_static.\n\
+                     6. Click \"Save face\" to write it to src/movement/.\n\
+                     7. Add it to the active preset in Watch Faces, then Build & Flash.\n\
+                     The simulator reflects faces that are in the active preset.",
+                );
+                ui.add_space(4.0);
+                ui.weak(
+                    "Tip: loop_ receives an Event each tick. Match on Event::Button\n\
+                     (Button::Alarm, ButtonEvent::Up) to react to button presses, and\n\
+                     Event::Tick to update the display. Use watch::slcd::display_string\n\
+                     to draw text.",
+                );
+            });
+        ui.add_space(8.0);
+
         // Template selection.
         ui.label("Template:");
         for (i, t) in editor::TEMPLATES.iter().enumerate() {
@@ -1866,12 +1894,21 @@ impl StudioApp {
             if ui.button("Generate from template").clicked() {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() {
-                    let source =
-                        editor::generate_face(&name, &editor::TEMPLATES[self.editor_template]);
+                    let source = editor::generate_face(
+                        &name,
+                        &editor::TEMPLATES[self.editor_template],
+                        &self.editor_description,
+                    );
                     self.editor_source = source;
                     self.log.log(format!("Generated {name} from template"));
                 }
             }
+        });
+
+        ui.add_space(4.0);
+        ui.horizontal(|ui| {
+            ui.label("Description (shown in catalog):");
+            ui.text_edit_singleline(&mut self.editor_description);
         });
 
         ui.add_space(8.0);
