@@ -66,6 +66,8 @@ struct StudioApp {
     selected_face: Option<usize>,
     /// The currently selected face in the active preset.
     selected_preset_face: Option<usize>,
+    /// The index being dragged in the active preset (for drag-and-drop reorder).
+    drag_preset_from: Option<usize>,
     /// The name for a new preset.
     new_preset_name: String,
     /// The editor's current face name.
@@ -297,6 +299,7 @@ impl Default for StudioApp {
             presets: PresetManager::new(),
             selected_face: None,
             selected_preset_face: None,
+            drag_preset_from: None,
             new_preset_name: String::new(),
             editor_name: String::new(),
             editor_source: String::new(),
@@ -1134,6 +1137,7 @@ impl StudioApp {
                                     ui.end_row();
 
                                     let faces = self.presets.active_faces();
+                                    let mut drop_target: Option<usize> = None;
                                     for (i, face) in faces.iter().enumerate() {
                                         let selected = self.selected_preset_face == Some(i);
                                         if ui
@@ -1142,7 +1146,21 @@ impl StudioApp {
                                         {
                                             self.selected_preset_face = Some(i);
                                         }
-                                        ui.label(face);
+                                        // Drag the face name to reorder.
+                                        let name_resp = ui
+                                            .add(egui::Label::new(face).sense(egui::Sense::drag()));
+                                        if name_resp.drag_started() {
+                                            self.drag_preset_from = Some(i);
+                                        }
+                                        if name_resp.drag_stopped() {
+                                            self.drag_preset_from = None;
+                                        }
+                                        if name_resp.hovered()
+                                            && self.drag_preset_from.is_some()
+                                            && self.drag_preset_from != Some(i)
+                                        {
+                                            drop_target = Some(i);
+                                        }
                                         if ui.small_button("Up").clicked() {
                                             self.presets.move_face_up(i);
                                         }
@@ -1153,6 +1171,13 @@ impl StudioApp {
                                             self.presets.remove_face(i);
                                         }
                                         ui.end_row();
+                                    }
+                                    // Apply the drag-and-drop reorder.
+                                    if let (Some(from), Some(to)) =
+                                        (self.drag_preset_from, drop_target)
+                                    {
+                                        self.presets.move_face(from, to);
+                                        self.drag_preset_from = None;
                                     }
                                 });
                         });

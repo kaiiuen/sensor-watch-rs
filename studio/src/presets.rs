@@ -102,6 +102,15 @@ impl PresetManager {
         }
     }
 
+    /// Moves a face from one index to another in the active preset.
+    pub fn move_face(&mut self, from: usize, to: usize) {
+        let preset = &mut self.presets[self.active];
+        if from < preset.faces.len() && to < preset.faces.len() && from != to {
+            let face = preset.faces.remove(from);
+            preset.faces.insert(to, face);
+        }
+    }
+
     /// Returns the ordered face list of the active preset.
     pub fn active_faces(&self) -> VecDeque<String> {
         self.presets[self.active].faces.iter().cloned().collect()
