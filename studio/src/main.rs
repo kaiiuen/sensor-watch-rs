@@ -3564,15 +3564,45 @@ impl StudioApp {
             .log("Watch not found (is it in bootloader mode?)");
     }
 
-    /// Detects whether a Sensor Watch is mounted as a USB drive.
-    fn detect_watch(&self) -> Option<String> {
+    /// Detects whether a Sensor Watch is mounted as a USB drive, and if so
+    /// auto-selects the matching board revision from its INFO_UF2.TXT.
+    fn detect_watch(&mut self) -> Option<String> {
         for drive in 'A'..='Z' {
             let root = format!("{drive}:\\");
             if let Ok(entries) = std::fs::read_dir(&root) {
-                let is_watch = entries.flatten().any(|e| {
+                let mut is_watch = false;
+                for e in entries.flatten() {
                     let name = e.file_name().to_string_lossy().to_lowercase();
-                    name == "info_uf2.txt" || name == "current.uf2"
-                });
+                    if name == "info_uf2.txt" {
+                        is_watch = true;
+                        // Try to auto-select the board from the info file.
+                        if let Ok(text) = std::fs::read_to_string(e.path()) {
+                            let lower = text.to_lowercase();
+                            let board = if lower.contains("pro") {
+                                Some(Board::Pro)
+                            } else if lower.contains("blue") {
+                                Some(Board::Blue)
+                            } else if lower.contains("red") || lower.contains("lite") {
+                                Some(Board::RedLite)
+                            } else if lower.contains("green") {
+                                Some(Board::Green)
+                            } else {
+                                None
+                            };
+                            if let Some(b) = board {
+                                if self.board != b {
+                                    self.board = b;
+                                    self.log.log(format!(
+                                        "Auto-selected board {} from watch",
+                                        b.label()
+                                    ));
+                                }
+                            }
+                        }
+                    } else if name == "current.uf2" {
+                        is_watch = true;
+                    }
+                }
                 if is_watch {
                     return Some(root);
                 }
