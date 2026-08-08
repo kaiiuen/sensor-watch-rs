@@ -155,6 +155,10 @@ struct StudioApp {
     update_checking: bool,
     /// The handle to the background update check.
     pending_update: Option<std::thread::JoinHandle<Result<String, String>>>,
+    /// Whether the beep-on-minute helper is armed.
+    beep_armed: bool,
+    /// The target minute boundary timestamp for the beep.
+    beep_target: u64,
     /// The stats sampling rate in milliseconds.
     stats_rate_ms: u64,
     /// Shared atomic for the sampler thread to read the live rate.
@@ -377,6 +381,8 @@ impl Default for StudioApp {
             latest_commit: None,
             update_checking: false,
             pending_update: None,
+            beep_armed: false,
+            beep_target: 0,
         };
         app.log.log("Firmware Studio starting");
         app.face_list = faces::discover_faces();
@@ -2074,6 +2080,41 @@ impl StudioApp {
                     }
                 } else {
                     ui.weak("Fetch NTP time first.");
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.strong("Beep on minute rollover");
+                ui.label(
+                    "Arm a beep that sounds at the exact next minute boundary, so you\n\
+                     can set the watch precisely when it beeps.",
+                );
+                ui.horizontal(|ui| {
+                    if ui.button("Arm beep").clicked() {
+                        if let Some(ts) = self.ntp_time {
+                            self.beep_target = (ts / 60 + 1) * 60;
+                            self.beep_armed = true;
+                            self.log.log("Beep armed for next minute boundary");
+                        } else {
+                            self.status = "Fetch NTP time first".to_string();
+                        }
+                    }
+                    if ui.button("Disarm").clicked() {
+                        self.beep_armed = false;
+                    }
+                });
+                if self.beep_armed {
+                    if let Some(ts) = self.ntp_time {
+                        let remaining = self.beep_target.saturating_sub(ts);
+                        ui.monospace(format!("Beep in {remaining} s"));
+                        if remaining <= 1 {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(80, 200, 120),
+                                "BEEP! Set the watch now.",
+                            );
+                            self.beep_armed = false;
+                        }
+                    }
                 }
 
                 ui.add_space(12.0);
