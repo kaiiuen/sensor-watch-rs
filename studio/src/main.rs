@@ -68,6 +68,8 @@ struct StudioApp {
     selected_preset_face: Option<usize>,
     /// The index being dragged in the active preset (for drag-and-drop reorder).
     drag_preset_from: Option<usize>,
+    /// The catalog face name being dragged (to add to the preset on drop).
+    drag_catalog_face: Option<String>,
     /// The name for a new preset.
     new_preset_name: String,
     /// The editor's current face name.
@@ -300,6 +302,7 @@ impl Default for StudioApp {
             selected_face: None,
             selected_preset_face: None,
             drag_preset_from: None,
+            drag_catalog_face: None,
             new_preset_name: String::new(),
             editor_name: String::new(),
             editor_source: String::new(),
@@ -1092,7 +1095,18 @@ impl StudioApp {
                                             {
                                                 self.selected_face = Some(i);
                                             }
-                                            ui.label(&face.name).on_hover_text(&face.description);
+                                            let name_resp = ui
+                                                .add(
+                                                    egui::Label::new(&face.name)
+                                                        .sense(egui::Sense::drag()),
+                                                )
+                                                .on_hover_text(&face.description);
+                                            if name_resp.drag_started() {
+                                                self.drag_catalog_face = Some(face.name.clone());
+                                            }
+                                            if name_resp.drag_stopped() {
+                                                self.drag_catalog_face = None;
+                                            }
                                             ui.label(&face.description);
                                             if ui.small_button("+").clicked() {
                                                 self.presets.add_face(&face.name);
@@ -1107,6 +1121,20 @@ impl StudioApp {
 
                 // Active preset on bottom.
                 egui::CentralPanel::default().show_inside(ui, |ui| {
+                    // Drop target for dragging a catalog face here.
+                    if let Some(name) = self.drag_catalog_face.clone() {
+                        let drop = ui.add_sized(
+                            egui::vec2(ui.available_width(), 24.0),
+                            egui::Label::new(
+                                egui::RichText::new(format!("Drop {name} here to add")).weak(),
+                            ),
+                        );
+                        if drop.hovered() {
+                            self.presets.add_face(&name);
+                            self.drag_catalog_face = None;
+                            self.log.log(format!("Added {name} to preset (drag)"));
+                        }
+                    }
                     ui.horizontal(|ui| {
                         ui.heading("Active Preset");
                         ui.separator();
