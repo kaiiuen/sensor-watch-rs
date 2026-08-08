@@ -201,6 +201,9 @@ enum Board {
 }
 
 impl Board {
+    /// All supported board revisions, in display order.
+    const ALL: [Board; 4] = [Board::Green, Board::RedLite, Board::Blue, Board::Pro];
+
     fn label(self) -> &'static str {
         match self {
             Board::Green => "Green",
@@ -1981,6 +1984,24 @@ impl StudioApp {
                     "Build the firmware into a .uf2, then flash it to the watch.\n\
                      Build compiles the firmware; Flash copies the .uf2 to the\n\
                      watch's USB drive (bootloader mode).",
+                );
+                ui.add_space(8.0);
+
+                // Board selection (which revision the .uf2 targets).
+                ui.horizontal(|ui| {
+                    ui.label("Target board:");
+                    for b in Board::ALL {
+                        if ui.selectable_label(self.board == b, b.label()).clicked() {
+                            self.board = b;
+                            self.log.log(format!("Target board set to {}", b.label()));
+                        }
+                    }
+                });
+                ui.weak(
+                    "Choose the board revision you're flashing. Different revisions\n\
+                     (Green, Red/Lite, Blue, Pro) have different hardware, so the\n\
+                     firmware must be built for the right one. The app auto-selects\n\
+                     the board when a watch is detected.",
                 );
                 ui.add_space(8.0);
 
