@@ -14,6 +14,7 @@ mod faces;
 mod fuzz;
 mod i18n;
 mod integrity;
+mod modules;
 mod ntp;
 mod persist;
 mod presets;
@@ -105,6 +106,12 @@ struct StudioApp {
     pending_checksum: Option<std::thread::JoinHandle<Result<String, String>>>,
     /// The watch configuration (mirrors the firmware Settings register).
     watch_config: watch_config::WatchConfig,
+    /// Custom hardware modules.
+    modules: modules::ModuleManager,
+    /// The editor's module name/target/description inputs.
+    module_name: String,
+    module_target: String,
+    module_description: String,
     /// The latest system resource snapshot for the footer.
     sys_stats: sysstats::SysStats,
     /// The receiver for background system resource samples.
@@ -345,6 +352,10 @@ impl Default for StudioApp {
             checksum_busy: false,
             pending_checksum: None,
             watch_config: watch_config::WatchConfig::default(),
+            modules: modules::ModuleManager::default(),
+            module_name: String::new(),
+            module_target: String::new(),
+            module_description: String::new(),
             sys_stats: sysstats::SysStats::default(),
             stats_rate_ms: 1000,
             stats_rate_shared: stats_rate_shared.clone(),
@@ -2195,16 +2206,110 @@ impl StudioApp {
         ui.heading("Modules");
         ui.separator();
         ui.label(
-            "Add custom hardware modules (e.g. a BLE board instead of the\n\
-             accelerometer). This is where you'd register a custom HAL or\n\
-             peripheral driver for a modded board.",
+            "Register custom hardware modules for modded boards (e.g. a BLE board\n\
+             instead of the accelerometer). Each module targets a HAL file in\n\
+             src/watch/ and is listed here so the app knows what is installed.",
         );
         ui.add_space(8.0);
-        ui.weak(
-            "Module management is a planned feature. The firmware HAL is\n\
-                 modular (one module per peripheral in src/watch/), so a custom\n\
-                 module can be added there and registered here.",
-        );
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // Add a new module.
+                ui.strong("Add module");
+                egui::Grid::new("module_add")
+                    .num_columns(2)
+                    .spacing([16.0, 6.0])
+                    .show(ui, |ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.module_name);
+                        ui.end_row();
+                        ui.label("HAL target (e.g. lis2dw.rs):");
+                        ui.text_edit_singleline(&mut self.module_target);
+                        ui.end_row();
+                        ui.label("Description:");
+                        ui.text_edit_singleline(&mut self.module_description);
+                        ui.end_row();
+                    });
+                if ui.button("Register module").clicked() {
+                    let name = self.module_name.trim().to_string();
+                    if !name.is_empty() {
+                        self.modules.add(modules::Module {
+                            name: name.clone(),
+                            target: self.module_target.trim().to_string(),
+                            description: self.module_description.trim().to_string(),
+                            enabled: true,
+                        });
+                        self.log.log(format!("Registered module {name}"));
+                        self.module_name.clear();
+                        self.module_target.clear();
+                        self.module_description.clear();
+                        self.save_settings_internal();
+                    }
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+
+                // List registered modules.
+                ui.strong(format!(
+                    "Registered modules ({})",
+                    self.modules.modules.len()
+                ));
+                if self.modules.modules.is_empty() {
+                    ui.weak("No custom modules registered yet.");
+                }
+                let mut to_remove: Option<String> = None;
+                let mut to_toggle: Option<String> = None;
+                let names: Vec<String> = self
+                    .modules
+                    .modules
+                    .iter()
+                    .map(|m| m.name.clone())
+                    .collect();
+                for name in &names {
+                    let m = self
+                        .modules
+                        .modules
+                        .iter()
+                        .find(|m| &m.name == name)
+                        .unwrap();
+                    ui.horizontal(|ui| {
+                        let mut enabled = m.enabled;
+                        if ui.checkbox(&mut enabled, &m.name).changed() {
+                            to_toggle = Some(m.name.clone());
+                        }
+                        if !m.target.is_empty() {
+                            ui.monospace(&m.target);
+                        }
+                        if !m.description.is_empty() {
+                            ui.weak(&m.description);
+                        }
+                        if ui.small_button("Remove").clicked() {
+                            to_remove = Some(m.name.clone());
+                        }
+                    });
+                }
+                if let Some(name) = to_toggle {
+                    self.modules.toggle(&name);
+                    self.log.log(format!("Toggled module {name}"));
+                    self.save_settings_internal();
+                }
+                if let Some(name) = to_remove {
+                    self.modules.remove(&name);
+                    self.log.log(format!("Removed module {name}"));
+                    self.save_settings_internal();
+                }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.weak(
+                    "Note: registering a module here records it in the app. To\n\
+                     actually add the driver, drop the Rust source into src/watch/\n\
+                     and register it in src/watch/mod.rs. The app tracks which\n\
+                     modules are installed and enabled for a modded board.",
+                );
+            });
     }
 
     /// The debug panel: show the background activity log.
@@ -3116,6 +3221,7 @@ impl StudioApp {
             self.text_size,
             self.catalog_width,
             self.preset_height,
+            &self.modules,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -3152,6 +3258,7 @@ impl StudioApp {
             self.text_size,
             self.catalog_width,
             self.preset_height,
+            &self.modules,
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -3172,6 +3279,7 @@ impl StudioApp {
             self.text_size,
             self.catalog_width,
             self.preset_height,
+            &self.modules,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -3225,6 +3333,7 @@ impl StudioApp {
         self.text_size = s.text_size;
         self.catalog_width = s.catalog_width;
         self.preset_height = s.preset_height;
+        self.modules = s.modules;
         self.save_settings_internal();
     }
 

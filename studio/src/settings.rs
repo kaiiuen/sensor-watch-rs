@@ -7,6 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use super::i18n::Language;
+use super::modules::ModuleManager;
 use super::presets::PresetManager;
 use super::theme::Theme;
 use super::watch_config::WatchConfig;
@@ -33,6 +34,8 @@ pub struct AppSettings {
     /// Persisted Watch Faces panel widths.
     pub catalog_width: f32,
     pub preset_height: f32,
+    /// Custom hardware modules.
+    pub modules: ModuleManager,
 }
 
 impl AppSettings {
@@ -48,6 +51,7 @@ impl AppSettings {
         text_size: u8,
         catalog_width: f32,
         preset_height: f32,
+        modules: &ModuleManager,
     ) -> Self {
         AppSettings {
             language: language.name().to_string(),
@@ -60,6 +64,7 @@ impl AppSettings {
             text_size,
             catalog_width,
             preset_height,
+            modules: modules.clone(),
         }
     }
 
