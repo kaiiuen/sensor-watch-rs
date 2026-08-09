@@ -163,6 +163,8 @@ struct StudioApp {
     terminal_history: Vec<String>,
     /// The latest commit message from GitHub (for update notifications).
     latest_commit: Option<String>,
+    /// The timestamp (unix seconds) when the update notification was received.
+    update_time: Option<u64>,
     /// Whether the update check is in flight.
     update_checking: bool,
     /// The handle to the background update check.
@@ -402,6 +404,7 @@ impl Default for StudioApp {
             terminal_open: false,
             terminal_history: Vec::new(),
             latest_commit: None,
+            update_time: None,
             update_checking: false,
             pending_update: None,
             beep_armed: false,
@@ -574,6 +577,12 @@ impl eframe::App for StudioApp {
                 match handle.join() {
                     Ok(Ok(msg)) => {
                         self.latest_commit = Some(msg.clone());
+                        self.update_time = Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                        );
                         self.log.log(format!("Latest commit: {msg}"));
                     }
                     _ => {}
@@ -634,14 +643,21 @@ impl eframe::App for StudioApp {
                 // Update notification.
                 if let Some(commit) = &self.latest_commit {
                     ui.separator();
-                    ui.colored_label(
-                        egui::Color32::from_rgb(120, 180, 240),
-                        format!("New update: {commit}"),
-                    )
-                    .on_hover_text(
-                        "A new commit was pushed to the repo. Click the title to\n\
-                         open GitHub and download the latest release.",
-                    );
+                    let ts = self.update_time.map(|t| {
+                        let secs = (t as i64).rem_euclid(86400);
+                        let h = (secs / 3600) % 24;
+                        let m = (secs / 60) % 60;
+                        format!("{h:02}:{m:02}")
+                    });
+                    let label = match &ts {
+                        Some(t) => format!("New update ({t}): {commit}"),
+                        None => format!("New update: {commit}"),
+                    };
+                    ui.colored_label(egui::Color32::from_rgb(120, 180, 240), label)
+                        .on_hover_text(
+                            "A new commit was pushed to the repo. Click the title to\n\
+                             open GitHub and download the latest release.",
+                        );
                 }
             });
         });
