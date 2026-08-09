@@ -11,6 +11,7 @@ mod drift;
 mod editor;
 mod face_sim;
 mod faces;
+mod fonts;
 mod fuzz;
 mod i18n;
 mod integrity;
@@ -33,6 +34,8 @@ use watch_sim::CasioF91W;
 
 /// The main application state.
 struct StudioApp {
+    /// Whether the CJK font has been installed yet.
+    fonts_installed: bool,
     /// The currently selected panel.
     current_panel: Panel,
     /// The last status message shown in the status bar.
@@ -317,6 +320,7 @@ impl Default for StudioApp {
         // Shared atomic for the stats sampler's live rate.
         let stats_rate_shared = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1000));
         let mut app = StudioApp {
+            fonts_installed: false,
             current_panel: Panel::Dashboard,
             status: String::new(),
             face_list: Vec::new(),
@@ -423,6 +427,12 @@ impl Default for StudioApp {
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // Install a CJK font once so Chinese text renders instead of empty boxes.
+        if !self.fonts_installed {
+            fonts::install(ctx);
+            self.fonts_installed = true;
+        }
+
         // Apply the theme.
         self.theme.apply(ctx);
 
