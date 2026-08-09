@@ -91,6 +91,17 @@ The single biggest power saver. When **seconds are hidden**, the watch wakes
 
 This is controlled by the `show_seconds` setting and `set_tick_rate()`.
 
+> **Known limitation:** the 128 Hz fast tick (used for long-press detection and
+> button debounce sampling) is currently registered unconditionally in
+> `app_setup` and never disabled. Because it wakes the CPU from STANDBY, the
+> effective wake rate is ~128 Hz regardless of the `show_seconds` setting,
+> which largely negates the per-minute power saving above. The fast tick also
+> keeps the 2 s watchdog fed, so there is no reset risk, but the power budget
+> is not yet as low as the per-minute figure implies. A future change should
+> enable the fast tick only during active button interaction and rely on the
+> EIC button interrupts to wake the CPU, so idle time can reach the true
+> per-minute (or per-second) rate.
+
 ### 2. Peripheral auto-release
 
 After every `app_loop`, `release_peripherals()` disables ADC, I2C, and SPI, and
