@@ -103,10 +103,11 @@ invokes the firmware's own `cargo build` and uses the core crate's
 - `watch_sim.rs` - the F-91W clock/light/CASIO logic and live time accessor
 - `build.rs` - firmware build → UF2, path resolution
 - `faces.rs` - discovers faces from the firmware `mod.rs`
-- `editor.rs` - face templates + read/write/delete
-- `presets.rs` - preset manager
-- `i18n.rs` - language (English, Simplified/Traditional Chinese)
-- `theme.rs` - Light/Dark/Auto
+- `editor.rs` — face templates + read/write/delete
+- `presets.rs` — preset manager
+- `i18n.rs` — language (English, Simplified/Traditional Chinese)
+- `theme.rs` — Light/Dark/Auto
+- `fonts.rs` — loads a system CJK font so Chinese renders
 - `debug.rs` - ring-buffer log
 - `ntp.rs` - NTP time client
 - `settings.rs` - settings save/export/import
