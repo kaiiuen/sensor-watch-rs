@@ -246,7 +246,9 @@ impl FaceEngine {
         let upper = self.face_name.to_uppercase();
         let mut d = FaceDisplay::default();
 
-        if upper.contains("SIMPLE_CLOCK") || upper.contains("CLOCK") {
+        if upper.contains("WORLD_CLOCK") {
+            render_world_clock(&mut d, time, self.world_offset);
+        } else if upper.contains("SIMPLE_CLOCK") || upper.contains("CLOCK") {
             render_clock(&mut d, time, self.time_mode_24);
         } else if upper.contains("STOPWATCH") {
             render_stopwatch(&mut d, self.sw_seconds);
@@ -256,8 +258,6 @@ impl FaceEngine {
             render_countdown(&mut d, self.timer_seconds);
         } else if upper.contains("ALARM") {
             render_alarm(&mut d, self.alarm_seconds, self.alarm_enabled);
-        } else if upper.contains("WORLD_CLOCK") {
-            render_world_clock(&mut d, time, self.world_offset);
         } else if upper.contains("COUNTER") {
             render_counter(&mut d, self.counter);
         } else if upper.contains("FLASHLIGHT") {
@@ -469,7 +469,8 @@ fn render_timer(d: &mut FaceDisplay, seconds: u32) {
     let (m2, m1) = two_digits(m);
     let (s2, s1) = two_digits(s);
     // HH:MM:SS across positions 4-9 (hour 4-5, minute 6-7, second 8-9).
-    d.chars = ['1', ' ', ' ', ' ', h2, h1, m2, m1, s2, s1];
+    // Positions 0-3 (weekday/day) are left blank.
+    d.chars = [' ', ' ', ' ', ' ', h2, h1, m2, m1, s2, s1];
     d.colon = true;
 }
 
@@ -529,5 +530,52 @@ fn render_coin_flip(d: &mut FaceDisplay, heads: bool) {
         d.set_string("HEADS", 2);
     } else {
         d.set_string("TAILS", 2);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn time() -> SimTime {
+        SimTime {
+            year: 2026,
+            month: 8,
+            day: 10,
+            hour: 10,
+            minute: 30,
+            second: 0,
+            weekday: 1,
+        }
+    }
+
+    #[test]
+    fn world_clock_uses_world_render() {
+        // WORLD_CLOCK must not fall through to the generic clock renderer.
+        let eng = FaceEngine::new("WORLD_CLOCK");
+        let d = eng.render(&time());
+        // The world clock renderer labels the display with "WC".
+        assert_eq!(d.chars[0], 'W');
+        assert_eq!(d.chars[1], 'C');
+    }
+
+    #[test]
+    fn simple_clock_uses_clock_render() {
+        let eng = FaceEngine::new("SIMPLE_CLOCK");
+        let d = eng.render(&time());
+        // Simple clock shows the weekday (Mo) then the day/date.
+        assert_eq!(d.colon, true);
+        // It must not be the world-clock "WC" label.
+        assert_ne!(d.chars[0], 'W');
+    }
+
+    #[test]
+    fn timer_draws_blank_leading_positions() {
+        let mut eng = FaceEngine::new("TIMER");
+        eng.timer_seconds = 3661;
+        let d = eng.render(&time());
+        // Positions 0-3 are blank; 1h00m61s -> " 00:01:01"-style digits.
+        assert_eq!(d.chars[0], ' ');
+        assert_eq!(d.chars[1], ' ');
     }
 }
