@@ -610,6 +610,12 @@ impl eframe::App for StudioApp {
                                 )
                                 .clicked()
                             {
+                                if self.current_panel != panel {
+                                    self.log.log(format!(
+                                        "Switched to panel {}",
+                                        panel.label(self.language)
+                                    ));
+                                }
                                 self.current_panel = panel;
                             }
                         }
