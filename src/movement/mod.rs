@@ -843,7 +843,13 @@ pub fn default_loop_handler(event: Event, _settings: &Settings) {
 /// Faces should call this after changing any setting.
 pub fn save_settings() {
     unsafe {
-        persist::save(&MOVEMENT_STATE.settings);
+        let reg = MOVEMENT_STATE.settings.reg;
+        // Only hit flash when settings actually changed. This avoids wearing
+        // out the EEPROM area by rewriting identical settings on every wake.
+        if reg != MOVEMENT_STATE.last_saved_settings_reg {
+            MOVEMENT_STATE.last_saved_settings_reg = reg;
+            persist::save(&MOVEMENT_STATE.settings);
+        }
     }
 }
 
@@ -1454,6 +1460,9 @@ pub fn app_init() {
             MOVEMENT_STATE.settings.set_le_interval(2);
             MOVEMENT_STATE.settings.set_led_duration(1);
         }
+        // Remember what we loaded so the dirty-check in save_settings doesn't
+        // rewrite identical settings on the first wake.
+        MOVEMENT_STATE.last_saved_settings_reg = MOVEMENT_STATE.settings.reg;
         MOVEMENT_STATE.next_available_backup_register = 4;
     }
 }

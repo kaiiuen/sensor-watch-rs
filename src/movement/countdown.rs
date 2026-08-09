@@ -60,7 +60,7 @@ impl CountdownFace {
     }
 
     fn tz_offset(settings: &Settings) -> u32 {
-        (TIMEZONE_OFFSETS[settings.time_zone() as usize] as i32 * 60) as u32
+        (TIMEZONE_OFFSETS[(settings.time_zone() as usize).min(40)] as i32 * 60) as u32
     }
 
     fn store(&mut self) {
