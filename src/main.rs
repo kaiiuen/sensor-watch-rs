@@ -34,12 +34,11 @@ fn main() -> ! {
     movement::fault::check_boot_throttle();
 
     // Check the firmware image for bit-rot. If it fails, record a fault and
-    // show a recovery display instead of running potentially-corrupted code.
+    // keep booting best-effort rather than bricking: the watch still tries to
+    // run, and the fault code is only revealed (as an LED flash) when the user
+    // presses a button, so a corrupt image never draws attention on its own.
     if !watch::crc::check_firmware_integrity() {
         movement::fault::record_fault(movement::fault::Fault::CorruptImage);
-        // Enter a safe recovery state: blink the LED and halt (the watchdog
-        // will reset, but we avoid running corrupted code).
-        recovery_halt();
     }
 
     // Initialize the hardware in dependency order: interrupt priorities,
@@ -98,31 +97,5 @@ fn copy_ramfunc() {
         let dst = &raw const __ramfunc_start as *mut u8;
         let len = (&raw const __ramfunc_end as usize) - (&raw const __ramfunc_start as usize);
         core::ptr::copy_nonoverlapping(src, dst, len);
-    }
-}
-
-/// Enters a safe recovery state after a firmware-integrity failure.
-///
-/// Blinks the LED to signal corruption, then halts. The hardware watchdog
-/// resets the watch, but we avoid running potentially-corrupted code. This is
-/// the "recovery display" of the dual-boot scheme: a corrupt image is never
-/// executed.
-fn recovery_halt() -> ! {
-    // Blink the LED a few times as a visible corruption indicator.
-    watch::led::enable_leds();
-    for _ in 0..8 {
-        watch::led::set_led_red();
-        for _ in 0..200_000 {
-            cortex_m::asm::nop();
-        }
-        watch::led::set_led_off();
-        for _ in 0..200_000 {
-            cortex_m::asm::nop();
-        }
-    }
-    watch::led::disable_leds();
-    // Halt. The watchdog will eventually reset.
-    loop {
-        cortex_m::asm::wfi();
     }
 }

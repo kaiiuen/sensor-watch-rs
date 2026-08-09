@@ -77,6 +77,26 @@ pub fn last_fault() -> u8 {
     deepsleep::get_backup_data(REG_LAST_FAULT) as u8
 }
 
+impl Fault {
+    /// Maps a stored fault code back to its `Fault` variant.
+    ///
+    /// Codes outside the known set map to `InvalidState`, so a corrupted or
+    /// foreign backup-register value never produces an out-of-range LED pattern.
+    pub fn from_code(code: u8) -> Fault {
+        match code {
+            1 => Fault::WatchdogReset,
+            2 => Fault::Panic,
+            3 => Fault::WakeTooLong,
+            4 => Fault::InvalidState,
+            5 => Fault::BatteryLow,
+            6 => Fault::RtcLostTime,
+            7 => Fault::CorruptImage,
+            8 => Fault::ClockFailure,
+            _ => Fault::InvalidState,
+        }
+    }
+}
+
 /// Returns the number of faults recorded since the last clear.
 pub fn fault_count() -> u32 {
     deepsleep::get_backup_data(REG_FAULT_COUNT)
@@ -180,6 +200,21 @@ pub fn reset_reason() -> ResetReason {
         2 => ResetReason::Panic,
         3 => ResetReason::Software,
         _ => ResetReason::PowerOn,
+    }
+}
+
+/// Reveals the last recorded fault code via the LED, on demand.
+///
+/// Safe to call from an interrupt or the fast-tick sampling path. Reads the
+/// last stored fault code and, if one is present, flashes it via
+/// [`signal_fault`]. If no fault has been recorded it does nothing, so a
+/// healthy watch shows no attention-grabbing flash when the light button is
+/// pressed. Pairs with `Fault::from_code` so the backup-register byte maps back
+/// to a valid variant.
+pub fn ping_fault_on_light() {
+    let last = last_fault();
+    if last != 0 {
+        signal_fault(Fault::from_code(last));
     }
 }
 

@@ -1785,6 +1785,7 @@ fn cb_light_btn_interrupt() {
         ) {
             if is_press(&ev) {
                 stats::press_light();
+                crate::movement::fault::ping_fault_on_light();
             }
             PENDING_EVENT = ev;
         }
@@ -1903,6 +1904,7 @@ fn sample_buttons() {
         ) {
             if is_press(&ev) {
                 stats::press_light();
+                crate::movement::fault::ping_fault_on_light();
             }
             PENDING_EVENT = ev;
         }
