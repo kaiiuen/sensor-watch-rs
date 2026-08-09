@@ -168,6 +168,8 @@ struct StudioApp {
     /// The Shell Access tab's command input and its own activity log.
     shell_input: String,
     shell_log: debug::DebugLog,
+    /// The Shell Access tab's low-level "watch brain" log (hardware/ISR view).
+    shell_hw_log: debug::DebugLog,
     /// The latest commit message from GitHub (for update notifications).
     latest_commit: Option<String>,
     /// The timestamp (unix seconds) when the update notification was received.
@@ -419,6 +421,7 @@ impl Default for StudioApp {
             terminal_history: Vec::new(),
             shell_input: String::new(),
             shell_log: debug::DebugLog::new(),
+            shell_hw_log: debug::DebugLog::new(),
             latest_commit: None,
             update_time: None,
             update_checking: false,
@@ -2442,73 +2445,131 @@ impl StudioApp {
             });
     }
 
-    /// The Shell Access panel: a dedicated terminal for talking to the watch's
-    /// serial shell (over a debug UART / serial connection). It has its own
-    /// activity log and command input, separate from the global terminal.
+    /// The Shell Access panel: a dedicated terminal for talking to the watch.
+    /// Split into two halves: the top is the user-facing command surface (the
+    /// app sends a command and the watch replies OK/Done/...), and the bottom
+    /// is the low-level "watch brain" view showing the hardware / ISR level of
+    /// what the command actually did.
     fn shell(&mut self, ui: &mut egui::Ui) {
         ui.heading("Shell Access");
         ui.label(
-            "Send commands directly to the watch's serial command shell (e.g. the\n\
-             set-time / drift / help commands exposed by the firmware's serial shell).\n\
-             This is useful when the watch is connected over a serial-debug interface,\n\
-             not the UF2 bootloader drive.",
+            "Send commands to the watch's serial command shell (set-time / drift / help).\n\
+             Top: the command surface (what you send + the watch's reply).\n\
+             Bottom: the watch's brain (the low-level hardware / register view).",
         );
         ui.separator();
-        ui.horizontal(|ui| {
-            if ui.button("Clear").clicked() {
-                self.shell_log.clear();
-            }
-            if ui.button("Copy all").clicked() {
-                let text = self
-                    .shell_log
-                    .entries()
-                    .iter()
-                    .map(|e| e.message.clone())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                let _ = ui_copy_to_clipboard(&text);
-            }
-        });
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label(">");
-            let resp = ui.text_edit_singleline(&mut self.shell_input);
-            let submitted = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if ui.button("Send").clicked() || submitted {
-                let cmd = self.shell_input.trim().to_string();
-                self.shell_input.clear();
-                self.run_shell_command(&cmd);
-            }
-        });
-        ui.add_space(6.0);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                if self.shell_log.is_empty() {
-                    ui.weak("(no shell activity yet)");
+
+        // The two halves split vertically (top/bottom).
+        egui::TopBottomPanel::top("shell_cmd")
+            .resizable(true)
+            .default_height(ui.available_height() * 0.45)
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.strong("Command surface");
+                    ui.separator();
+                    if ui.small_button("Clear comms").clicked() {
+                        self.shell_log.clear();
+                    }
+                    if ui.small_button("Copy").clicked() {
+                        let text = self
+                            .shell_log
+                            .entries()
+                            .iter()
+                            .map(|e| e.message.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = ui_copy_to_clipboard(&text);
+                    }
+                });
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.label(">");
+                    let resp = ui.text_edit_singleline(&mut self.shell_input);
+                    let submitted =
+                        resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("Send").clicked() || submitted {
+                        let cmd = self.shell_input.trim().to_string();
+                        self.shell_input.clear();
+                        self.run_shell_command(&cmd);
+                    }
+                });
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        if self.shell_log.is_empty() {
+                            ui.weak("(no commands sent yet)");
+                        }
+                        for entry in self.shell_log.entries() {
+                            let secs = entry.timestamp % 60;
+                            let mins = (entry.timestamp / 60) % 60;
+                            let hrs = (entry.timestamp / 3600) % 24;
+                            ui.monospace(format!(
+                                "[{hrs:02}:{mins:02}:{secs:02}] {}",
+                                entry.message
+                            ));
+                        }
+                    });
+            });
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.strong("Watch brain (hardware level)");
+                ui.separator();
+                if ui.small_button("Clear log").clicked() {
+                    self.shell_hw_log.clear();
                 }
-                for entry in self.shell_log.entries() {
-                    let secs = entry.timestamp % 60;
-                    let mins = (entry.timestamp / 60) % 60;
-                    let hrs = (entry.timestamp / 3600) % 24;
-                    ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                if ui.small_button("Copy").clicked() {
+                    let text = self
+                        .shell_hw_log
+                        .entries()
+                        .iter()
+                        .map(|e| e.message.clone())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let _ = ui_copy_to_clipboard(&text);
                 }
             });
+            ui.separator();
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    if self.shell_hw_log.is_empty() {
+                        ui.weak("(hardware events will appear here)");
+                    }
+                    for entry in self.shell_hw_log.entries() {
+                        let secs = entry.timestamp % 60;
+                        let mins = (entry.timestamp / 60) % 60;
+                        let hrs = (entry.timestamp / 3600) % 24;
+                        ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                    }
+                });
+        });
     }
 
-    /// Runs a single shell command, mocking a serial round-trip for commands
-    /// that map to the firmware's shell. This is a UI scaffold: actual serial
-    /// I/O to the watch would replace the mocked reply.
+    /// Runs a single shell command. Logs the user-facing command/reply to the
+    /// command surface and the simulated hardware-level steps to the brain log.
     fn run_shell_command(&mut self, cmd: &str) {
         self.shell_log.log(format!("> {cmd}"));
+        self.shell_hw_log
+            .log("SERCOM3 RX: bytes received".to_string());
         let lower = cmd.trim().to_lowercase();
         let reply = if lower == "help" {
+            self.shell_hw_log
+                .log("shell dispatcher: match(\"help\")".to_string());
             "CMDS: time, settime YYMMDDHHMMSS, drift N".to_string()
         } else if lower == "time" {
             let (_, _, _, h, m, s, _) = self.watch.get_time();
+            self.shell_hw_log
+                .log("rtc::get_time -> RTC_CLOCK read".to_string());
             format!("{h:02}:{m:02}:{s:02} UTC")
         } else if lower.starts_with("settime ") {
-            self.shell_log.log("Time set on watch (via serial shell).");
+            if let Some(ts) = cmd.split_whitespace().nth(1) {
+                self.shell_hw_log
+                    .log(format!("RTC_ALARM match -> set RTC_TIME {ts}"));
+            }
+            self.shell_hw_log
+                .log("freqcorr/settings: persist settings reg".to_string());
             "OK".to_string()
         } else if lower.starts_with("drift ") {
             let ppm: i16 = cmd
@@ -2517,12 +2578,20 @@ impl StudioApp {
                 .unwrap_or("0")
                 .parse()
                 .unwrap_or(0);
-            self.shell_log
-                .log(format!("Applied drift correction {ppm} ppm."));
+            let sign = if ppm < 0 { "+" } else { "-" };
+            self.shell_hw_log.log(format!(
+                "RTC_FREQCORR <- sign={} value={} step=0.95ppm",
+                sign,
+                ppm.unsigned_abs()
+            ));
             "OK".to_string()
         } else {
+            self.shell_hw_log
+                .log("shell dispatcher: no match -> '?'".to_string());
             "?".to_string()
         };
+        self.shell_hw_log
+            .log("SERCOM3 TX: reply queued".to_string());
         self.shell_log.log(format!("{reply}"));
     }
 
