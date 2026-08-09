@@ -754,6 +754,11 @@ pub static mut FAST_TICKS: u16 = 0;
 /// task pass (`handle_background_tasks`) once per minute, in main context.
 pub static mut RUN_BACKGROUND_TASKS: bool = false;
 
+/// True while tap detection (accelerometer wake-on-motion) is active. While
+/// active, the I2C bus to the accelerometer must stay powered so a tap can be
+/// read when it wakes the CPU, so `release_peripherals` must not disable I2C.
+pub static mut TAP_DETECTION_ACTIVE: bool = false;
+
 /// The serial command shell.
 pub static mut SHELL: watch::shell::Shell = watch::shell::Shell::new_static();
 
@@ -1371,6 +1376,7 @@ pub fn enable_tap_detection_if_available() -> bool {
         accelerometer_interrupt,
         watch::extint::Trigger::Rising,
     );
+    unsafe { TAP_DETECTION_ACTIVE = true };
     true
 }
 
@@ -1390,6 +1396,7 @@ pub fn disable_tap_detection_if_available() -> bool {
     watch::lis2dw::disable_double_tap();
     watch::lis2dw::configure_tap_threshold(0, 0);
     watch::lis2dw::disable_interrupts();
+    unsafe { TAP_DETECTION_ACTIVE = false };
     true
 }
 
@@ -1718,10 +1725,14 @@ pub fn app_loop() {
 /// drain the battery.
 fn release_peripherals() {
     watch::adc::disable_adc();
-    watch::i2c::disable_i2c();
-    // Reconfigure the I2C pins to floating inputs so a sensor board cannot
-    // backward-power itself through the bus while the CPU sleeps.
-    watch::i2c::pins_to_floating_before_sleep();
+    // If tap detection (accelerometer wake-on-motion) is active, the I2C bus
+    // to the accelerometer must stay powered so a tap can be read when it
+    // wakes the CPU. Otherwise, release I2C so no sensor board can backward-
+    // power itself through the bus while the CPU sleeps.
+    if unsafe { !TAP_DETECTION_ACTIVE } {
+        watch::i2c::disable_i2c();
+        watch::i2c::pins_to_floating_before_sleep();
+    }
     watch::spi::disable_spi();
 }
 
