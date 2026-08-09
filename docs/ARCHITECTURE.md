@@ -515,6 +515,20 @@ A central "authoritarian watchdog" that tracks system health:
   state
 - `signal_fault()` - LED flash code (N red flashes = fault N)
 
+**Fault codes** (shown as N red LED flashes, and stored for the diagnostics
+face to display after a reset):
+
+| Code | Fault | Meaning |
+|------|-------|---------|
+| 1 | WatchdogReset | A hang occurred; the hardware watchdog reset the watch |
+| 2 | Panic | A software panic (bug); recorded before the reset |
+| 3 | WakeTooLong | A wake event took too long to process |
+| 4 | InvalidState | An invalid event or state was encountered |
+| 5 | BatteryLow | The battery is critically low |
+| 6 | RtcLostTime | The RTC lost time (crystal issue or frozen clock) |
+| 7 | CorruptImage | The firmware image failed its CRC integrity check |
+| 8 | ClockFailure | The 32 kHz crystal failed; RTC on the internal oscillator |
+
 **Why:** when something goes wrong, the watch tells the user via LED codes
 instead of silently failing. Faults are stored in **fixed** backup registers
 (no growth).
