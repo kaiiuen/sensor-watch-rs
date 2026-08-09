@@ -43,11 +43,31 @@ fn build_request_packet() -> [u8; 48] {
     packet
 }
 
-/// Parse the transmit timestamp (bytes 40..48) from an NTP response packet.
-fn parse_transmit_timestamp(packet: &[u8]) -> (u64, u32) {
-    let seconds = u32::from_be_bytes([packet[40], packet[41], packet[42], packet[43]]);
-    let fraction = u32::from_be_bytes([packet[44], packet[45], packet[46], packet[47]]);
+/// Parse a 64-bit NTP timestamp (seconds + fraction) at a given byte offset.
+fn parse_ntp_timestamp(packet: &[u8], offset: usize) -> (u64, u32) {
+    let seconds = u32::from_be_bytes([
+        packet[offset],
+        packet[offset + 1],
+        packet[offset + 2],
+        packet[offset + 3],
+    ]);
+    let fraction = u32::from_be_bytes([
+        packet[offset + 4],
+        packet[offset + 5],
+        packet[offset + 6],
+        packet[offset + 7],
+    ]);
     (seconds as u64, fraction)
+}
+
+/// Convert an NTP (seconds, fraction) pair to fractional seconds since 1900.
+fn ntp_fractional(seconds: u64, fraction: u32) -> f64 {
+    seconds as f64 + fraction as f64 / (1u64 << 32) as f64
+}
+
+/// Convert fractional NTP seconds (since 1900) to fractional Unix seconds.
+fn ntp_to_unix_fractional(ntp: f64) -> f64 {
+    ntp - NTP_TIMESTAMP_DELTA as f64
 }
 
 /// Current local time as fractional NTP seconds (seconds since 1900).
@@ -60,6 +80,12 @@ fn local_to_ntp_seconds() -> f64 {
 }
 
 /// Query an NTP server for the current time.
+///
+/// Uses the classic four-timestamp NTP offset algorithm:
+///   offset = ((T2 - T1) + (T3 - T4)) / 2
+/// where T1 = our send time, T2 = server receive time, T3 = server transmit
+/// time, T4 = our receive time. This is far more accurate than a half-RTT
+/// estimate and is the standard NTP math.
 pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
     let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
     socket
@@ -72,34 +98,41 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
         .connect(address.as_str())
         .map_err(|e| e.to_string())?;
 
-    let origin_ntp = local_to_ntp_seconds();
+    let t1 = local_to_ntp_seconds();
     let start = Instant::now();
     socket.send(&request).map_err(|e| e.to_string())?;
 
     let mut buf = [0u8; 1024];
     let len = socket.recv(&mut buf).map_err(|e| e.to_string())?;
     let ping_ms = start.elapsed().as_secs_f64() * 1000.0;
-    let destination_ntp = local_to_ntp_seconds();
+    let t4 = local_to_ntp_seconds();
 
     if len < 48 {
         return Err(format!("Short NTP response: {len} bytes"));
     }
+    // LI/VN/Mode byte sanity check: a valid server reply has Mode=4 (server).
+    if (buf[0] & 0x07) != 4 {
+        return Err("Invalid NTP reply mode (expected server mode)".to_string());
+    }
 
-    let (seconds, fraction) = parse_transmit_timestamp(&buf[..48]);
-    let unix = seconds.saturating_sub(NTP_TIMESTAMP_DELTA);
-    let millis = (fraction as u64 * 1000) >> 32;
+    // T2 = receive timestamp (bytes 32..40), T3 = transmit (bytes 40..48).
+    let (r1, r2) = parse_ntp_timestamp(&buf[..48], 32);
+    let (x1, x2) = parse_ntp_timestamp(&buf[..48], 40);
+    let t2 = ntp_fractional(r1, r2);
+    let t3 = ntp_fractional(x1, x2);
 
-    // Simple offset estimate: server transmit + one-way delay - local receipt.
-    let local_receipt = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
-    let server_fractional = unix as f64 + millis as f64 / 1000.0;
-    let offset_secs = server_fractional + (ping_ms / 1000.0) / 2.0 - local_receipt;
+    // Sanity: the server's timestamps must be plausible (not the NTP epoch
+    // 1900, i.e. seconds must be well in the past). Reject garbage.
+    if t3 < 4_000_000_000.0 || t3 > 4_300_000_000.0 {
+        return Err("NTP server returned implausible timestamp".to_string());
+    }
 
-    let _ = (origin_ntp, destination_ntp);
+    // Offset = ((T2 - T1) + (T3 - T4)) / 2 (all in NTP seconds since 1900).
+    let offset_secs = ((t2 - t1) + (t3 - t4)) / 2.0;
+
+    let unix_seconds = ntp_to_unix_fractional(t3) as u64;
     Ok(NtpResult {
-        unix_seconds: unix,
+        unix_seconds,
         ping_ms,
         offset_secs,
     })

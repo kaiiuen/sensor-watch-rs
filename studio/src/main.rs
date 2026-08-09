@@ -1191,8 +1191,18 @@ impl StudioApp {
         if self.ntp_busy {
             return;
         }
+        // Build the combined server list (built-in + custom) and resolve the
+        // selected index safely. A stale index from a settings file is clamped.
+        let mut all: Vec<String> = ntp::SERVERS.iter().map(|(_, h)| h.to_string()).collect();
+        all.extend(self.ntp_servers.iter().map(|(_, h)| h.clone()));
+        if all.is_empty() {
+            self.status = "No NTP server available".to_string();
+            self.ntp_busy = false;
+            return;
+        }
+        let idx = self.ntp_server.min(all.len() - 1);
+        let server = all[idx].clone();
         self.ntp_busy = true;
-        let server = ntp::SERVERS[self.ntp_server].1.to_string();
         let handle = std::thread::spawn(move || ntp::query_ntp(&server));
         self.pending_ntp = Some(handle);
     }
@@ -2376,12 +2386,9 @@ impl StudioApp {
                     .map(|m| m.name.clone())
                     .collect();
                 for name in &names {
-                    let m = self
-                        .modules
-                        .modules
-                        .iter()
-                        .find(|m| &m.name == name)
-                        .unwrap();
+                    let Some(m) = self.modules.modules.iter().find(|m| &m.name == name) else {
+                        continue;
+                    };
                     ui.horizontal(|ui| {
                         let mut enabled = m.enabled;
                         if ui.checkbox(&mut enabled, &m.name).changed() {
@@ -2747,6 +2754,12 @@ impl StudioApp {
         let aspect = 1480.0 / 1311.0;
         let w = size[0] as f32;
         let h = w / aspect;
+
+        // If rendering failed, skip drawing the watch but keep the rest of the
+        // simulator working rather than crashing.
+        let Some(texture) = texture else {
+            return;
+        };
 
         // Allocate the image rect so we can map clicks to SVG button hotspots.
         let (rect, _response) = ui.allocate_exact_size(egui::Vec2::new(w, h), egui::Sense::click());
@@ -3616,6 +3629,7 @@ impl StudioApp {
             self.theme = *theme;
         }
         self.presets = s.presets;
+        self.presets.clamp_active();
         self.ntp_server = s.ntp_server;
         self.ntp_servers = s.ntp_servers;
         self.sim_scale = s.sim_scale;

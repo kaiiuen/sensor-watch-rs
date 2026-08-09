@@ -28,16 +28,21 @@ impl WatchRenderer {
     }
 
     /// Renders the watch with the given display state into a ColorImage.
-    pub fn render(&mut self, display: &Display, size: [u32; 2]) -> ColorImage {
+    /// Returns None if rendering fails (e.g. invalid SVG or zero size) instead
+    /// of panicking, so a render hiccup can't crash the app.
+    pub fn render(&mut self, display: &Display, size: [u32; 2]) -> Option<ColorImage> {
+        if size[0] == 0 || size[1] == 0 {
+            return None;
+        }
         // Build the SVG source with the display state applied.
         let svg = apply_display_to_svg(WATCH_SVG, display);
 
         // Re-parse and render.
         let opt = usvg::Options::default();
-        let tree = usvg::Tree::from_str(&svg, &opt).expect("failed to re-parse watch SVG");
+        let tree = usvg::Tree::from_str(&svg, &opt).ok()?;
         self.tree = tree;
 
-        let mut pixmap = resvg::tiny_skia::Pixmap::new(size[0], size[1]).expect("pixmap");
+        let mut pixmap = resvg::tiny_skia::Pixmap::new(size[0], size[1])?;
         let transform = resvg::tiny_skia::Transform::from_scale(
             size[0] as f32 / 1480.0,
             size[1] as f32 / 1311.0,
@@ -49,7 +54,10 @@ impl WatchRenderer {
         for px in data.chunks(4) {
             rgba.extend_from_slice(&[px[0], px[1], px[2], px[3]]);
         }
-        ColorImage::from_rgba_unmultiplied([size[0] as usize, size[1] as usize], &rgba)
+        Some(ColorImage::from_rgba_unmultiplied(
+            [size[0] as usize, size[1] as usize],
+            &rgba,
+        ))
     }
 }
 
@@ -211,9 +219,9 @@ pub fn render_to_texture(
     display: &Display,
     size: [u32; 2],
     ctx: &egui::Context,
-) -> TextureHandle {
-    let image = renderer.render(display, size);
-    ctx.load_texture("watch", image, TextureOptions::LINEAR)
+) -> Option<TextureHandle> {
+    let image = renderer.render(display, size)?;
+    Some(ctx.load_texture("watch", image, TextureOptions::LINEAR))
 }
 
 /// Converts a firmware-style `FaceDisplay` (10 chars + indicators) into the

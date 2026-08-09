@@ -67,53 +67,80 @@ impl PresetManager {
 
     /// Renames the active preset.
     pub fn rename_active(&mut self, name: &str) {
-        self.presets[self.active].name = name.to_string();
+        if let Some(p) = self.presets.get_mut(self.active) {
+            p.name = name.to_string();
+        }
     }
 
     /// Adds a face to the active preset (if not already present).
     pub fn add_face(&mut self, face: &str) {
-        let preset = &mut self.presets[self.active];
-        if !preset.faces.iter().any(|f| f == face) {
-            preset.faces.push(face.to_string());
+        if let Some(preset) = self.presets.get_mut(self.active) {
+            if !preset.faces.iter().any(|f| f == face) {
+                preset.faces.push(face.to_string());
+            }
         }
     }
 
     /// Removes a face from the active preset.
     pub fn remove_face(&mut self, index: usize) {
-        let preset = &mut self.presets[self.active];
-        if index < preset.faces.len() {
-            preset.faces.remove(index);
+        if let Some(preset) = self.presets.get_mut(self.active) {
+            if index < preset.faces.len() {
+                preset.faces.remove(index);
+            }
         }
     }
 
     /// Moves a face up (toward the front) in the active preset.
     pub fn move_face_up(&mut self, index: usize) {
-        let preset = &mut self.presets[self.active];
-        if index > 0 && index < preset.faces.len() {
-            preset.faces.swap(index, index - 1);
+        if let Some(preset) = self.presets.get_mut(self.active) {
+            if index > 0 && index < preset.faces.len() {
+                preset.faces.swap(index, index - 1);
+            }
         }
     }
 
     /// Moves a face down (toward the back) in the active preset.
     pub fn move_face_down(&mut self, index: usize) {
-        let preset = &mut self.presets[self.active];
-        if index + 1 < preset.faces.len() {
-            preset.faces.swap(index, index + 1);
+        if let Some(preset) = self.presets.get_mut(self.active) {
+            if index + 1 < preset.faces.len() {
+                preset.faces.swap(index, index + 1);
+            }
         }
     }
 
     /// Moves a face from one index to another in the active preset.
     pub fn move_face(&mut self, from: usize, to: usize) {
-        let preset = &mut self.presets[self.active];
-        if from < preset.faces.len() && to < preset.faces.len() && from != to {
-            let face = preset.faces.remove(from);
-            preset.faces.insert(to, face);
+        if let Some(preset) = self.presets.get_mut(self.active) {
+            if from < preset.faces.len() && to < preset.faces.len() && from != to {
+                let face = preset.faces.remove(from);
+                preset.faces.insert(to, face);
+            }
         }
     }
 
     /// Returns the ordered face list of the active preset.
+    ///
+    /// Bounds-safe: if the active index is out of range (e.g. from a crafted or
+    /// older settings file), it falls back to the first preset / an empty list
+    /// instead of panicking.
     pub fn active_faces(&self) -> VecDeque<String> {
-        self.presets[self.active].faces.iter().cloned().collect()
+        self.presets
+            .get(self.active.min(self.presets.len().saturating_sub(1)))
+            .map(|p| p.faces.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Ensures the active index is in range, adjusting it if needed. Safe to
+    /// call after deserializing settings.
+    pub fn clamp_active(&mut self) {
+        if self.presets.is_empty() {
+            let mut default = Self::new();
+            // Take the stock preset so the app always has at least one.
+            self.presets = std::mem::take(&mut default.presets);
+            self.active = 0;
+        } else if self.active >= self.presets.len() {
+            self.active = self.presets.len() - 1;
+        }
     }
 }
 
