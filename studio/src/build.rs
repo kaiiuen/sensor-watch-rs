@@ -46,9 +46,18 @@ pub struct BuildResult {
 }
 
 /// Runs the full firmware build: cargo build, extract the raw binary, and
-/// convert it to a `.uf2` file.
-pub fn build_firmware() -> BuildResult {
+/// convert it to a `.uf2` file in the given output directory.
+pub fn build_firmware(output_dir: &Path) -> BuildResult {
     let fw_dir = firmware_dir();
+
+    // Ensure the output directory exists (it may not on a fresh standalone exe).
+    if let Err(e) = std::fs::create_dir_all(output_dir) {
+        return BuildResult {
+            success: false,
+            message: format!("failed to create output dir: {e}"),
+            uf2_path: None,
+        };
+    }
 
     // 1. Build the firmware in release mode.
     let status = Command::new("cargo")
@@ -79,7 +88,7 @@ pub fn build_firmware() -> BuildResult {
     // 2. Locate the ELF and the raw binary.
     let elf = fw_dir.join(format!("target/{TARGET}/release/sensor-watch"));
     let bin = fw_dir.join(format!("target/{TARGET}/release/sensor-watch.bin"));
-    let uf2 = fw_dir.join(format!("target/{TARGET}/release/sensor-watch.uf2"));
+    let uf2 = output_dir.join("sensor-watch.uf2");
 
     // 3. Extract the raw binary with rust-objcopy.
     let objcopy = find_objcopy();
@@ -162,9 +171,10 @@ fn find_objcopy() -> Option<PathBuf> {
     None
 }
 
-/// Returns the path to the last-built `.uf2` file, if it exists.
-pub fn last_uf2() -> Option<PathBuf> {
-    let p = firmware_dir().join(format!("target/{TARGET}/release/sensor-watch.uf2"));
+/// Returns the path to the last-built `.uf2` file in the given output dir, if it
+/// exists.
+pub fn last_uf2(output_dir: &Path) -> Option<PathBuf> {
+    let p = output_dir.join("sensor-watch.uf2");
     if p.exists() {
         Some(p)
     } else {

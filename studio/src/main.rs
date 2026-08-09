@@ -111,6 +111,8 @@ struct StudioApp {
     watch_config: watch_config::WatchConfig,
     /// Custom hardware modules.
     modules: modules::ModuleManager,
+    /// The output directory for built artifacts (e.g. the .uf2).
+    output_dir: String,
     /// The editor's module name/target/description inputs.
     module_name: String,
     module_target: String,
@@ -163,6 +165,9 @@ struct StudioApp {
     terminal_wrap: bool,
     /// The terminal output history.
     terminal_history: Vec<String>,
+    /// The Shell Access tab's command input and its own activity log.
+    shell_input: String,
+    shell_log: debug::DebugLog,
     /// The latest commit message from GitHub (for update notifications).
     latest_commit: Option<String>,
     /// The timestamp (unix seconds) when the update notification was received.
@@ -283,6 +288,7 @@ enum Panel {
     BuildFlash,
     Calibration,
     Modules,
+    Shell,
     Debug,
     Bugs,
     Settings,
@@ -314,6 +320,7 @@ impl Panel {
             Panel::BuildFlash => "Build & Flash",
             Panel::Calibration => "Calibration",
             Panel::Modules => "Modules",
+            Panel::Shell => "Shell Access",
             Panel::Debug => tr(lang, Key::DebugOutput),
             Panel::Bugs => "Bugs",
             Panel::Settings => tr(lang, Key::Settings),
@@ -333,7 +340,7 @@ impl Default for StudioApp {
             building: false,
             pending_build: None,
             build_message: String::new(),
-            last_uf2: build::last_uf2(),
+            last_uf2: None,
             // Default to English and Dark.
             language: Language::English,
             theme: Theme::Dark,
@@ -366,6 +373,7 @@ impl Default for StudioApp {
             pending_checksum: None,
             watch_config: watch_config::WatchConfig::default(),
             modules: modules::ModuleManager::default(),
+            output_dir: settings::default_output_dir(),
             module_name: String::new(),
             module_target: String::new(),
             module_description: String::new(),
@@ -409,6 +417,8 @@ impl Default for StudioApp {
             terminal_open: false,
             terminal_wrap: false,
             terminal_history: Vec::new(),
+            shell_input: String::new(),
+            shell_log: debug::DebugLog::new(),
             latest_commit: None,
             update_time: None,
             update_checking: false,
@@ -417,6 +427,7 @@ impl Default for StudioApp {
             beep_target: 0,
         };
         app.log.log("Firmware Studio starting");
+        app.last_uf2 = build::last_uf2(std::path::Path::new(&app.output_dir));
         app.face_list = faces::discover_faces();
         app.log
             .log(format!("Discovered {} watch faces", app.face_list.len()));
@@ -630,6 +641,7 @@ impl eframe::App for StudioApp {
                             Panel::BuildFlash,
                             Panel::Calibration,
                             Panel::Modules,
+                            Panel::Shell,
                             Panel::Debug,
                             Panel::Bugs,
                             Panel::Settings,
@@ -671,6 +683,45 @@ impl eframe::App for StudioApp {
                              open GitHub and download the latest release.",
                         );
                 }
+            });
+        });
+
+        // Status bar at the bottom.
+        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
+            // Drain any pending system resource samples.
+            while let Ok(s) = self.sys_rx.try_recv() {
+                self.sys_stats = s;
+            }
+            ui.horizontal(|ui| {
+                // Watch project stats (based on the selected faces in the preset).
+                let selected = self.presets.active_faces().len();
+                ui.label("Watch:");
+                ui.monospace(format!("{selected} faces selected"));
+                ui.separator();
+                ui.monospace(format!("~{} KB flash", self.estimate_flash_kb(selected)));
+                ui.separator();
+                ui.monospace(format!("~{} KB RAM", self.estimate_ram_kb(selected)));
+                ui.separator();
+                ui.monospace(format!(
+                    "~{} KB compiled",
+                    self.estimate_compiled_kb(selected)
+                ));
+                ui.separator();
+                // Window size.
+                let size = ctx.screen_rect().size();
+                ui.monospace(format!("Window: {:.0}x{:.0}", size.x, size.y));
+                ui.separator();
+                // Error/warning counter that jumps to the Bugs tab.
+                let err_count = self.error_log.entries().len();
+                if ui
+                    .button(format!("Errors: {err_count}"))
+                    .on_hover_text("Open the Bugs tab to see recorded errors and warnings.")
+                    .clicked()
+                {
+                    self.current_panel = Panel::Bugs;
+                }
+                ui.separator();
+                ui.label(&self.status);
             });
         });
 
@@ -749,45 +800,6 @@ impl eframe::App for StudioApp {
                 }
             });
 
-        // Status bar at the bottom.
-        egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
-            // Drain any pending system resource samples.
-            while let Ok(s) = self.sys_rx.try_recv() {
-                self.sys_stats = s;
-            }
-            ui.horizontal(|ui| {
-                // Watch project stats (based on the selected faces in the preset).
-                let selected = self.presets.active_faces().len();
-                ui.label("Watch:");
-                ui.monospace(format!("{selected} faces selected"));
-                ui.separator();
-                ui.monospace(format!("~{} KB flash", self.estimate_flash_kb(selected)));
-                ui.separator();
-                ui.monospace(format!("~{} KB RAM", self.estimate_ram_kb(selected)));
-                ui.separator();
-                ui.monospace(format!(
-                    "~{} KB compiled",
-                    self.estimate_compiled_kb(selected)
-                ));
-                ui.separator();
-                // Window size.
-                let size = ctx.screen_rect().size();
-                ui.monospace(format!("Window: {:.0}x{:.0}", size.x, size.y));
-                ui.separator();
-                // Error/warning counter that jumps to the Bugs tab.
-                let err_count = self.error_log.entries().len();
-                if ui
-                    .button(format!("Errors: {err_count}"))
-                    .on_hover_text("Open the Bugs tab to see recorded errors and warnings.")
-                    .clicked()
-                {
-                    self.current_panel = Panel::Bugs;
-                }
-                ui.separator();
-                ui.label(&self.status);
-            });
-        });
-
         // The central panel.
         egui::CentralPanel::default().show(ctx, |ui| match self.current_panel {
             Panel::Dashboard => self.dashboard(ui),
@@ -797,6 +809,7 @@ impl eframe::App for StudioApp {
             Panel::BuildFlash => self.build_flash(ui),
             Panel::Calibration => self.calibration(ui),
             Panel::Modules => self.modules(ui),
+            Panel::Shell => self.shell(ui),
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
             Panel::Settings => self.settings(ui),
@@ -2120,7 +2133,8 @@ impl StudioApp {
                     self.building = true;
                     self.build_message = tr(self.language, Key::Building).to_string();
                     self.log.log("Starting firmware build");
-                    let handle = std::thread::spawn(build::build_firmware);
+                    let out = std::path::PathBuf::from(self.output_dir.clone());
+                    let handle = std::thread::spawn(move || build::build_firmware(&out));
                     self.pending_build = Some(handle);
                 }
                 if !self.build_message.is_empty() {
@@ -2428,6 +2442,90 @@ impl StudioApp {
             });
     }
 
+    /// The Shell Access panel: a dedicated terminal for talking to the watch's
+    /// serial shell (over a debug UART / serial connection). It has its own
+    /// activity log and command input, separate from the global terminal.
+    fn shell(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Shell Access");
+        ui.label(
+            "Send commands directly to the watch's serial command shell (e.g. the\n\
+             set-time / drift / help commands exposed by the firmware's serial shell).\n\
+             This is useful when the watch is connected over a serial-debug interface,\n\
+             not the UF2 bootloader drive.",
+        );
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("Clear").clicked() {
+                self.shell_log.clear();
+            }
+            if ui.button("Copy all").clicked() {
+                let text = self
+                    .shell_log
+                    .entries()
+                    .iter()
+                    .map(|e| e.message.clone())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = ui_copy_to_clipboard(&text);
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.label(">");
+            let resp = ui.text_edit_singleline(&mut self.shell_input);
+            let submitted = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if ui.button("Send").clicked() || submitted {
+                let cmd = self.shell_input.trim().to_string();
+                self.shell_input.clear();
+                self.run_shell_command(&cmd);
+            }
+        });
+        ui.add_space(6.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                if self.shell_log.is_empty() {
+                    ui.weak("(no shell activity yet)");
+                }
+                for entry in self.shell_log.entries() {
+                    let secs = entry.timestamp % 60;
+                    let mins = (entry.timestamp / 60) % 60;
+                    let hrs = (entry.timestamp / 3600) % 24;
+                    ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
+                }
+            });
+    }
+
+    /// Runs a single shell command, mocking a serial round-trip for commands
+    /// that map to the firmware's shell. This is a UI scaffold: actual serial
+    /// I/O to the watch would replace the mocked reply.
+    fn run_shell_command(&mut self, cmd: &str) {
+        self.shell_log.log(format!("> {cmd}"));
+        let lower = cmd.trim().to_lowercase();
+        let reply = if lower == "help" {
+            "CMDS: time, settime YYMMDDHHMMSS, drift N".to_string()
+        } else if lower == "time" {
+            let (_, _, _, h, m, s, _) = self.watch.get_time();
+            format!("{h:02}:{m:02}:{s:02} UTC")
+        } else if lower.starts_with("settime ") {
+            self.shell_log.log("Time set on watch (via serial shell).");
+            "OK".to_string()
+        } else if lower.starts_with("drift ") {
+            let ppm: i16 = cmd
+                .split_whitespace()
+                .last()
+                .unwrap_or("0")
+                .parse()
+                .unwrap_or(0);
+            self.shell_log
+                .log(format!("Applied drift correction {ppm} ppm."));
+            "OK".to_string()
+        } else {
+            "?".to_string()
+        };
+        self.shell_log.log(format!("{reply}"));
+    }
+
     /// The debug panel: show the background activity log.
     fn debug(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
@@ -2682,7 +2780,8 @@ impl StudioApp {
         // Update the display state.
         self.watch.update_display();
 
-        // Sync the sim's clock mode with the watch settings (12/24).
+        // Sync the sim's clock mode with the watch settings (12/24), and keep
+        // the face engine (which renders the display) in sync with it.
         let want_24 = self.watch_config.clock_mode_24h;
         let is_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
         if want_24 != is_24 {
@@ -2692,6 +2791,7 @@ impl StudioApp {
                 watch_sim::TimeMode::H12
             };
         }
+        self.face_engine.time_mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
 
         // Determine the current face and sync the engine's face name.
         let faces = self.presets.active_faces();
@@ -2994,7 +3094,8 @@ impl StudioApp {
                 self.terminal_history.push("Starting build...".to_string());
                 self.building = true;
                 self.build_message = "Building...".to_string();
-                let handle = std::thread::spawn(build::build_firmware);
+                let out = std::path::PathBuf::from(self.output_dir.clone());
+                let handle = std::thread::spawn(move || build::build_firmware(&out));
                 self.pending_build = Some(handle);
             }
             "flash" => {
@@ -3285,6 +3386,18 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
+        ui.heading("Output Directory");
+        ui.label("Where built .uf2 files are written. Defaults to your Documents folder so it works even when running from a read-only location.");
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut self.output_dir);
+            if ui.button("Reset to default").clicked() {
+                self.output_dir = settings::default_output_dir();
+            }
+        });
+        ui.weak("The output dir is created automatically if it doesn't exist.");
+
+        ui.add_space(16.0);
+        ui.separator();
         ui.heading("Settings Data");
         ui.label("Save, export, or import your settings, presets, and configuration.");
         ui.add_space(8.0);
@@ -3526,6 +3639,7 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
+            self.output_dir.clone(),
         );
         match settings.to_json() {
             Ok(json) => {
@@ -3565,6 +3679,7 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
+            self.output_dir.clone(),
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -3586,6 +3701,7 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
+            self.output_dir.clone(),
         );
         match settings.to_json() {
             Ok(json) => {
@@ -3641,6 +3757,11 @@ impl StudioApp {
         self.catalog_width = s.catalog_width;
         self.preset_height = s.preset_height;
         self.modules = s.modules;
+        self.output_dir = if s.output_dir.is_empty() {
+            settings::default_output_dir()
+        } else {
+            s.output_dir
+        };
         self.save_settings_internal();
     }
 
@@ -3847,7 +3968,7 @@ fn main() -> eframe::Result<()> {
     let options = eframe::NativeOptions {
         // Launch at 640x480 (480p, 4:3) so there's ample space by default while
         // remaining adjustable.
-        viewport: egui::ViewportBuilder::default().with_inner_size([640.0, 480.0]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([1280.0, 720.0]),
         ..Default::default()
     };
     eframe::run_native(

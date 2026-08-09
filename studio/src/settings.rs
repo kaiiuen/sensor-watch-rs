@@ -36,6 +36,10 @@ pub struct AppSettings {
     pub preset_height: f32,
     /// Custom hardware modules.
     pub modules: ModuleManager,
+    /// The output directory for built artifacts (e.g. the .uf2 file).
+    /// Defaults to a writable user folder when running as a standalone exe.
+    #[serde(default = "default_output_dir")]
+    pub output_dir: String,
 }
 
 impl AppSettings {
@@ -52,6 +56,7 @@ impl AppSettings {
         catalog_width: f32,
         preset_height: f32,
         modules: &ModuleManager,
+        output_dir: String,
     ) -> Self {
         AppSettings {
             language: language.name().to_string(),
@@ -65,6 +70,7 @@ impl AppSettings {
             catalog_width,
             preset_height,
             modules: modules.clone(),
+            output_dir,
         }
     }
 
@@ -77,4 +83,14 @@ impl AppSettings {
     pub fn from_json(json: &str) -> Result<Self, String> {
         serde_json::from_str(json).map_err(|e| e.to_string())
     }
+}
+
+/// The default output directory for built artifacts: `<User Documents>/FirmwareStudio`.
+/// This is writable even when the app runs as a standalone exe from a read-only
+/// location.
+pub fn default_output_dir() -> String {
+    std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .map(|home| format!("{home}/Documents/FirmwareStudio"))
+        .unwrap_or_else(|_| "FirmwareStudio".to_string())
 }

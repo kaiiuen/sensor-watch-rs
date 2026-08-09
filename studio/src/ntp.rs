@@ -121,9 +121,11 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
     let t2 = ntp_fractional(r1, r2);
     let t3 = ntp_fractional(x1, x2);
 
-    // Sanity: the server's timestamps must be plausible (not the NTP epoch
-    // 1900, i.e. seconds must be well in the past). Reject garbage.
-    if t3 < 4_000_000_000.0 || t3 > 4_300_000_000.0 {
+    // Sanity: the server's transmit timestamp must be close to our local NTP
+    // time. This rejects garbage (e.g. the 1900 epoch) without hardcoding a
+    // year. Allow up to 10 years of slop (well beyond any sane offset).
+    let deviation = (t3 - t4).abs();
+    if deviation > 10.0 * 365.25 * 86400.0 {
         return Err("NTP server returned implausible timestamp".to_string());
     }
 
