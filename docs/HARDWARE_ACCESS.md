@@ -1,0 +1,93 @@
+# Talking to the Board (Serial / Debug)
+
+A practical guide for people with a soldering iron and a USB-serial or SWD
+probe who want to talk to the firmware on the bench. This is a hardware item
+and stays on the backburner: none of it is needed for normal use, and it
+requires access to the debug pads on the board.
+
+## The key constraint: USB is file-transfer-only
+
+The watch's USB port does **not** carry a serial console. It is a plain USB
+Mass Storage device that lets you drag a `.uf2` file across to flash the
+firmware, and nothing else.
+
+The reason is how this SAM L22 board is booted:
+
+- The **UF2 bootloader** lives in the boot region at `0x0000_0000`-`0x0000_2000`
+  (the ROM boot region, the first 8 KB of the memory map).
+- The **firmware** starts at `0x0000_2000` and runs from there.
+- The USB stack presented to the PC is owned by that bootloader, and it only
+  implements file transfer. It does not expose a USB CDC (virtual serial) port.
+
+So there is no way to get a "USB serial console" out of the existing bootloader.
+Serial-over-USB (CDC) is **not possible without replacing the ROM bootloader**,
+which we do not want to do.
+
+## What this means in practice
+
+If you plug the watch in via USB, you can only push firmware files. To get a
+real two-way link to the running firmware, you need one of the two paths below,
+both of which use pads on the board rather than the USB connector.
+
+## Path A: UART jig (serial shell)
+
+The firmware has a minimal command shell over a UART. You connect a USB-serial
+dongle to the three debug pads and talk to the shell.
+
+### Wiring the jig
+
+The shell runs on SERCOM3. The pads you need:
+
+- **A4** - UART TX (watch -> dongle RX)
+- **A2** - UART RX (dongle TX -> watch)
+- **GND** - common ground
+
+Wire them cross-over to the dongle (A4 to its RX, A2 to its TX, and GND to
+GND), then open a terminal at **9600 baud**, 8-N-1.
+
+The console is a small event-driven interpreter; see `src/watch/shell.rs` for
+the code and `src/watch/uart.rs` for the driver.
+
+### Shell commands
+
+Once connected, type a command and press Enter. The supported commands are:
+
+- `time` - report the current RTC time as `TIME YYMMDDHHMMSS`.
+- `settime YYMMDDHHMMSS` - set the clock; replies `OK` on success.
+- `drift N` - apply a frequency-correction step for drift calibration.
+- `help` - list the commands (`CMDS: time, settime YYMMDDHHMMSS, drift N`).
+
+This is how clock setting and drift correction can be driven from a PC, for
+example by the companion app during calibration.
+
+## Path B: SWD probe (full debug)
+
+If you need breakpoints, a backtrace, or register inspection, use the SWD
+interface with a debug probe.
+
+- Connect an SWD probe (any probe-rs or CMSIS-DAP / J-Link style probe that
+  supports the SAM L22 / Cortex-M0+) to the SWD pads.
+- Flash and halt target firmware with `probe-rs run` or `openocd`.
+- Set breakpoints, single-step, and read a backtrace on a fault.
+
+This is the path to use when debugging the firmware itself, as opposed to just
+talking to the running shell.
+
+## Which one for what task
+
+| Task                       | Path             |
+|----------------------------|------------------|
+| Set the clock              | A (UART shell)   |
+| Apply drift correction     | A (UART shell)   |
+| Calibrate against a PC     | A (UART shell)   |
+| Debug a hang or fault      | B (SWD)          |
+| Breakpoints / backtrace    | B (SWD)          |
+| Flash firmware files       | USB (bootloader) |
+
+## Summary
+
+- Serial-over-USB (CDC) is not available without replacing the ROM bootloader.
+- Two real access paths exist: a UART jig (3 debug pads, 9600 baud, the shell
+  with `time` / `settime` / `drift N` / `help`) and an SWD probe.
+- Both require hardware and soldering, so this stays a backburner / hardware
+  item; it is not needed for normal use of the watch.

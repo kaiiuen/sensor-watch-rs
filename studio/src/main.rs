@@ -2732,46 +2732,69 @@ impl StudioApp {
 
     /// Runs a single shell command. Logs the user-facing command/reply to the
     /// command surface and the simulated hardware-level steps to the brain log.
+    /// The commands actually mutate/read the simulated watch (`self.watch`).
     fn run_shell_command(&mut self, cmd: &str) {
         self.shell_log.log(format!("> {cmd}"));
         self.shell_hw_log
             .log("SERCOM3 RX: bytes received".to_string());
-        let lower = cmd.trim().to_lowercase();
-        let reply = if lower == "help" {
-            self.shell_hw_log
-                .log("shell dispatcher: match(\"help\")".to_string());
-            "CMDS: time, settime YYMMDDHHMMSS, drift N".to_string()
-        } else if lower == "time" {
-            let (_, _, _, h, m, s, _) = self.watch.get_time();
-            self.shell_hw_log
-                .log("rtc::get_time -> RTC_CLOCK read".to_string());
-            format!("{h:02}:{m:02}:{s:02} UTC")
-        } else if lower.starts_with("settime ") {
-            if let Some(ts) = cmd.split_whitespace().nth(1) {
+        let reply = match cmd
+            .trim()
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_lowercase()
+            .as_str()
+        {
+            "help" => {
                 self.shell_hw_log
-                    .log(format!("RTC_ALARM match -> set RTC_TIME {ts}"));
+                    .log("shell dispatcher: match(\"help\")".to_string());
+                "CMDS: time, settime YYMMDDHHMMSS, drift N".to_string()
             }
-            self.shell_hw_log
-                .log("freqcorr/settings: persist settings reg".to_string());
-            "OK".to_string()
-        } else if lower.starts_with("drift ") {
-            let ppm: i16 = cmd
-                .split_whitespace()
-                .last()
-                .unwrap_or("0")
-                .parse()
-                .unwrap_or(0);
-            let sign = if ppm < 0 { "+" } else { "-" };
-            self.shell_hw_log.log(format!(
-                "RTC_FREQCORR <- sign={} value={} step=0.95ppm",
-                sign,
-                ppm.unsigned_abs()
-            ));
-            "OK".to_string()
-        } else {
-            self.shell_hw_log
-                .log("shell dispatcher: no match -> '?'".to_string());
-            "?".to_string()
+            "time" => {
+                let (y, mo, d, h, mi, s, _) = self.watch.get_time();
+                self.shell_hw_log
+                    .log("rtc->get_time(): RTC_CLOCK read".to_string());
+                format!("{:02}{:02}{:02}{:02}{:02}{:02}", y % 100, mo, d, h, mi, s)
+            }
+            "settime" => {
+                let payload = cmd.trim().split_whitespace().nth(1).unwrap_or("");
+                match parse_settime(payload) {
+                    Some((year, month, day, hour, minute)) => {
+                        self.shell_hw_log.log(format!(
+                            "RTC_clock <- write {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
+                        ));
+                        self.watch.set_datetime(year, month, day, hour, minute);
+                        self.shell_hw_log
+                            .log("freqcorr/settings: persist settings reg".to_string());
+                        "OK".to_string()
+                    }
+                    None => {
+                        self.shell_hw_log
+                            .log("RTC_clock <- write FAILED: malformed payload".to_string());
+                        "ERR".to_string()
+                    }
+                }
+            }
+            "drift" => {
+                let ppm: i16 = cmd
+                    .split_whitespace()
+                    .nth(1)
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0);
+                let sign = if ppm < 0 { "+" } else { "-" };
+                self.shell_hw_log.log(format!(
+                    "RTC_FREQCORR <- sign={} value={} step=0.95ppm",
+                    sign,
+                    ppm.unsigned_abs()
+                ));
+                "OK".to_string()
+            }
+            _ => {
+                self.shell_hw_log
+                    .log("shell dispatcher: no match -> '?'".to_string());
+                "?".to_string()
+            }
         };
         self.shell_hw_log
             .log("SERCOM3 TX: reply queued".to_string());
@@ -4429,4 +4452,27 @@ fn sim_hold_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         );
     }
     response
+}
+
+/// Parses a `YYMMDDHHMMSS` settime payload into (year, month, day, hour,
+/// minute). Returns `None` if the payload is not exactly 12 digits.
+fn parse_settime(payload: &str) -> Option<(i32, u32, u32, u32, u32)> {
+    let bytes = payload.as_bytes();
+    if bytes.len() != 12 || !bytes.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    let part = |range: std::ops::Range<usize>| -> u32 {
+        bytes[range]
+            .iter()
+            .fold(0u32, |acc, b| acc * 10 + u32::from(b - b'0'))
+    };
+    let yy = part(0..2);
+    let month = part(2..4);
+    let day = part(4..6);
+    let hour = part(6..8);
+    let minute = part(8..10);
+    if month == 0 || month > 12 || day == 0 || day > 31 || hour > 23 || minute > 59 {
+        return None;
+    }
+    Some((2000 + yy as i32, month, day, hour, minute))
 }

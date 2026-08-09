@@ -4,133 +4,151 @@ Ideas that are interesting but not currently being worked on. They're captured
 here so they aren't lost. Each has a brief description and the reason it's
 deferred.
 
----
-
-## 1. Companion App (Firmware Studio)
-
-A dedicated desktop app that acts as an **editor, debugger, and assembler** for
-the firmware. It would:
-
-- Include all source code and documentation
-- Let you assemble watch faces
-- Edit, debug, and assemble the code
-- Produce the final `.uf2` firmware file
-
-**Status:** Backburner. This is the end-goal app. The firmware itself is now
-solid; the app is the next major project.
+Below, items that are now **implemented** are recorded in a "DONE / implemented"
+section before the active backburner, so the history is kept without cluttering
+the list of what is still open.
 
 ---
 
-## 2. Real-Time Clock Calibration (without manual setting)
+## Done / implemented (cleared from the active backlog)
 
-The idea is to calibrate the watch's clock to real time without the user setting
-it manually. The serial shell (item 10) now provides a `settime YYMMDDHHMMSS`
-command, so a PC can set the time precisely.
+These were previously on the backburner and are now built and working. They are
+kept here for the record only.
 
-**Status:** Partially done. The serial shell command exists; a full
-next-minute-boundary calibration flow (the PC waiting for the exact minute and
-sending a precise timestamp) is not yet built into the companion app.
+### Firmware Studio companion app
 
----
+A dedicated desktop app (editor, debugger, and assembler) for the firmware. It
+includes the source and docs, assembles watch faces, and produces the final
+`.uf2` firmware file.
 
-## 3. Drift Calibration (from master-clock)
+**Status:** Done. `studio/` is built out (panels, simulator, build-to-UF2, time
+sync). See `docs/README.md` and `studio/README.md`.
 
-The master-clock project measures crystal drift (parts-per-million) and applies
-a frequency correction. The `apply_drift_correction(ppm)` / `get_drift_correction()`
-functions now expose the RTC frequency-correction register.
+### Clock calibration via the shell
 
-**Status:** Partially done. The drift-correction API exists; an automated
-measurement-and-apply loop (measuring drift over time and setting the correction)
-is not yet built.
+Set the watch's clock to real time from a PC without manual entry. The serial
+shell provides `settime YYMMDDHHMMSS`, so a PC can set the time precisely.
 
----
+**Status:** Done. `settime YYMMDDHHMMSS` is implemented in `src/watch/shell.rs`.
 
-## 4. Raise-to-Wake (accelerometer)
+### Drift calibration
 
-Show seconds only when the user raises their wrist to look at the watch, then
-hide them again. Requires an accelerometer on the 9-pin connector (optional
-hardware).
+Apply a crystal frequency correction to the RTC.
 
-**Status:** Done. A tap (SingleTap/DoubleTap/AccelerometerWake) temporarily shows
-seconds for 5 seconds even when seconds are hidden, then returns to the
-power-saving rate. Requires an accelerometer to be installed.
+**Status:** Done. The RTC frequency-correction register is exposed
+(`freqcorr_write` / `freqcorr_read` in `src/watch/rtc.rs`), and the shell's
+`drift N` command applies a correction step.
 
----
+### Raise-to-wake (accelerometer)
 
-## 5. BACKUP-Mode "Power Off" Feature
+Show seconds when the user raises their wrist, then return to the power-saving
+rate.
+
+**Status:** Done. A tap / accelerometer wake temporarily shows seconds for a few
+seconds even when seconds are hidden, then returns to the power-saving rate.
+Requires an accelerometer to be installed.
+
+### BACKUP-mode power off
 
 A menu option that puts the watch into its deepest sleep (BACKUP mode) when not
-worn. Before entering BACKUP, save state to flash; on wake, restore it.
+worn, saving state before entering and restoring it on wake.
 
 **Status:** Done. The diagnostics settings submenu has a POWER OFF option that
 saves settings and enters BACKUP mode.
 
----
+### Watchdog / heartbeat
 
-## 6. Watchdog / Heartbeat Survival
-
-A design where the watch tracks its own uptime or status via a heartbeat from
-the RTC's ticking seconds. If the seconds stop updating (a hang), the watchdog
-restarts the watch.
+A design where the watch tracks its own uptime via a heartbeat from the RTC's
+ticking seconds, so a hang is detected and recovered from.
 
 **Status:** Done. `check_heartbeat()` detects a frozen RTC (seconds not
-advancing) and records an `RtcLostTime` fault. The hardware watchdog still
-resets on a full hang.
+advancing) and records an `RtcLostTime` fault; the hardware watchdog resets on a
+full hang.
 
----
+### Log-structured wear leveling + ECC
 
-## 7. Dual-Boot / Self-Healing Partitioning
+Replace the simple row rotation with a log-structured ring buffer and protect
+chunks with SECDED Hamming codes.
 
-Split the 256 KB flash into a minimal protected Golden Image bootloader and an
-Application slot. If the application fails its CRC check (bit-rot), the Golden
-Image forces the watch into a safe recovery display.
+**Status:** Done. `wear_leveled_write()` / `wear_leveled_read()` implement
+version-magic row handling with crash recovery, and `ecc_write()` / `ecc_read()`
+provide SECDED-protected storage.
 
-**Status:** Partially done. The CRC-32 integrity check is implemented, and on
-failure `recovery_halt()` blinks the LED and halts instead of running corrupted
-code (the watchdog resets). A true dual-boot with a separate Golden Image
-bootloader partition is not implemented.
+### Clock failure detector (CFD)
 
----
-
-## 8. Log-Structured Wear Leveling + ECC
-
-Replace the simple 8-row rotation with a log-structured ring buffer across the
-whole 8 KB EEPROM area, and add SECDED (single-error-correct,
-double-error-detect) Hamming codes to every 32-bit chunk.
-
-**Status:** Done. `wear_leveled_write()` now writes a version-magic header per
-row and `wear_leveled_read()` scans for the most recent valid entry (crash
-recovery). `ecc_write()` / `ecc_read()` provide SECDED-protected storage.
-
----
-
-## 9. Clock Failure Detector (CFD)
-
-Enable the SAM L22's hardware Clock Failure Detector. If the 32 kHz crystal
-stops, the CFD switches the time base to the internal OSCULP32K.
+Enable the SAM L22's hardware Clock Failure Detector so that if the 32 kHz
+crystal stops, the RTC switches to the internal oscillator.
 
 **Status:** Done. `init_cfd()` enables the CFD with auto-switchback, and
 `check_clock_failure()` records a fault if the crystal failed.
 
----
+### USB / serial shell
 
-## 10. USB / Serial Shell
-
-A USB or serial command shell so the watch can receive files and commands from
-a PC. This is a prerequisite for clock calibration and for the companion app.
+A command shell so the watch can receive commands from a PC.
 
 **Status:** Done. `shell.rs` provides a minimal command interpreter over UART
-(`time`, `settime YYMMDDHHMMSS`, `help`), wired into the app loop.
+(`time`, `settime YYMMDDHHMMSS`, `drift N`, `help`). Note the shell is only
+reachable over the UART jig, not over USB. See `docs/HARDWARE_ACCESS.md`.
 
 ---
 
-## 11. Benchmarks, Fuzzing, and Structured Logging
+## Active backburner
+
+### 1. Benchmarks, fuzzing, and structured logging
 
 - Performance benchmarks for interrupt latency and power consumption.
 - Fuzz testing for button events and RTC input.
 - `defmt`/RTT structured logging for debugging without breaking real-time
   behavior.
 
-**Status:** Partially done. A benchmark/self-test (ECC + CRC) is available in the
-diagnostics face. Fuzz testing and `defmt`/RTT structured logging are not yet
-implemented.
+**Status:** Partially done. A benchmark/self-test (ECC + CRC) is available in
+the diagnostics face; a hardware test plan lives in `docs/TESTING.md`. Fuzzing
+and `defmt`/RTT structured logging are not yet implemented.
+
+### 2. Dual-boot / self-healing partitioning
+
+Split the flash into a minimal protected Golden Image bootloader plus an
+Application slot. If the application fails its CRC check, force a safe recovery
+display instead of running corrupted code.
+
+**Status:** Partially done. The CRC-32 integrity check is implemented, and on
+failure `recovery_halt()` blinks the LED and halts. A true dual-boot with a
+separate Golden Image bootloader partition is not implemented.
+
+### 3. Serial shell as a calibration flow
+
+The shell currently has primitive commands (`time`, `settime`, `drift N`), but
+the calibration workflows are not built end-to-end. Shape this into a directed
+PC-driven calibration flow:
+
+- A next-minute-boundary calibration flow (the PC waits for the exact minute
+  and sends a precise timestamp).
+- An automated measure-and-apply drift loop (measure drift over time, then set
+  the frequency correction).
+
+**Status:** Backburner. The primitives exist, but the guided flows are not
+built, and the shell is only reachable via the UART jig (see
+`docs/HARDWARE_ACCESS.md`).
+
+### 4. USB serial console (CDC)
+
+Expose a virtual serial port over USB so the shell is reachable over the cable
+rather than a UART jig.
+
+**Status:** Blocked. The watch's USB is file-transfer-only: the UF2 bootloader
+lives in the SAM L22's ROM boot region (`0x0000_0000`-`0x0000_2000`), separate
+from the firmware (which starts at `0x0000_2000`). Serial-over-USB (CDC) is not
+possible without replacing that ROM bootloader, which is out of scope. The real
+access paths are a UART jig and an SWD probe; see `docs/HARDWARE_ACCESS.md`.
+
+### 5. Configurable boot / OTA deployment tools
+
+Polish and harden the deployment story around the UF2 bootloader:
+
+- Let the companion app orchestrate a multi-step flash, verify, and reboot loop.
+- Detect a stuck or failed flash and fall back cleanly to a safe state.
+
+**Status:** Backburner. The Studio app already assembles and flashes `.uf2`
+files, but the orchestrating tooling and fail-safe recovery loops are not built.
+Firmware updates can be driven over the UART shell if a network or OTA path is
+ever desired.
