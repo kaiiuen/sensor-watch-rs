@@ -3075,6 +3075,7 @@ dependencies = [
  "cortex-m-rt",
  "critical-section",
  "libm",
+ "sensor-watch-core",
 ]
 
 [[package]]

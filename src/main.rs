@@ -4,22 +4,38 @@
 //! the classic Casio F-91W. This is the entry point for the bare-metal
 //! firmware; hardware abstraction lives in the `watch` module, and the
 //! watchface framework lives in the `movement` module.
+//!
+//! # Target vs. host
+//!
+//! This binary is the real on-device firmware entry and is only compiled for
+//! `thumbv6m-none-eabi` (see `build.sh` / CI). The `sensor-watch` package also
+//! hosts a testable `lib` target (`src/lib.rs`), and building this package on a
+//! host (dev) target (e.g. `cargo build --features hostmock -p sensor-watch`)
+//! must not try to link the ARM-only firmware. So the ARM modules/entry are
+//! gated behind `target_arch = "arm"`, and on host the binary compiles to a
+//! trivial no-op stub. The ARM-gated content below is byte-for-byte the
+//! original firmware, so the on-target binary is unchanged (verified by hash).
 
-#![no_std]
-#![no_main]
+#![cfg_attr(target_arch = "arm", no_std)]
+#![cfg_attr(target_arch = "arm", no_main)]
 #![allow(static_mut_refs)]
 // The HAL intentionally exposes the full C-reference API surface, and every
 // face provides both `new_static()` and `new()`. Not all of it is referenced
 // from the binary, so silence dead-code warnings at the crate level.
 #![allow(dead_code)]
 
+#[cfg(target_arch = "arm")]
 use cortex_m_rt::entry;
 
+#[cfg(target_arch = "arm")]
 mod movement;
+#[cfg(target_arch = "arm")]
 mod panic;
+#[cfg(target_arch = "arm")]
 mod watch;
 
 /// Reset handler: the entry point invoked by the Cortex-M0+ after reset.
+#[cfg(target_arch = "arm")]
 #[entry]
 fn main() -> ! {
     // Copy any `.ramfunc` routines from flash to RAM before they are called.
@@ -86,6 +102,7 @@ fn main() -> ! {
 /// The linker places `.ramfunc` code in RAM (VMA) with its contents in flash
 /// (LMA). The cortex-m-rt startup only copies `.data`, so we copy `.ramfunc`
 /// here before any flash-write routine is called.
+#[cfg(target_arch = "arm")]
 fn copy_ramfunc() {
     unsafe extern "C" {
         static __ramfunc_start: u8;
@@ -99,3 +116,9 @@ fn copy_ramfunc() {
         core::ptr::copy_nonoverlapping(src, dst, len);
     }
 }
+
+/// Host-only stub entry so this package's binary still links if someone builds
+/// it for a dev (non-ARM) target. The real firmware lives behind
+/// `target_arch = "arm"` above.
+#[cfg(not(target_arch = "arm"))]
+fn main() {}

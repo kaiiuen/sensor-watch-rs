@@ -16,6 +16,24 @@ edition = "2024"
 description = "A Rust rewrite of the Sensor-Watch firmware for the Microchip SAM L22"
 license = "MIT OR Apache-2.0"
 
+# Host-testable library target.
+#
+# The firmware crate is a pure binary (`src/main.rs`, `#![no_std]`/`#![no_main]`)
+# for the `thumbv6m-none-eabi` target, and this package's bin is built unchanged
+# (the `main.rs` bin keeps its own `mod watch`/`mod movement`). The library below
+# makes the same crate usable as a host dependency (`cargo test`, Studio, fuzzers).
+#
+# On the `thumbv6m-none-eabi` target the library artifact is also produced but is
+# NOT referenced by the on-device binary (which falls back to Cargo's autolink
+# only if the bin path `use`s it); the firmware build is verified to link the same
+# machine code as before this change.
+[lib]
+name = "sensor_watch"
+path = "src/lib.rs"
+# `rlib` plus `staticlib` for potential C/FFI embedding. See the note near the
+# host `panic`/allocator in `src/lib.rs` for how host builds make this linkable.
+crate-type = ["rlib", "staticlib"]
+
 [dependencies]
 cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7", features = ["device"] }
@@ -25,8 +43,26 @@ atsaml22j = { version = "0.1.0", features = ["rt"] }
 libm = "0.2"
 critical-section = "1.2.0"
 
+# Shared host-testable logic + the `Hw` seam. The firmware depends on the core
+# crate so that, on host builds, the ARM-bound register backends can forward to
+# the reusable `sensor_watch_core::mock_hw` trait/mock. On the
+# `thumbv6m-none-eabi` target this dependency is inert (hostmock is not enabled).
+sensor-watch-core = { path = "./core" }
+
+[features]
+# Only available to the host (`cargo test` / `cargo build` / `cargo run`, NOT the
+# `thumbv6m-none-eabi` firmware target). Gates the mock HW dispatch in `watch`.
+hostmock = []
+
+[dev-dependencies]
+
 [profile.dev]
 opt-level = 1
+# The `sensor_watch` lib is `no_std` (the ARM firmware has no `std`, and the host
+# lib target mirrors that to link the real faces). An unwinding panic strategy
+# needs `std`, which does not exist for the firmware or the no_std host lib, so the
+# dev profile builds with abort.
+panic = "abort"
 
 [profile.release]
 opt-level = "s"
