@@ -1727,9 +1727,17 @@ fn release_peripherals() {
 
 fn cb_light_btn_interrupt() {
     unsafe {
-        let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_LIGHT);
-        if let Some(ev) = debounce::update(Button::Light, pin_level) {
-            stats::press_light();
+        // The 128 Hz fast tick samples the button pins and feeds the debouncer
+        // continuously (see cb_fast_tick), so a clean press is detected even
+        // without multiple edges. This edge interrupt wakes the CPU and runs an
+        // immediate sample so the response feels immediate.
+        if let Some(ev) = debounce::update(
+            Button::Light,
+            watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
+        ) {
+            if is_press(&ev) {
+                stats::press_light();
+            }
             PENDING_EVENT = ev;
         }
     }
@@ -1737,9 +1745,13 @@ fn cb_light_btn_interrupt() {
 
 fn cb_mode_btn_interrupt() {
     unsafe {
-        let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_MODE);
-        if let Some(ev) = debounce::update(Button::Mode, pin_level) {
-            stats::press_mode();
+        if let Some(ev) = debounce::update(
+            Button::Mode,
+            watch::gpio::get_pin_level(watch::extint::BTN_MODE),
+        ) {
+            if is_press(&ev) {
+                stats::press_mode();
+            }
             PENDING_EVENT = ev;
         }
     }
@@ -1747,9 +1759,13 @@ fn cb_mode_btn_interrupt() {
 
 fn cb_alarm_btn_interrupt() {
     unsafe {
-        let pin_level = watch::gpio::get_pin_level(watch::extint::BTN_ALARM);
-        if let Some(ev) = debounce::update(Button::Alarm, pin_level) {
-            stats::press_alarm();
+        if let Some(ev) = debounce::update(
+            Button::Alarm,
+            watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
+        ) {
+            if is_press(&ev) {
+                stats::press_alarm();
+            }
             PENDING_EVENT = ev;
         }
     }
@@ -1774,10 +1790,58 @@ pub fn cb_tick() {
 pub fn cb_fast_tick() {
     unsafe {
         FAST_TICKS = FAST_TICKS.wrapping_add(1);
+        // Sample the button pins and feed the debouncer periodically. The EIC
+        // edge interrupts feed an initial sample; this periodic resampling lets
+        // the debounce filter converge even on a clean (single-edge) press,
+        // which would otherwise never reach the required sample count.
+        sample_buttons();
         for button in [Button::Light, Button::Mode, Button::Alarm] {
             if let Some(ev) = debounce::check_long_press(button, FAST_TICKS) {
                 PENDING_EVENT = ev;
             }
         }
     }
+}
+
+/// Reads the current button levels and feeds them to the debouncer.
+fn sample_buttons() {
+    unsafe {
+        if let Some(ev) = debounce::update(
+            Button::Light,
+            watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
+        ) {
+            if is_press(&ev) {
+                stats::press_light();
+            }
+            PENDING_EVENT = ev;
+        }
+        if let Some(ev) = debounce::update(
+            Button::Mode,
+            watch::gpio::get_pin_level(watch::extint::BTN_MODE),
+        ) {
+            if is_press(&ev) {
+                stats::press_mode();
+            }
+            PENDING_EVENT = ev;
+        }
+        if let Some(ev) = debounce::update(
+            Button::Alarm,
+            watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
+        ) {
+            if is_press(&ev) {
+                stats::press_alarm();
+            }
+            PENDING_EVENT = ev;
+        }
+    }
+}
+
+/// Returns true if a debounced event is a fresh button-down press.
+fn is_press(ev: &Event) -> bool {
+    matches!(
+        ev,
+        Event::Button(Button::Light, ButtonEvent::Down)
+            | Event::Button(Button::Mode, ButtonEvent::Down)
+            | Event::Button(Button::Alarm, ButtonEvent::Down)
+    )
 }
