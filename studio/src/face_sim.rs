@@ -239,6 +239,9 @@ impl FaceEngine {
     pub fn render(&self, time: &SimTime) -> FaceDisplay {
         let upper = self.face_name.to_uppercase();
         let mut d = FaceDisplay::default();
+        // Seconds since midnight: a live, plausibly-counting value for the
+        // sim renderer badges below.
+        let t_sec = time.hour * 3600 + time.minute * 60 + time.second;
 
         if upper.contains("WORLD_CLOCK") {
             render_world_clock(&mut d, time, self.world_offset);
@@ -248,7 +251,12 @@ impl FaceEngine {
             render_stopwatch(&mut d, self.sw_seconds);
         } else if upper.contains("TIMER") {
             render_timer(&mut d, self.timer_seconds);
-        } else if upper.contains("COUNTDOWN") {
+        } else if upper.contains("COUNTDOWN")
+            || upper.contains("TIME_LEFT")
+            || upper.contains("INTERVAL")
+            || upper.contains("DEADLINE")
+            || upper.contains("TOMATO")
+        {
             render_countdown(&mut d, self.timer_seconds);
         } else if upper.contains("ALARM") {
             render_alarm(&mut d, self.alarm_seconds, self.alarm_enabled);
@@ -263,6 +271,88 @@ impl FaceEngine {
             d.set_string("MOON", 3);
         } else if upper.contains("DIAGNOSTICS") || upper.contains("SETTINGS") {
             self.render_diag(&mut d, time);
+        } else if upper.contains("TIDE") {
+            render_tide(&mut d);
+        } else if upper.contains("SOLAR")
+            || upper.contains("MARS_TIME")
+            || upper.contains("PLANETARY")
+            || upper.contains("SUNRISE_SUNSET")
+            || upper.contains("ASTRONOMY")
+            || upper.contains("ORRERY")
+            || upper.contains("SOLSTICE")
+        {
+            // sim renderer: astronomical/solar faces share a sky-clock badge.
+            render_astro(&mut d, time, &upper);
+        } else if upper.contains("TOTP") {
+            render_totp(&mut d, t_sec);
+        } else if upper.contains("METRONOME")
+            || upper.contains("TACHYMETER")
+            || upper.contains("PULSOMETER")
+            || upper.contains("RATEMETER")
+            || upper.contains("PROBABILITY")
+            || upper.contains("PERIODIC")
+            || upper.contains("TUNING_TONES")
+            || upper.contains("FREQUENCY_CORRECTION")
+            || upper.contains("DISCGOLF")
+            || upper.contains("TEMPCHART")
+        {
+            // sim renderer: rate/meter/measure faces show a live reading.
+            render_numeric(&mut d, &upper, t_sec);
+        } else if upper.contains("GAME")
+            || upper.contains("SIMON")
+            || upper.contains("INVADERS")
+            || upper.contains("ENDLESS_RUNNER")
+            || upper.contains("GEOMANCY")
+            || upper.contains("TAROT")
+            || upper.contains("RANDONAUT")
+            || upper.contains("BLACKJACK")
+            || upper.contains("SQUASH")
+            || upper.contains("LANDER")
+            || upper.contains("PING")
+        {
+            // sim renderer: games show a simple status label + tick count.
+            render_game(&mut d, &upper, t_sec);
+        } else if upper.contains("HABIT")
+            || upper.contains("BREATHING")
+            || upper.contains("WAKE")
+            || upper.contains("ACTIVITY")
+            || upper.contains("HYDRATION")
+            || upper.contains("BABY_KICKS")
+            || upper.contains("MENSTRUAL_CYCLE")
+            || upper.contains("COUCH_TO_5K")
+            || upper.contains("KITCHEN_CONVERSIONS")
+        {
+            // sim renderer: health/habit trackers show a day-based count.
+            render_health(&mut d, &upper, self.power_on_seconds);
+        } else if upper.contains("DATABANK")
+            || upper.contains("MINMAX")
+            || upper.contains("LIGHTMETER")
+            || upper.contains("THERMISTOR")
+            || upper.contains("ALARM_THERMOMETER")
+            || upper.contains("ACCELEROMETER")
+            || upper.contains("ACCEL_INTERRUPT_COUNT")
+            || upper.contains("VOLTAGE")
+        {
+            // sim renderer: sensor readouts show an analog-ish live value.
+            render_sensor(&mut d, t_sec);
+        } else if upper.contains("SIMPLE_CALCULATOR")
+            || upper.contains("RPN_CALCULATOR")
+            || upper.contains("MORSECALC")
+            || upper.contains("WAREKI")
+            || upper.contains("KE_DECIMAL_TIME")
+            || upper.contains("ISH")
+            || upper.contains("BEATS")
+            || upper.contains("WEEKNUMBER")
+        {
+            // sim renderer: alt-calendar/numeric-count faces share a date badge.
+            render_date(&mut d, time);
+        } else if upper.contains("DECIMAL_TIME")
+            || upper.contains("FRENCH_REVOLUTIONARY")
+            || upper.contains("SOLAR_TIME")
+            || upper.contains("MINUTE_REPEATER_DECIMAL")
+        {
+            // sim renderer: decimal/alt-time faces share a live SECS badge.
+            render_clock_alt(&mut d, t_sec);
         } else {
             let short: String = self.face_name.chars().take(10).collect();
             d.set_string(&short, 0);
@@ -412,6 +502,110 @@ fn two_digits(v: u32) -> (char, char) {
         (b'0' + (v / 10) as u8) as char,
         (b'0' + (v % 10) as u8) as char,
     )
+}
+
+// --- Sim renderers for uncategorized faces -----------------------------------
+// These give a recognizable (if schematic) display to the many faces that
+// previously fell through to a plain name label. Each keeps the label under 10
+// chars and preserves digit validity for the 7-segment LCD.
+
+/// A badge plus seconds-since-midnight for measure/rate faces.
+fn render_tide(d: &mut FaceDisplay) {
+    d.set_string("TIDE", 3);
+}
+
+// Fills chars[8..9] with the low 2 digits of the live seconds value.
+fn live_2(d: &mut FaceDisplay, t_sec: u32) {
+    let (b, a) = two_digits(t_sec % 100);
+    d.chars[8] = b;
+    d.chars[9] = a;
+}
+
+fn render_totp(d: &mut FaceDisplay, t_sec: u32) {
+    d.set_string("OTP", 1);
+    live_2(d, t_sec);
+}
+
+fn render_astro(d: &mut FaceDisplay, time: &SimTime, upper: &str) {
+    // Sunrise/Sunset, Solstice, Solar/Mars etc. show a rough badge.
+    if upper.contains("SUNRISE") {
+        d.set_string("SUN", 1);
+        let (h2, h1) = two_digits(time.hour);
+        let (m2, _) = two_digits(time.minute);
+        d.chars[7] = h2;
+        d.chars[8] = h1;
+        d.chars[9] = m2;
+    } else if upper.contains("SOLSTICE") {
+        d.set_string("SOLST", 2);
+    } else if upper.contains("ORRERY") {
+        d.set_string("ORRE", 3);
+    } else {
+        d.set_string("ASTRO", 2);
+    }
+}
+
+fn render_numeric(d: &mut FaceDisplay, upper: &str, t_sec: u32) {
+    // Tachymeter, Pulsometer, Ratemeter, Metronome, Temperature chart...
+    if upper.contains("PERIODIC") {
+        d.set_string("ELEM", 3);
+    } else if upper.contains("TEMPCHART") {
+        d.set_string("TEMP", 3);
+    } else {
+        d.set_string("METER", 2);
+        live_2(d, t_sec);
+    }
+}
+
+fn render_game(d: &mut FaceDisplay, upper: &str, t_sec: u32) {
+    if upper.contains("SIMON") {
+        d.set_string("SIMON", 2);
+    } else if upper.contains("INVADERS") {
+        d.set_string("INVAD", 2);
+    } else if upper.contains("BLACKJACK") {
+        d.set_string("BLACK", 2);
+    } else if upper.contains("SQUASH") {
+        d.set_string("SQASH", 2);
+    } else if upper.contains("LANDER") {
+        d.set_string("LAND", 3);
+    } else {
+        d.set_string("GAME", 3);
+    }
+    live_2(d, t_sec);
+}
+
+fn render_health(d: &mut FaceDisplay, upper: &str, uptime: u32) {
+    let days = (uptime / 86400) % 100;
+    if upper.contains("HYDRATION") {
+        d.set_string("H2O", 1);
+    } else if upper.contains("MENSTRUAL") {
+        d.set_string("CYCLE", 2);
+    } else if upper.contains("BREATHING") {
+        d.set_string("BREAT", 2);
+    } else if upper.contains("KITCHEN") {
+        d.set_string("KITCH", 1);
+    } else {
+        d.set_string("HABIT", 2);
+    }
+    let (d2, d1) = two_digits(days);
+    d.chars[8] = d2;
+    d.chars[9] = d1;
+}
+
+fn render_sensor(d: &mut FaceDisplay, t_sec: u32) {
+    d.set_string("SENS", 2);
+    live_2(d, t_sec);
+}
+
+fn render_date(d: &mut FaceDisplay, time: &SimTime) {
+    let (d2, d1) = two_digits(time.day);
+    d.set_string("DUE", 1);
+    d.chars[7] = d2;
+    d.chars[8] = d1;
+}
+
+fn render_clock_alt(d: &mut FaceDisplay, t_sec: u32) {
+    d.set_string("SECS", 1);
+    live_2(d, t_sec);
 }
 
 fn render_clock(d: &mut FaceDisplay, time: &SimTime, time_mode_24: bool) {
