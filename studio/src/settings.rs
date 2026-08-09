@@ -52,6 +52,10 @@ pub struct AppSettings {
     /// Whether the first-run welcome overlay has been dismissed.
     #[serde(default)]
     pub first_run: bool,
+    /// The last measured crystal drift (parts-per-million), persisted between
+    /// sessions so the user can recall the calibration without re-measuring.
+    #[serde(default)]
+    pub drift_ppm: f64,
 }
 
 impl AppSettings {
@@ -71,6 +75,7 @@ impl AppSettings {
         modules: &ModuleManager,
         output_dir: String,
         first_run: bool,
+        drift_ppm: f64,
     ) -> Self {
         AppSettings {
             schema_version: 1,
@@ -87,6 +92,7 @@ impl AppSettings {
             modules: modules.clone(),
             output_dir,
             first_run,
+            drift_ppm,
         }
     }
 
@@ -121,6 +127,7 @@ impl Default for AppSettings {
             modules: ModuleManager::default(),
             output_dir: default_output_dir(),
             first_run: false,
+            drift_ppm: 0.0,
         }
     }
 }

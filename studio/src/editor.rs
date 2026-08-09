@@ -87,3 +87,53 @@ pub fn delete_face(name: &str) -> Result<(), String> {
         Ok(())
     }
 }
+
+/// Registers a face so it becomes visible to `discover_faces` and compiles into
+/// the firmware.
+///
+/// Best-effort and defensive: this only guarantees the `pub mod <name>;`
+/// declaration exists in `src/movement/mod.rs`. It does NOT touch the
+/// `WATCH_FACES[]` array, the `MOVEMENT_NUM_FACES` const, or any `#[used]`
+/// static declaration — those require matching struct storage the template may
+/// not guarantee, and editing numeric consts is risky. If the declaration is
+/// already present, this is treated as success.
+pub fn register_face(name: &str) -> Result<(), String> {
+    // Validate the name so we only ever write a well-formed module identifier.
+    if name.is_empty()
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        || name.starts_with(|c: char| c.is_ascii_digit())
+    {
+        return Err(format!("invalid face name {name:?}"));
+    }
+
+    let path = crate::build::firmware_dir().join("src/movement/mod.rs");
+    let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+    let declaration = format!("pub mod {name};");
+
+    // If already declared, nothing to do.
+    let already_declared = content.lines().any(|l| l.trim() == declaration);
+    if already_declared {
+        return Ok(());
+    }
+
+    // Insert before the `use crate::movement::types::*;` line, which ends the
+    // block of `pub mod` declarations.
+    const ANCHOR: &str = "use crate::movement::types::*;";
+    let insertion = format!("{declaration}\n\n");
+    let updated = if let Some(pos) = content.find(ANCHOR) {
+        let mut s = content.clone();
+        s.insert_str(pos, &insertion);
+        s
+    } else {
+        // Fallback: append at the end of the file.
+        let mut s = content;
+        if !s.ends_with('\n') {
+            s.push('\n');
+        }
+        s.push_str(&declaration);
+        s.push('\n');
+        s
+    };
+
+    std::fs::write(&path, updated).map_err(|e| e.to_string())
+}

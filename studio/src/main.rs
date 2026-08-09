@@ -516,6 +516,24 @@ impl eframe::App for StudioApp {
         // clock and sim keep running instead of freezing.
         ctx.request_repaint();
 
+        // Keyboard shortcuts (only when the user isn't typing in a text field).
+        if !ctx.wants_keyboard_input() {
+            if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
+                self.current_panel = Panel::BuildFlash;
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F6)) && !self.building {
+                self.building = true;
+                self.build_message = tr(self.language, Key::Building).to_string();
+                self.log.log("Starting firmware build");
+                let out = std::path::PathBuf::from(self.output_dir.clone());
+                let handle = std::thread::spawn(move || build::build_firmware(&out));
+                self.pending_build = Some(handle);
+            }
+            if ctx.input(|i| i.key_pressed(egui::Key::F7)) {
+                self.current_panel = Panel::Simulator;
+            }
+        }
+
         // Persist settings exactly once when the window is about to close, so
         // presets, watch settings, panel sizes, etc. survive the session.
         if ctx.input(|i| i.viewport().close_requested()) && !self.saved_on_exit {
@@ -741,15 +759,39 @@ impl eframe::App for StudioApp {
                 ui.separator();
                 // Error/warning counter that jumps to the Bugs tab.
                 let err_count = self.error_log.entries().len();
+                let err_color = if err_count > 0 {
+                    egui::Color32::from_rgb(200, 70, 70)
+                } else {
+                    ui.visuals().text_color()
+                };
+                let errors_text = if err_count > 0 {
+                    egui::RichText::new(format!("Errors: {err_count}"))
+                        .color(err_color)
+                        .strong()
+                } else {
+                    egui::RichText::new(format!("Errors: {err_count}"))
+                };
                 if ui
-                    .button(format!("Errors: {err_count}"))
+                    .button(errors_text)
                     .on_hover_text("Open the Bugs tab to see recorded errors and warnings.")
                     .clicked()
                 {
                     self.current_panel = Panel::Bugs;
                 }
                 ui.separator();
-                ui.label(&self.status);
+                // The status label turns red when it indicates a failure so
+                // errors stand out at a glance.
+                let lower = self.status.to_lowercase();
+                let is_failure = lower.contains("fail")
+                    || lower.contains("error")
+                    || lower.contains("err")
+                    || lower.contains("not found")
+                    || lower.contains("panicked");
+                if is_failure {
+                    ui.colored_label(egui::Color32::from_rgb(200, 70, 70), &self.status);
+                } else {
+                    ui.label(&self.status);
+                }
             });
         });
 
@@ -799,6 +841,7 @@ impl eframe::App for StudioApp {
                     {
                         self.terminal_wrap = !self.terminal_wrap;
                     }
+                    ui.weak("(max 500)");
                 });
                 if self.terminal_open {
                     ui.separator();
@@ -1235,6 +1278,7 @@ impl StudioApp {
                         let (_, _, _, h, m, s, _) = self.watch.get_time();
                         let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
                         self.drift_session.record(watch_secs, ts);
+                        self.save_settings_internal();
                         let n = if self.drift_session.start.is_some() {
                             if self.drift_session.end.is_some() {
                                 "end".to_string()
@@ -1254,6 +1298,12 @@ impl StudioApp {
                     self.log.log("Drift session reset");
                 }
             });
+            if self.drift_session.ppm != 0.0 {
+                ui.monospace(format!(
+                    "Last calibrated drift: {:+.2} ppm (from last session)",
+                    self.drift_session.ppm
+                ));
+            }
             if self.drift_session.ppm != 0.0 {
                 ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
                 if self.drift_session.ppm.abs() < 0.5 {
@@ -1504,6 +1554,47 @@ impl StudioApp {
                         });
                         ui.separator();
                         let query = self.catalog_search.trim().to_lowercase();
+                        // Bulk add every face currently passing the search+category
+                        // filter to the active preset.
+                        let mut filtered: Vec<&str> = Vec::new();
+                        for face in &self.face_list {
+                            if !self.catalog_category.is_empty()
+                                && face.category != self.catalog_category
+                            {
+                                continue;
+                            }
+                            if !query.is_empty()
+                                && !face.name.to_lowercase().contains(&query)
+                                && !face.index.to_string().contains(&query)
+                                && !face.description.to_lowercase().contains(&query)
+                            {
+                                continue;
+                            }
+                            filtered.push(&face.name);
+                        }
+                        if ui
+                            .button("Add all filtered to preset")
+                            .on_hover_text(format!(
+                                "Add the {} faces currently matching the search + category filter",
+                                filtered.len()
+                            ))
+                            .clicked()
+                        {
+                            if filtered.is_empty() {
+                                self.status = "No faces match the filter".to_string();
+                                self.faces_log.log("No faces match the filter");
+                            } else {
+                                let mut added = 0usize;
+                                for name in &filtered {
+                                    self.presets.add_face(name);
+                                    added += 1;
+                                }
+                                self.status = format!("Added {added} faces to the active preset");
+                                self.faces_log
+                                    .log(format!("Added {added} filtered faces to preset"));
+                            }
+                        }
+                        ui.separator();
                         egui::ScrollArea::vertical()
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
@@ -2147,6 +2238,19 @@ impl StudioApp {
             });
         ui.add_space(8.0);
 
+        // Note about registration behavior so beginners aren't surprised.
+        egui::CollapsingHeader::new("About saving & registration")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.weak(
+                    "When you Save, the face is also registered in the firmware so it\n\
+                     shows up in Watch Faces. Building still requires the firmware to\n\
+                     compile it; if your face's code has errors the build will fail\n\
+                     with that info.",
+                );
+            });
+        ui.add_space(8.0);
+
         // Template selection.
         ui.label("Template:");
         for (i, t) in editor::TEMPLATES.iter().enumerate() {
@@ -2200,7 +2304,24 @@ impl StudioApp {
                 if !name.is_empty() && !self.editor_source.is_empty() {
                     match editor::write_face(&name, &self.editor_source) {
                         Ok(_) => {
-                            self.log.log(format!("Saved face {name}"));
+                            // Best-effort visibility: add a `pub mod <name>;`
+                            // declaration so the face shows up in Watch Faces. A
+                            // registration failure is non-fatal — the file is
+                            // saved, just not wired up yet.
+                            match editor::register_face(&name) {
+                                Ok(_) => {
+                                    self.log.log(format!("Face saved and registered"));
+                                }
+                                Err(e) => {
+                                    let path = editor::face_path(&name)
+                                        .display()
+                                        .to_string();
+                                    self.log.log(format!(
+                                        "Face saved to {path} but not yet registered \
+                                         (manual step needed): {e}"
+                                    ));
+                                }
+                            }
                             self.face_list = faces::discover_faces();
                         }
                         Err(e) => self.log.log(format!("Save failed: {e}")),
@@ -2493,6 +2614,7 @@ impl StudioApp {
                             let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
                             self.drift_session.record(watch_secs, ts);
                             self.log.log("Drift sample recorded");
+                            self.save_settings_internal();
                         } else {
                             self.status = "Fetch NTP time first".to_string();
                         }
@@ -2501,6 +2623,12 @@ impl StudioApp {
                         self.drift_session.reset();
                     }
                 });
+                if self.drift_session.ppm != 0.0 {
+                    ui.monospace(format!(
+                        "Last calibrated drift: {:+.2} ppm (from last session)",
+                        self.drift_session.ppm
+                    ));
+                }
                 if self.drift_session.ppm != 0.0 {
                     ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
                 }
@@ -3572,6 +3700,12 @@ impl StudioApp {
                 .terminal_history
                 .push(format!("Unknown command: {cmd} (try 'help')")),
         }
+
+        // Bound the terminal history to avoid unbounded memory growth.
+        if self.terminal_history.len() > 500 {
+            let excess = self.terminal_history.len() - 500;
+            self.terminal_history.drain(..excess);
+        }
     }
 
     /// The settings panel: configure the app and the watch.
@@ -3978,6 +4112,7 @@ impl StudioApp {
             &self.modules,
             self.output_dir.clone(),
             self.first_run,
+            self.drift_session.ppm,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -4019,6 +4154,7 @@ impl StudioApp {
             &self.modules,
             self.output_dir.clone(),
             self.first_run,
+            self.drift_session.ppm,
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -4042,6 +4178,7 @@ impl StudioApp {
             &self.modules,
             self.output_dir.clone(),
             self.first_run,
+            self.drift_session.ppm,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -4098,6 +4235,7 @@ impl StudioApp {
         self.preset_height = s.preset_height;
         self.modules = s.modules;
         self.first_run = s.first_run;
+        self.drift_session.ppm = s.drift_ppm;
         self.output_dir = if s.output_dir.is_empty() {
             settings::default_output_dir()
         } else {

@@ -31,7 +31,7 @@ pub fn discover_faces() -> Vec<FaceInfo> {
         if let Some(rest) = line.strip_prefix("WATCH_FACES[") {
             if let Some(idx_end) = rest.find(']') {
                 if let Ok(index) = rest[..idx_end].parse::<usize>() {
-                    if let Some(name_start) = rest.find("addr_of_mut!(") {
+                    if let Some(name_start) = rest.find("addr_of_mut!") {
                         let after = &rest[name_start + "addr_of_mut!(".len()..];
                         if let Some(name_end) = after.find(')') {
                             let name = after[..name_end].to_string();
@@ -43,6 +43,38 @@ pub fn discover_faces() -> Vec<FaceInfo> {
                             });
                         }
                     }
+                }
+            }
+        }
+    }
+
+    // Also surface faces that only have a `pub mod <name>;` declaration but no
+    // `WATCH_FACES[]` entry yet (e.g. a face the editor just registered). This
+    // lets a freshly saved face appear in the catalog so it can be added to a
+    // preset, even though it isn't wired into the firmware's arrays.
+    let anchor_pos = content
+        .find("use crate::movement::types::*;")
+        .unwrap_or(content.len());
+    let mut next_index = faces.iter().map(|f| f.index).max().map_or(0, |m| m + 1);
+    // Scan only the `pub mod` block (everything before the `use ...` anchor) to
+    // avoid picking up unrelated `pub mod` lines further down.
+    for line in content[..anchor_pos].lines() {
+        let line = line.trim();
+        // pub mod simple_clock;
+        if let Some(rest) = line.strip_prefix("pub mod ") {
+            if let Some(name) = rest.strip_suffix(';') {
+                let name = name.trim().to_string();
+                if !name.is_empty()
+                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+                    && !faces.iter().any(|f| f.name == name)
+                {
+                    faces.push(FaceInfo {
+                        index: next_index,
+                        description: face_description(&name),
+                        category: face_category(&name),
+                        name: name.clone(),
+                    });
+                    next_index += 1;
                 }
             }
         }
