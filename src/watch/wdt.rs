@@ -60,3 +60,23 @@ pub fn kick() {
 pub fn kick_windowed() {
     kick();
 }
+
+/// Extends the watchdog timeout for long idle sleeps. The WDT period must be
+/// long enough to cover the longest expected sleep (e.g. the per-minute wake),
+/// otherwise it would reset the chip mid-sleep.
+pub fn extend_timeout() {
+    // ~16.7 s at 1 kHz (Cyc16384). Toggling the period while enabled is fine
+    // on the SAM L22 after sync.
+    wdt()
+        .config()
+        .modify(|_, w| w.per().variant(Perselect::Cyc16384));
+    sync();
+}
+
+/// Restores the ~2 s watchdog timeout for active, interactive use.
+pub fn tighten_timeout() {
+    wdt()
+        .config()
+        .modify(|_, w| w.per().variant(Perselect::Cyc2048));
+    sync();
+}

@@ -1868,10 +1868,12 @@ pub fn cb_fast_tick() {
     }
 }
 
-/// Resumes the 128 Hz fast tick (called on any button activity).
+/// Resumes the 128 Hz fast tick (called on any button activity). Also restores
+/// the short watch["####"]dog timeout for active use.
 pub fn resume_fast_tick() {
     unsafe {
         FAST_TICK_IDLE = 0;
+        crate::watch::wdt::tighten_timeout();
         if !FAST_TICK_ON {
             rtc::register_periodic_callback(cb_fast_tick, 128);
             FAST_TICK_ON = true;
@@ -1879,12 +1881,15 @@ pub fn resume_fast_tick() {
     }
 }
 
-/// Suspends the 128 Hz fast tick to save power while idle.
+/// Suspends the 128 Hz fast tick to save power while idle. Also extends the
+/// watchdog timeout so the CPU can sleep through the base wake interval without
+/// a watchdog reset.
 pub fn suspend_fast_tick() {
     unsafe {
         if FAST_TICK_ON {
             rtc::disable_periodic_callback(128);
             FAST_TICK_ON = false;
+            crate::watch::wdt::extend_timeout();
         }
     }
 }
