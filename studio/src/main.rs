@@ -205,6 +205,8 @@ struct StudioApp {
     error_log: debug::DebugLog,
     /// Dedicated log for the Watch Faces tab.
     faces_log: debug::DebugLog,
+    /// Dedicated log for the Simulator tab.
+    sim_log: debug::DebugLog,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -393,6 +395,7 @@ impl Default for StudioApp {
             flash_log: debug::DebugLog::new(),
             error_log: debug::DebugLog::new(),
             faces_log: debug::DebugLog::new(),
+            sim_log: debug::DebugLog::new(),
             catalog_search: String::new(),
             catalog_category: String::new(),
             board: Board::Green,
@@ -1273,7 +1276,8 @@ impl StudioApp {
         });
         ui.separator();
 
-        // Preset management sub-tabs along the top.
+        // Preset management: tab selectors, name field, and action buttons on
+        // one row to save vertical space.
         ui.horizontal(|ui| {
             ui.label("Presets:");
             for (i, preset) in self.presets.presets.iter().enumerate() {
@@ -1284,6 +1288,8 @@ impl StudioApp {
                     self.presets.active = i;
                 }
             }
+            ui.separator();
+            ui.add(egui::TextEdit::singleline(&mut self.new_preset_name).desired_width(150.0));
             if ui.button("+").clicked() {
                 self.presets.add_preset(&self.new_preset_name);
                 self.faces_log
@@ -1301,10 +1307,6 @@ impl StudioApp {
                 self.presets.delete_active();
                 self.faces_log.log("Deleted active preset");
             }
-        });
-        ui.horizontal(|ui| {
-            ui.label("New preset name:");
-            ui.text_edit_singleline(&mut self.new_preset_name);
         });
         ui.separator();
 
@@ -1332,7 +1334,7 @@ impl StudioApp {
                     .show_inside(ui, |ui| {
                         self.preset_height = ui.available_height();
                         ui.heading("Catalog");
-                        // Search box.
+                        // Search and category filter on one row to save space.
                         ui.horizontal(|ui| {
                             ui.label("Search:");
                             ui.text_edit_singleline(&mut self.catalog_search);
@@ -1341,9 +1343,7 @@ impl StudioApp {
                                     self.catalog_search.clear();
                                 }
                             }
-                        });
-                        // Category filter.
-                        ui.horizontal(|ui| {
+                            ui.separator();
                             ui.label("Category:");
                             egui::ComboBox::from_id_source("catalog_cat")
                                 .selected_text(if self.catalog_category.is_empty() {
@@ -2722,6 +2722,7 @@ impl StudioApp {
             );
             if ui.button("Reset").clicked() {
                 self.sim_scale = 0.5;
+                self.sim_log.log("Sim size reset".to_string());
             }
             ui.separator();
             // Show which preset face is being simulated.
@@ -2761,11 +2762,14 @@ impl StudioApp {
                 match fuzz::fuzz_face(&name, iters, seed) {
                     Ok(n) => {
                         self.status = format!("Fuzz passed: {n} iterations on {name}");
+                        self.sim_log
+                            .log(format!("Fuzz passed: {n} iters on {name}"));
                         self.log
                             .log(format!("Fuzz passed: {n} iterations on {name}"));
                     }
                     Err(e) => {
                         self.status = format!("Fuzz failed: {e}");
+                        self.sim_log.log(format!("Fuzz failed: {e}"));
                         self.log_error(&format!("Fuzz failed: {e}"));
                     }
                 }
@@ -2812,6 +2816,10 @@ impl StudioApp {
                         self.sim_hour,
                         self.sim_minute,
                     );
+                    self.sim_log.log(format!(
+                        "Set date/time to {}-{:02}-{:02} {:02}:{:02}",
+                        self.sim_year, self.sim_month, self.sim_day, self.sim_hour, self.sim_minute
+                    ));
                     self.log.log(format!(
                         "Sim date set to {}-{:02}-{:02} {:02}:{:02}",
                         self.sim_year, self.sim_month, self.sim_day, self.sim_hour, self.sim_minute
@@ -2821,6 +2829,8 @@ impl StudioApp {
                 // touch the date/time.
                 if ui.button("Apply weekday").clicked() {
                     self.watch.weekday_override = Some(self.sim_weekday as u32);
+                    self.sim_log
+                        .log(format!("Weekday set to {}", self.sim_weekday));
                     self.log.log(format!(
                         "Weekday set to {}",
                         ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][self.sim_weekday]
@@ -2829,11 +2839,51 @@ impl StudioApp {
                 if ui.button("Reset to now").clicked() {
                     self.watch.time_offset = 0;
                     self.watch.weekday_override = None;
+                    self.sim_log.log("Reset to now".to_string());
                     self.log.log("Sim date reset to now");
                 }
             });
             ui.separator();
         });
+
+        // Simulator debug log: under the sim bar / date controller, showing
+        // button presses, face switches, and sim actions.
+        egui::CollapsingHeader::new("Simulator debug log")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    if ui.small_button("Clear").clicked() {
+                        self.sim_log.clear();
+                    }
+                    if ui.small_button("Copy").clicked() {
+                        let text = self
+                            .sim_log
+                            .entries()
+                            .iter()
+                            .map(|e| e.message.clone())
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        let _ = ui_copy_to_clipboard(&text);
+                    }
+                });
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(100.0)
+                    .show(ui, |ui| {
+                        if self.sim_log.is_empty() {
+                            ui.weak("(no sim activity yet)");
+                        }
+                        for entry in self.sim_log.entries() {
+                            let secs = entry.timestamp % 60;
+                            let mins = (entry.timestamp / 60) % 60;
+                            let hrs = (entry.timestamp / 3600) % 24;
+                            ui.monospace(format!(
+                                "[{hrs:02}:{mins:02}:{secs:02}] {}",
+                                entry.message
+                            ));
+                        }
+                    });
+            });
 
         self.draw_watch(ui, ctx, self.sim_scale);
     }
@@ -3036,8 +3086,12 @@ impl StudioApp {
                     SimAction::Press => {
                         self.watch.light = true;
                         self.face_engine.press(face_sim::FaceButton::Light);
+                        self.sim_log.log("L: press (Light)".to_string());
                     }
-                    SimAction::Release => self.watch.light = false,
+                    SimAction::Release => {
+                        self.watch.light = false;
+                        self.sim_log.log("L: release".to_string());
+                    }
                     SimAction::None => {}
                 }
                 // C button: cycle through the preset's watch faces on press.
@@ -3047,6 +3101,7 @@ impl StudioApp {
                         self.sim_face_idx = (self.sim_face_idx + 1) % faces.len();
                         let name = faces[self.sim_face_idx].clone();
                         self.log.log(format!("Simulating face: {name}"));
+                        self.sim_log.log(format!("C: cycle -> face {name}"));
                     }
                 }
                 // A button: toggle 12/24 on a clean press, and act as the face's
@@ -3060,6 +3115,12 @@ impl StudioApp {
                     self.face_engine.time_mode_24 =
                         self.watch.time_mode == watch_sim::TimeMode::H24;
                     self.face_engine.press(face_sim::FaceButton::Alarm);
+                    self.sim_log
+                        .log(if self.watch.time_mode == watch_sim::TimeMode::H24 {
+                            "A: press (12/24 -> 24h, Alarm)".to_string()
+                        } else {
+                            "A: press (12/24 -> 12h, Alarm)".to_string()
+                        });
                 }
                 // A button: holding for ~1s shows the CASIO logo for as long as
                 // it's held; releasing returns to the time display.
