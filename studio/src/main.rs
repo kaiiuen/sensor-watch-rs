@@ -603,18 +603,15 @@ impl eframe::App for StudioApp {
         if let Some(handle) = self.pending_update.take() {
             if handle.is_finished() {
                 self.update_checking = false;
-                match handle.join() {
-                    Ok(Ok(msg)) => {
-                        self.latest_commit = Some(msg.clone());
-                        self.update_time = Some(
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0),
-                        );
-                        self.log.log(format!("Latest commit: {msg}"));
-                    }
-                    _ => {}
+                if let Ok(Ok(msg)) = handle.join() {
+                    self.latest_commit = Some(msg.clone());
+                    self.update_time = Some(
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or(0),
+                    );
+                    self.log.log(format!("Latest commit: {msg}"));
                 }
             } else {
                 self.pending_update = Some(handle);
@@ -1232,7 +1229,7 @@ impl StudioApp {
             return;
         }
         self.checksum_busy = true;
-        let handle = std::thread::spawn(|| fetch_release_sha256());
+        let handle = std::thread::spawn(fetch_release_sha256);
         self.pending_checksum = Some(handle);
     }
 
@@ -1242,7 +1239,7 @@ impl StudioApp {
             return;
         }
         self.update_checking = true;
-        let handle = std::thread::spawn(|| fetch_latest_commit());
+        let handle = std::thread::spawn(fetch_latest_commit);
         self.pending_update = Some(handle);
     }
 
@@ -1338,11 +1335,10 @@ impl StudioApp {
                         ui.horizontal(|ui| {
                             ui.label("Search:");
                             ui.text_edit_singleline(&mut self.catalog_search);
-                            if !self.catalog_search.is_empty() {
-                                if ui.small_button("x").clicked() {
+                            if !self.catalog_search.is_empty()
+                                && ui.small_button("x").clicked() {
                                     self.catalog_search.clear();
                                 }
-                            }
                             ui.separator();
                             ui.label("Category:");
                             egui::ComboBox::from_id_source("catalog_cat")
@@ -2592,7 +2588,7 @@ impl StudioApp {
         };
         self.shell_hw_log
             .log("SERCOM3 TX: reply queued".to_string());
-        self.shell_log.log(format!("{reply}"));
+        self.shell_log.log(reply.to_string());
     }
 
     /// The debug panel: show the background activity log.

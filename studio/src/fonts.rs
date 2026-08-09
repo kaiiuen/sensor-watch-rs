@@ -47,7 +47,7 @@ pub fn install(ctx: &egui::Context) {
     // families so Latin text keeps the default look but Chinese fills in.
     fonts
         .font_data
-        .insert("cjk".to_owned(), egui::FontData::from_owned(bytes).into());
+        .insert("cjk".to_owned(), egui::FontData::from_owned(bytes));
     for family in [egui::FontFamily::Proportional, egui::FontFamily::Monospace] {
         fonts
             .families

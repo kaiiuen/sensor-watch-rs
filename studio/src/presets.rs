@@ -29,9 +29,8 @@ pub struct PresetManager {
 impl PresetManager {
     /// Creates the manager with the default stock preset.
     pub fn new() -> Self {
-        let mut presets = Vec::new();
         // The default preset: the stock Casio F-91W face set.
-        presets.push(Preset {
+        let presets = vec![Preset {
             name: "Stock Casio".to_string(),
             faces: vec![
                 "SIMPLE_CLOCK".to_string(),
@@ -41,7 +40,7 @@ impl PresetManager {
                 "COUNTER".to_string(),
                 "WORLD_CLOCK".to_string(),
             ],
-        });
+        }];
         PresetManager { presets, active: 0 }
     }
 

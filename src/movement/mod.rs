@@ -750,6 +750,18 @@ pub static mut PENDING_EVENT: Event = Event::Tick;
 /// A fast-tick counter (128 Hz) used for long-press detection.
 pub static mut FAST_TICKS: u16 = 0;
 
+/// Consecutive fast ticks with no button activity. When this exceeds
+/// `FAST_TICK_IDLE_SUSPEND`, the fast tick is suspended to save power; button
+/// edges resume it.
+pub static mut FAST_TICK_IDLE: u32 = 0;
+
+/// Number of consecutive idle fast ticks before the fast tick suspends.
+/// 128 Hz * 10 s = 1280 ticks (~10 seconds of inactivity).
+const FAST_TICK_IDLE_SUSPEND: u32 = 1280;
+
+/// Whether the fast tick callback is currently registered.
+pub static mut FAST_TICK_ON: bool = false;
+
 /// Set by the per-minute alarm so the main loop runs the all-face background
 /// task pass (`handle_background_tasks`) once per minute, in main context.
 pub static mut RUN_BACKGROUND_TASKS: bool = false;
@@ -1524,8 +1536,8 @@ pub fn app_setup() {
         };
         rtc::register_alarm_callback(cb_alarm_fired, alarm_time, rtc::AlarmMatch::Ss);
 
-        // Register a fast tick for long-press detection.
-        rtc::register_periodic_callback(cb_fast_tick, 128);
+        // Register a fast tick for long-press detection (suspends when idle).
+        resume_fast_tick();
 
         // Set the wake rate based on the seconds-display setting.
         set_tick_rate(MOVEMENT_STATE.settings.show_seconds());
@@ -1760,6 +1772,9 @@ fn release_peripherals() {
 
 fn cb_light_btn_interrupt() {
     unsafe {
+        // Any button edge wakes the CPU; resume the fast tick so long-press
+        // and debounce sampling run while the user is interacting.
+        resume_fast_tick();
         // The 128 Hz fast tick samples the button pins and feeds the debouncer
         // continuously (see cb_fast_tick), so a clean press is detected even
         // without multiple edges. This edge interrupt wakes the CPU and runs an
@@ -1778,6 +1793,7 @@ fn cb_light_btn_interrupt() {
 
 fn cb_mode_btn_interrupt() {
     unsafe {
+        resume_fast_tick();
         if let Some(ev) = debounce::update(
             Button::Mode,
             watch::gpio::get_pin_level(watch::extint::BTN_MODE),
@@ -1792,6 +1808,7 @@ fn cb_mode_btn_interrupt() {
 
 fn cb_alarm_btn_interrupt() {
     unsafe {
+        resume_fast_tick();
         if let Some(ev) = debounce::update(
             Button::Alarm,
             watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
@@ -1834,7 +1851,40 @@ pub fn cb_fast_tick() {
         for button in [Button::Light, Button::Mode, Button::Alarm] {
             if let Some(ev) = debounce::check_long_press(button, FAST_TICKS) {
                 PENDING_EVENT = ev;
+                resume_fast_tick();
             }
+        }
+        // If no button is held and nothing happened for a while, suspend the
+        // fast tick so the CPU sleeps at the base tick rate instead of waking
+        // 128 times per second. Button edges resume it.
+        if any_button_down() {
+            FAST_TICK_IDLE = 0;
+        } else {
+            FAST_TICK_IDLE += 1;
+            if FAST_TICK_IDLE >= FAST_TICK_IDLE_SUSPEND {
+                suspend_fast_tick();
+            }
+        }
+    }
+}
+
+/// Resumes the 128 Hz fast tick (called on any button activity).
+pub fn resume_fast_tick() {
+    unsafe {
+        FAST_TICK_IDLE = 0;
+        if !FAST_TICK_ON {
+            rtc::register_periodic_callback(cb_fast_tick, 128);
+            FAST_TICK_ON = true;
+        }
+    }
+}
+
+/// Suspends the 128 Hz fast tick to save power while idle.
+pub fn suspend_fast_tick() {
+    unsafe {
+        if FAST_TICK_ON {
+            rtc::disable_periodic_callback(128);
+            FAST_TICK_ON = false;
         }
     }
 }
@@ -1870,6 +1920,13 @@ fn sample_buttons() {
             PENDING_EVENT = ev;
         }
     }
+}
+
+/// Returns true if any watch button is currently pressed (pin high).
+fn any_button_down() -> bool {
+    watch::gpio::get_pin_level(watch::extint::BTN_LIGHT)
+        || watch::gpio::get_pin_level(watch::extint::BTN_MODE)
+        || watch::gpio::get_pin_level(watch::extint::BTN_ALARM)
 }
 
 /// Returns true if a debounced event is a fresh button-down press.

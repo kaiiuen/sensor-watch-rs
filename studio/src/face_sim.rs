@@ -145,11 +145,7 @@ impl FaceEngine {
         } else if upper.contains("TIMER") || upper.contains("COUNTDOWN") {
             match button {
                 FaceButton::Alarm => {
-                    if self.timer_running {
-                        self.timer_running = false;
-                    } else {
-                        self.timer_running = true;
-                    }
+                    self.timer_running = !self.timer_running;
                 }
                 FaceButton::Light => {
                     self.timer_running = false;
@@ -188,12 +184,10 @@ impl FaceEngine {
             FaceButton::Light => {
                 if self.diag_screen == 10 {
                     self.diag_cursor = (self.diag_cursor + 1) % 10;
-                } else if matches!(self.diag_screen, 6 | 7 | 8 | 9) {
+                } else if matches!(self.diag_screen, 6..=9) {
                     let max = if self.diag_screen == 9 {
                         8
-                    } else if self.diag_screen == 7 {
-                        4
-                    } else if self.diag_screen == 6 {
+                    } else if self.diag_screen == 7 || self.diag_screen == 6 {
                         4
                     } else {
                         3
@@ -292,7 +286,7 @@ impl FaceEngine {
         // Breadcrumb: positions 0-1 = depth, 2-3 = face index.
         let depth = if self.diag_screen == 10 {
             0
-        } else if matches!(self.diag_screen, 6 | 7 | 8 | 9) {
+        } else if matches!(self.diag_screen, 6..=9) {
             2
         } else {
             1
@@ -437,7 +431,7 @@ fn render_clock(d: &mut FaceDisplay, time: &SimTime, time_mode_24: bool) {
     let (m2, m1) = two_digits(time.minute);
     let (s2, s1) = two_digits(time.second);
     d.chars = [
-        wd.chars().nth(0).unwrap_or(' '),
+        wd.chars().next().unwrap_or(' '),
         wd.chars().nth(1).unwrap_or(' '),
         d2,
         d1,

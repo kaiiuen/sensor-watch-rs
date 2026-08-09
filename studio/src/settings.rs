@@ -44,6 +44,7 @@ pub struct AppSettings {
 
 impl AppSettings {
     /// Captures the current app state into a serializable struct.
+    #[allow(clippy::too_many_arguments)]
     pub fn capture(
         language: Language,
         theme: Theme,

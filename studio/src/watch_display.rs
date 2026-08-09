@@ -181,9 +181,9 @@ fn char_segments(display_id: &str, c: char) -> Vec<&'static str> {
     };
     let seg_names = ["A", "B", "C", "D", "E", "F", "G", "H"];
     let mut out = Vec::new();
-    for i in 0..7 {
+    for (i, seg) in seg_names[..7].iter().enumerate() {
         if segdata & (1 << i) != 0 {
-            out.push(seg_names[i]);
+            out.push(*seg);
         }
     }
     // Legibility overrides: render 'T' as a backwards 7 (top + right verticals)
@@ -227,6 +227,7 @@ pub fn render_to_texture(
 /// Converts a firmware-style `FaceDisplay` (10 chars + indicators) into the
 /// SVG `Display` state, using the firmware's real character set so text renders
 /// correctly on the 7-segment display.
+#[allow(clippy::field_reassign_with_default)]
 pub fn face_display_to_svg(fd: &FaceDisplay) -> Display {
     let mut d = Display::default();
     d.dots = fd.colon;

@@ -133,6 +133,7 @@ impl CasioF91W {
     }
 
     /// Updates the display based on the current state.
+    #[allow(clippy::field_reassign_with_default)]
     pub fn update_display(&mut self) {
         let mut d = Display::default();
         d.light = self.light;
@@ -251,5 +252,5 @@ fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     let mp = (m + 9) % 12; // [0, 11]
     let doy = (153 * mp as u64 + 2) / 5 + (d as u64 - 1); // [0, 365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
-    (era as i64 * 146097 + doe as i64 - 719_468) as i64
+    era as i64 * 146097 + doe as i64 - 719_468
 }
