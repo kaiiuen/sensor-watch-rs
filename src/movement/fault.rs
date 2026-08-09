@@ -66,10 +66,35 @@ pub enum ResetReason {
 }
 
 /// Records a fault in the backup registers (fixed, no growth).
+///
+/// Only the low byte of reg 4 is written so an existing panic-location
+/// fingerprint (stored in its upper 24 bits) is preserved.
 pub fn record_fault(fault: Fault) {
-    deepsleep::store_backup_data(fault as u32, REG_LAST_FAULT);
+    let reg = deepsleep::get_backup_data(REG_LAST_FAULT);
+    let packed = (reg & !0xFF) | (fault as u32 & 0xFF);
+    deepsleep::store_backup_data(packed, REG_LAST_FAULT);
     let count = deepsleep::get_backup_data(REG_FAULT_COUNT).wrapping_add(1);
     deepsleep::store_backup_data(count, REG_FAULT_COUNT);
+}
+
+/// Stores a panic-location fingerprint in the upper 24 bits of reg 4.
+///
+/// Reg 4 packs the last fault code in its low byte and a 24-bit fingerprint of
+/// the panic `file:line` (see `crate::panic`) in its upper bits. The fingerprint
+/// survives the reset that follows a panic, so a developer can later recover the
+/// panic location instead of seeing only the generic `Panic` code.
+pub fn record_panic_fingerprint(fp: u32) {
+    let reg = deepsleep::get_backup_data(REG_LAST_FAULT);
+    let packed = (reg & 0xFF) | ((fp & 0xFFFFFF) << 8);
+    deepsleep::store_backup_data(packed, REG_LAST_FAULT);
+}
+
+/// Returns the stored panic-location fingerprint (24 bits), or 0 if none.
+///
+/// Decoded as a 6-digit hex value (e.g. via the `panic` shell command) and
+/// correlated against a build-time mapping of fingerprints to `file:line`.
+pub fn panic_fingerprint() -> u32 {
+    (deepsleep::get_backup_data(REG_LAST_FAULT) >> 8) & 0xFFFFFF
 }
 
 /// Returns the last recorded fault code, or 0 if none.

@@ -16,6 +16,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          channel: '1.97.1'
           targets: thumbv6m-none-eabi
       - uses: Swatinem/rust-cache@v2
       - name: Build firmware
@@ -35,6 +36,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          channel: '1.97.1'
           targets: thumbv6m-none-eabi
           components: clippy
       - uses: Swatinem/rust-cache@v2
@@ -52,6 +54,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          channel: '1.97.1'
       - uses: Swatinem/rust-cache@v2
       - name: Run core tests
         # Override the workspace's embedded target so tests run on the host.
@@ -63,6 +67,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          channel: '1.97.1'
       - uses: Swatinem/rust-cache@v2
       - name: Install GUI system dependencies
         run: |
@@ -82,6 +88,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          channel: '1.97.1'
           targets: thumbv6m-none-eabi
       - uses: Swatinem/rust-cache@v2
       - name: Install binutils
@@ -111,6 +118,22 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          channel: '1.97.1'
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --check
+
+  audit:
+    name: Audit (cargo audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run cargo audit
+        uses: actions-rust-lang/audit@v1
+        # Report-only: pre-existing advisories must not block unrelated changes.
+        # The action self-installs cargo-audit and posts a findings summary to the
+        # step summary; output is still visible even though the step won't fail.
+        continue-on-error: true
+        with:
+          # Don't auto-create GitHub issues for advisories on this run.
+          createIssues: false

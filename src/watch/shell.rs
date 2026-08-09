@@ -59,7 +59,22 @@ impl Shell {
                 uart::puts("\r\n");
             }
             b"help" => {
-                uart::puts("CMDS: time, settime YYMMDDHHMMSS, drift N\r\n");
+                uart::puts("CMDS: time, settime YYMMDDHHMMSS, drift N, panic\r\n");
+            }
+            b"panic" => {
+                let fp = crate::movement::fault::panic_fingerprint();
+                let mut buf = [0u8; 7];
+                buf[0] = b'P';
+                for i in 0..6 {
+                    let nib = ((fp >> (20 - i * 4)) & 0xF) as u8;
+                    buf[i + 1] = if nib < 10 {
+                        b'0' + nib
+                    } else {
+                        b'a' + (nib - 10)
+                    };
+                }
+                uart::puts(core::str::from_utf8(&buf).unwrap_or(""));
+                uart::puts("\r\n");
             }
             _ => {
                 // settime YYMMDDHHMMSS

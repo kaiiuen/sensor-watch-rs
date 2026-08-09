@@ -73,6 +73,10 @@ interface with a debug probe.
 This is the path to use when debugging the firmware itself, as opposed to just
 talking to the running shell.
 
+> For the ready-made scripts, VSCode configs, prerequisites, and how to read a
+> panic fingerprint over the shell, see
+> [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md).
+
 ## Which one for what task
 
 | Task                       | Path             |
@@ -91,3 +95,5 @@ talking to the running shell.
   with `time` / `settime` / `drift N` / `help`) and an SWD probe.
 - Both require hardware and soldering, so this stays a backburner / hardware
   item; it is not needed for normal use of the watch.
+- See [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) for the SWD/probe-rs
+  flash, debugger attach, and panic-fingerprint workflow.

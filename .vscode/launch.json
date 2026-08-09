@@ -1,0 +1,49 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Flash + Debug SAM L22 (probe-rs extension)",
+      "type": "probe-rs",
+      "request": "attach",
+      "chip": "ATSAML22J18A",
+      "core": "cortex-m",
+      "connectUnderReset": true,
+      "flashingConfig": {
+        "flashingEnabled": true,
+        "haltAfterReset": false
+      },
+      "probe": {
+        "protocol": "swd"
+      },
+      "runToMain": true,
+      "env": {
+        "RUST_LOG": "info"
+      }
+    },
+    {
+      "name": "Attach SAM L22 via GDB (cortex-debug)",
+      "type": "cortex-debug",
+      "request": "attach",
+      "servertype": "external",
+      "serverpath": [
+        "probe-rs",
+        "gdb-server",
+        "--chip",
+        "ATSAML22J18A",
+        "--protocol",
+        "swd",
+        "--connect-under-reset",
+        "--port",
+        "3333"
+      ],
+      "gdbTarget": "127.0.0.1:3333",
+      "executable": "${workspaceFolder}/target/thumbv6m-none-eabi/release/sensor-watch",
+      "cwd": "${workspaceFolder}",
+      "toolchainPrefix": "arm-none-eabi",
+      "targetProcessor": "cortex-m0plus",
+      "interface": "swd",
+      "runToEntryPoint": "main",
+      "showDevDebugOutput": "raw"
+    }
+  ]
+}
