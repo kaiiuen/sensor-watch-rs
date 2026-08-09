@@ -750,6 +750,10 @@ pub static mut PENDING_EVENT: Event = Event::Tick;
 /// A fast-tick counter (128 Hz) used for long-press detection.
 pub static mut FAST_TICKS: u16 = 0;
 
+/// Set by the per-minute alarm so the main loop runs the all-face background
+/// task pass (`handle_background_tasks`) once per minute, in main context.
+pub static mut RUN_BACKGROUND_TASKS: bool = false;
+
 /// The serial command shell.
 pub static mut SHELL: watch::shell::Shell = watch::shell::Shell::new_static();
 
@@ -1691,6 +1695,14 @@ pub fn app_loop() {
             handle_scheduled_tasks();
         }
 
+        // Run the per-minute all-face background task pass (advise + wants) if
+        // the minute alarm requested it. Done here in main-loop context, not
+        // the ISR.
+        if RUN_BACKGROUND_TASKS {
+            RUN_BACKGROUND_TASKS = false;
+            handle_background_tasks();
+        }
+
         // React to the single pending event.
         let event = PENDING_EVENT;
         if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
@@ -1776,6 +1788,9 @@ fn cb_alarm_btn_interrupt() {
 
 fn cb_alarm_fired() {
     unsafe {
+        // Ask the main loop to run the per-minute all-face background pass in
+        // main context, and wake with a background event for the active face.
+        RUN_BACKGROUND_TASKS = true;
         PENDING_EVENT = Event::BackgroundTask;
     }
 }
