@@ -2870,6 +2870,10 @@ impl StudioApp {
                 // Alarm button on press.
                 if a_act == SimAction::Press {
                     self.watch.toggle_time_mode();
+                    // Keep the watch settings in sync so the per-frame config
+                    // sync doesn't override the toggle.
+                    self.watch_config.clock_mode_24h =
+                        self.watch.time_mode == watch_sim::TimeMode::H24;
                     self.face_engine.time_mode_24 =
                         self.watch.time_mode == watch_sim::TimeMode::H24;
                     self.face_engine.press(face_sim::FaceButton::Alarm);
@@ -2937,6 +2941,7 @@ impl StudioApp {
             }
             ButtonId::A => {
                 self.watch.toggle_time_mode();
+                self.watch_config.clock_mode_24h = self.watch.time_mode == watch_sim::TimeMode::H24;
                 self.face_engine.time_mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
                 self.face_engine.press(face_sim::FaceButton::Alarm);
             }
