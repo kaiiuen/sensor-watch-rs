@@ -1445,7 +1445,6 @@ pub fn get_temperature() -> f32 {
 /// App init: called once at boot.
 pub fn app_init() {
     unsafe {
-        rtc::freqcorr_write(22, 0);
         MOVEMENT_STATE = MovementState::new();
 
         // Load persisted settings, or apply defaults on first boot.
@@ -1459,6 +1458,10 @@ pub fn app_init() {
             MOVEMENT_STATE.settings.set_to_interval(0);
             MOVEMENT_STATE.settings.set_le_interval(2);
             MOVEMENT_STATE.settings.set_led_duration(1);
+            // First boot: apply a default frequency-correction baseline. On
+            // later boots we do NOT touch FREQCORR, so any crystal calibration
+            // (finetune face / drift correction) survives a reset.
+            rtc::freqcorr_write(22, 0);
         }
         // Remember what we loaded so the dirty-check in save_settings doesn't
         // rewrite identical settings on the first wake.
