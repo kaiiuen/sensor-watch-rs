@@ -2095,10 +2095,11 @@ impl StudioApp {
                     }
                 });
                 ui.weak(
-                    "Choose the board revision you're flashing. Different revisions\n\
-                     (Green, Red/Lite, Blue, Pro) have different hardware, so the\n\
-                     firmware must be built for the right one. The app auto-selects\n\
-                     the board when a watch is detected.",
+                    "Choose the board revision you're flashing. The firmware binary is\n\
+                     the same for all boards; the board type (affecting LED polarity\n\
+                     and buzzer voltage) is set at runtime on the watch itself. This\n\
+                     selection records which board you're flashing and is auto-selected\n\
+                     from the watch when it is detected.",
                 );
                 ui.add_space(8.0);
 
@@ -3528,8 +3529,10 @@ impl StudioApp {
         );
         match settings.to_json() {
             Ok(json) => {
-                let path = std::path::Path::new("settings.json");
-                match std::fs::write(path, json) {
+                // Write next to the executable so it matches where internal
+                // settings are persisted, avoiding split/inconsistent files.
+                let path = persist::settings_path();
+                match std::fs::write(&path, json) {
                     Ok(_) => {
                         self.status = format!("Settings saved to {}", path.display());
                         self.log
@@ -3597,10 +3600,10 @@ impl StudioApp {
         }
     }
 
-    /// Imports settings from a JSON file in the app data directory.
+    /// Imports settings from the settings file next to the executable.
     fn import_settings(&mut self) {
-        let path = std::path::Path::new("settings.json");
-        match std::fs::read_to_string(path) {
+        let path = persist::settings_path();
+        match std::fs::read_to_string(&path) {
             Ok(json) => match settings::AppSettings::from_json(&json) {
                 Ok(s) => {
                     self.apply_settings(s);
@@ -3684,7 +3687,16 @@ impl StudioApp {
                 });
                 if is_watch {
                     let dest = format!("{root}CURRENT.UF2");
-                    if std::fs::write(&dest, &data).is_ok() {
+                    // Write to a temp file first, then rename into place so a
+                    // crash or full-drive mid-write doesn't corrupt the existing
+                    // CURRENT.UF2. Then verify the size on disk matches.
+                    let tmp = format!("{root}.current.uf2.tmp");
+                    let write_ok = std::fs::write(&tmp, &data).is_ok()
+                        && std::fs::metadata(&tmp)
+                            .map(|m| m.len() == data.len() as u64)
+                            .unwrap_or(false)
+                        && std::fs::rename(&tmp, &dest).is_ok();
+                    if write_ok {
                         self.status = format!("Flashed to {dest}");
                         self.log.log(format!("Flashed to {dest}"));
                         self.flash_log.log(format!("Flashed to {dest}"));
@@ -3693,6 +3705,8 @@ impl StudioApp {
                         self.flash_log.log("Fetching NTP time for sync...");
                         return;
                     } else {
+                        // Best-effort cleanup of any leftover temp file.
+                        let _ = std::fs::remove_file(&tmp);
                         self.status = format!("Failed to write to {dest}");
                         self.log_error(&format!("Failed to write to {dest}"));
                         self.flash_log.log(format!("Failed to write to {dest}"));
