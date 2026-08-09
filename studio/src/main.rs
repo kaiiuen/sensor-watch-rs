@@ -666,75 +666,79 @@ impl eframe::App for StudioApp {
         });
 
         // Terminal panel (collapsible) above the footer.
-        egui::TopBottomPanel::bottom("terminal").show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                if ui
-                    .selectable_label(
-                        self.terminal_open,
-                        if self.terminal_open {
-                            "Terminal ▼"
-                        } else {
-                            "Terminal ▲"
-                        },
-                    )
-                    .clicked()
-                {
-                    self.terminal_open = !self.terminal_open;
-                }
-                if ui.small_button("Clear").clicked() {
-                    self.terminal_history.clear();
-                }
-                if ui.small_button("Copy all").clicked() {
-                    let text = self.terminal_history.join("\n");
-                    let _ = ui_copy_to_clipboard(&text);
-                }
-                if ui.small_button("Export").clicked() {
-                    let text = self.terminal_history.join("\n");
-                    let path = std::path::Path::new("terminal.log");
-                    if std::fs::write(path, text).is_ok() {
-                        self.status = format!("Terminal exported to {}", path.display());
-                    }
-                }
-                if ui
-                    .selectable_label(
-                        self.terminal_wrap,
-                        if self.terminal_wrap {
-                            "Wrap"
-                        } else {
-                            "No wrap"
-                        },
-                    )
-                    .clicked()
-                {
-                    self.terminal_wrap = !self.terminal_wrap;
-                }
-            });
-            if self.terminal_open {
-                ui.separator();
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .max_height(120.0)
-                    .show(ui, |ui| {
-                        for line in &self.terminal_history {
-                            if self.terminal_wrap {
-                                ui.label(line);
-                            } else {
-                                ui.monospace(line);
-                            }
-                        }
-                    });
+        egui::TopBottomPanel::bottom("terminal")
+            .resizable(true)
+            .default_height(140.0)
+            .show(ctx, |ui| {
                 ui.horizontal(|ui| {
-                    ui.label(">");
-                    let resp = ui.text_edit_singleline(&mut self.terminal_input);
-                    let submit = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if submit {
-                        let cmd = self.terminal_input.trim().to_string();
-                        self.terminal_input.clear();
-                        self.run_terminal_command(&cmd);
+                    if ui
+                        .selectable_label(
+                            self.terminal_open,
+                            if self.terminal_open {
+                                "Terminal ▼"
+                            } else {
+                                "Terminal ▲"
+                            },
+                        )
+                        .clicked()
+                    {
+                        self.terminal_open = !self.terminal_open;
+                    }
+                    if ui.small_button("Clear").clicked() {
+                        self.terminal_history.clear();
+                    }
+                    if ui.small_button("Copy all").clicked() {
+                        let text = self.terminal_history.join("\n");
+                        let _ = ui_copy_to_clipboard(&text);
+                    }
+                    if ui.small_button("Export").clicked() {
+                        let text = self.terminal_history.join("\n");
+                        let path = std::path::Path::new("terminal.log");
+                        if std::fs::write(path, text).is_ok() {
+                            self.status = format!("Terminal exported to {}", path.display());
+                        }
+                    }
+                    if ui
+                        .selectable_label(
+                            self.terminal_wrap,
+                            if self.terminal_wrap {
+                                "Wrap"
+                            } else {
+                                "No wrap"
+                            },
+                        )
+                        .clicked()
+                    {
+                        self.terminal_wrap = !self.terminal_wrap;
                     }
                 });
-            }
-        });
+                if self.terminal_open {
+                    ui.separator();
+                    egui::ScrollArea::vertical()
+                        .auto_shrink([false, false])
+                        .max_height(120.0)
+                        .show(ui, |ui| {
+                            for line in &self.terminal_history {
+                                if self.terminal_wrap {
+                                    ui.label(line);
+                                } else {
+                                    ui.monospace(line);
+                                }
+                            }
+                        });
+                    ui.horizontal(|ui| {
+                        ui.label(">");
+                        let resp = ui.text_edit_singleline(&mut self.terminal_input);
+                        let submit =
+                            resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                        if submit {
+                            let cmd = self.terminal_input.trim().to_string();
+                            self.terminal_input.clear();
+                            self.run_terminal_command(&cmd);
+                        }
+                    });
+                }
+            });
 
         // Status bar at the bottom.
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
