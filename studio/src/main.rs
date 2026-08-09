@@ -159,6 +159,8 @@ struct StudioApp {
     terminal_input: String,
     /// Whether the terminal panel is expanded.
     terminal_open: bool,
+    /// Whether terminal output wraps to the window width.
+    terminal_wrap: bool,
     /// The terminal output history.
     terminal_history: Vec<String>,
     /// The latest commit message from GitHub (for update notifications).
@@ -402,6 +404,7 @@ impl Default for StudioApp {
             fuzz_iterations: 5000,
             terminal_input: String::new(),
             terminal_open: false,
+            terminal_wrap: false,
             terminal_history: Vec::new(),
             latest_commit: None,
             update_time: None,
@@ -681,6 +684,30 @@ impl eframe::App for StudioApp {
                 if ui.small_button("Clear").clicked() {
                     self.terminal_history.clear();
                 }
+                if ui.small_button("Copy all").clicked() {
+                    let text = self.terminal_history.join("\n");
+                    let _ = ui_copy_to_clipboard(&text);
+                }
+                if ui.small_button("Export").clicked() {
+                    let text = self.terminal_history.join("\n");
+                    let path = std::path::Path::new("terminal.log");
+                    if std::fs::write(path, text).is_ok() {
+                        self.status = format!("Terminal exported to {}", path.display());
+                    }
+                }
+                if ui
+                    .selectable_label(
+                        self.terminal_wrap,
+                        if self.terminal_wrap {
+                            "Wrap"
+                        } else {
+                            "No wrap"
+                        },
+                    )
+                    .clicked()
+                {
+                    self.terminal_wrap = !self.terminal_wrap;
+                }
             });
             if self.terminal_open {
                 ui.separator();
@@ -689,7 +716,11 @@ impl eframe::App for StudioApp {
                     .max_height(120.0)
                     .show(ui, |ui| {
                         for line in &self.terminal_history {
-                            ui.monospace(line);
+                            if self.terminal_wrap {
+                                ui.label(line);
+                            } else {
+                                ui.monospace(line);
+                            }
                         }
                     });
                 ui.horizontal(|ui| {
