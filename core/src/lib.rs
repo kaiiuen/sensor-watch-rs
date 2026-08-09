@@ -12,6 +12,14 @@ extern crate alloc;
 
 pub mod datetime;
 pub mod ecc;
+// The hardware seam: the `Hw` trait, reference mock, and the reusable
+// `Event`/`Button`/`Indicator` types used by face logic.
+pub mod mock_hw;
 pub mod settings;
 pub mod uf2;
 pub mod utility;
+
+// Proof-of-concept: runs a verbatim copy of the firmware `simple_clock` face
+// against the mock `Hw` on the host (see the module docs for the extension
+// plan).
+pub mod hostsim;

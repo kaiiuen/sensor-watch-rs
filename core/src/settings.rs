@@ -54,6 +54,14 @@ impl Settings {
     pub fn alarm_enabled(self) -> bool {
         (self.reg >> 27) & 0x1 != 0
     }
+    /// Whether the clock shows seconds (false = power-saving, wake once/min).
+    pub fn show_seconds(self) -> bool {
+        (self.reg >> 28) & 0x1 != 0
+    }
+    /// Sets whether the clock shows seconds.
+    pub fn set_show_seconds(&mut self, v: bool) {
+        self.reg = (self.reg & !(0x1 << 28)) | ((v as u32) << 28);
+    }
     /// Whether pressing a button emits a sound.
     pub fn button_should_sound(self) -> bool {
         self.reg & 0x1 != 0
