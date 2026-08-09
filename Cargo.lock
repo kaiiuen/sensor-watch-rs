@@ -3090,6 +3090,7 @@ dependencies = [
  "eframe",
  "egui",
  "resvg",
+ "sensor-watch",
  "sensor-watch-core",
  "serde",
  "serde_json",

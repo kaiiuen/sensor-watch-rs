@@ -5,6 +5,12 @@ edition = "2021"
 description = "Firmware Studio — a GUI companion app for the Sensor-Watch firmware"
 license = "MIT OR Apache-2.0"
 
+[features]
+# Enables the Simulator to run REAL firmware faces through the host `Hw` seam.
+# Default-off: the seam requires the firmware host lib to compile as a host
+# dependency first (see `src/real_face.rs`).
+real-faces = ["dep:sensor-watch"]
+
 [dependencies]
 # GUI framework (pure Rust, cross-platform)
 eframe = "0.27"
@@ -16,6 +22,13 @@ usvg = "0.42"
 
 # Firmware logic (UF2 encoding, date math, settings) — reused from the firmware
 sensor-watch-core = { path = "../core" }
+# The firmware crate's host [lib] (`sensor_watch`, feature `hostmock`), used to
+# render faces through the real `Hw` seam (see `src/real_face.rs`), falling back
+# to `face_sim` for faces not yet migrated. It is an *opt-in* feature because the
+# firmware host lib is not yet a clean host dependency (it currently drags in an
+# incomplete ALSE clock backend in `src/watch/log.rs`); enabling it requires the
+# firmware seam to compile as a host lib. See the module docs in `real_face.rs`.
+sensor-watch = { path = "../", features = ["hostmock"], optional = true }
 
 # Settings save/export (serialization)
 serde = { version = "1", features = ["derive"] }

@@ -19,6 +19,7 @@ mod modules;
 mod ntp;
 mod persist;
 mod presets;
+mod real_face;
 mod settings;
 mod sysstats;
 mod theme;
@@ -151,6 +152,12 @@ struct StudioApp {
     held_button: Option<ButtonId>,
     /// The stateful watch-face simulation engine.
     face_engine: face_sim::FaceEngine,
+    /// The optional REAL face running through the firmware `Hw` seam. Only
+    /// present for faces that have been migrated into the seam; otherwise the
+    /// simulator falls back to `face_engine`.
+    real_face: Option<real_face::RealFace>,
+    /// Whether the last rendered frame used the real-face seam (vs face_sim).
+    last_render_used_real: bool,
     /// Accumulator for advancing the face state once per second.
     face_tick_accum: f32,
     /// The drift calibration session.
@@ -430,6 +437,8 @@ impl Default for StudioApp {
             sim_dt: 0.0,
             held_button: None,
             face_engine: face_sim::FaceEngine::new("SIMPLE_CLOCK"),
+            real_face: None,
+            last_render_used_real: false,
             face_tick_accum: 0.0,
             drift_session: drift::DriftSession::new(),
             fuzz_iterations: 5000,
@@ -3074,6 +3083,14 @@ impl StudioApp {
             ui.separator();
             ui.label(format!("Engine face: {}", self.face_engine.face_name));
             ui.separator();
+            // Show which render engine produced the current frame: the REAL
+            // firmware seam when available, else the face_sim fallback.
+            ui.label(if self.real_face.is_some() {
+                "Render: real face (firmware seam)".to_string()
+            } else {
+                "Render: face_sim fallback".to_string()
+            });
+            ui.separator();
             // Fuzz the current face.
             if ui
                 .button("Fuzz face")
@@ -3255,6 +3272,18 @@ impl StudioApp {
         };
         if self.face_engine.face_name != face_name {
             self.face_engine = face_sim::FaceEngine::new(&face_name);
+            // (Re)build the real-face engine for the new face. Faces that have
+            // not yet been migrated through the firmware seam stay `None` and
+            // the simulator falls back to `face_engine` below.
+            if self
+                .real_face
+                .as_ref()
+                .map(|r| r.face_name())
+                .unwrap_or(&face_name)
+                != face_name
+            {
+                self.real_face = real_face::RealFace::new(&face_name);
+            }
         }
         // Advance the face state by one second per real second.
         self.face_tick_accum += self.sim_dt;
@@ -3275,8 +3304,55 @@ impl StudioApp {
             second: t_second,
             weekday: t_weekday,
         };
-        let fd = self.face_engine.render(&sim_time);
+
+        // Prefer the REAL face when available; that keeps what the Simulator
+        // renders in lockstep with the firmware (no drift from `face_sim`). When
+        // a face has not yet been migrated into the seam, fall back to the
+        // hand-written engine (and log the fallback).
+        let mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
+        let used_real = if let Some(real) = self.real_face.as_mut() {
+            // `t_year` is signed from the watch; clamp to a sane wall-clock year
+            // for the firmware's 2020-2083 range before handing it to the seam.
+            real.set_time(
+                t_year.clamp(2020, 2083) as u32,
+                t_month,
+                t_day,
+                t_hour,
+                t_minute,
+                t_second,
+            );
+            real.activate(mode_24);
+            true
+        } else {
+            false
+        };
+        let fd = if used_real {
+            let snap = self.real_face.as_ref().unwrap().snapshot();
+            face_sim::FaceDisplay {
+                chars: snap.chars,
+                colon: snap.colon,
+                signal: snap.signal,
+                bell: snap.bell,
+                pm: snap.pm,
+                h24: snap.h24,
+                lap: snap.lap,
+            }
+        } else {
+            self.face_engine.render(&sim_time)
+        };
         let mut svg_display = watch_display::face_display_to_svg(&fd);
+        // Log which render path produced this frame so the user can tell when a
+        // face is running the REAL firmware seam vs. the face_sim fallback. Use
+        // the tail of the log (the message is idempotent) and only append on a
+        // path change or spawn so the Simulator debug log does not flood.
+        if self.last_render_used_real != used_real {
+            self.last_render_used_real = used_real;
+            self.sim_log.log(if used_real {
+                format!("Render path: REAL face via seam ({face_name})")
+            } else {
+                format!("Render path: face_sim fallback ({face_name})")
+            });
+        }
         // Apply the watch's light and CASIO-override state, which the face
         // engine does not model.
         svg_display.light = self.watch.light;
@@ -3420,6 +3496,9 @@ impl StudioApp {
                     SimAction::Press => {
                         self.watch.light = true;
                         self.face_engine.press(face_sim::FaceButton::Light);
+                        if let Some(real) = self.real_face.as_mut() {
+                            real.press(true, false);
+                        }
                         self.sim_log.log("L: press (Light)".to_string());
                     }
                     SimAction::Release => {
@@ -3449,6 +3528,9 @@ impl StudioApp {
                     self.face_engine.time_mode_24 =
                         self.watch.time_mode == watch_sim::TimeMode::H24;
                     self.face_engine.press(face_sim::FaceButton::Alarm);
+                    if let Some(real) = self.real_face.as_mut() {
+                        real.press(false, true);
+                    }
                     self.sim_log
                         .log(if self.watch.time_mode == watch_sim::TimeMode::H24 {
                             "A: press (12/24 -> 24h, Alarm)".to_string()
@@ -3509,6 +3591,9 @@ impl StudioApp {
             ButtonId::L => {
                 self.watch.light = true;
                 self.face_engine.press(face_sim::FaceButton::Light);
+                if let Some(real) = self.real_face.as_mut() {
+                    real.press(true, false);
+                }
                 self.watch.light = false;
             }
             ButtonId::C => {
@@ -3522,6 +3607,9 @@ impl StudioApp {
                 self.watch_config.clock_mode_24h = self.watch.time_mode == watch_sim::TimeMode::H24;
                 self.face_engine.time_mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
                 self.face_engine.press(face_sim::FaceButton::Alarm);
+                if let Some(real) = self.real_face.as_mut() {
+                    real.press(false, true);
+                }
             }
         }
     }

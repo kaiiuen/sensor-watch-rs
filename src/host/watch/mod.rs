@@ -12,10 +12,13 @@
 
 pub mod adc;
 pub mod buzzer;
+pub mod deepsleep;
 pub mod extint;
 pub mod gpio;
+pub mod led;
 pub mod rtc;
 pub mod slcd;
+pub mod storage;
 pub mod utility;
 
 /// The `Hw`-seam plumbing: [`install_hw`](seam::install_hw) + [`hw`](seam::hw).
@@ -24,4 +27,3 @@ pub mod seam;
 // Re-export the shared date/time type so callers (and real face code) can use it
 // uniformly across target and host.
 pub use sensor_watch_core::datetime::DateTime;
-

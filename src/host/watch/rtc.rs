@@ -14,7 +14,18 @@ pub fn get_date_time() -> DateTime {
     seam::hw().get_date_time()
 }
 
-/// Host: setting the RTC is not (yet) represented on the `Hw` seam; calls are
-/// accepted and ignored on host. Add `set_date_time` to the seam when a face
-/// needs it (currently none in the host-compilable subset does).
-pub fn set_date_time(_date_time: DateTime) {}
+/// Host: sets the RTC date/time by forwarding to the `Hw::set_date_time` hook
+/// (the mock records it as `now`).
+pub fn set_date_time(date_time: DateTime) {
+    seam::hw().set_date_time(date_time);
+}
+
+/// Host: writes the frequency-correction register via the `Hw` seam (no-op).
+pub fn freqcorr_write(value: i16, sign: i16) {
+    seam::hw().freqcorr_write(value, sign);
+}
+
+/// Host: reads the frequency-correction register via the `Hw` seam (0).
+pub fn freqcorr_read() -> i16 {
+    seam::hw().freqcorr_read()
+}

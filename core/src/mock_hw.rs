@@ -117,6 +117,42 @@ pub trait Hw {
     fn set_tick_rate(&mut self, _show_seconds: bool) {}
     fn play_signal(&mut self) {}
     fn default_loop_handler(&mut self, _event: Event, _settings: &Settings) {}
+    /// Turns off the bi-color LED (`watch::led::set_led_off`).
+    fn set_led_off(&mut self) {}
+    /// Configures a GPIO pin's direction (`watch::gpio::set_pin_direction`).
+    /// `out` is true for `Direction::Out`, false otherwise; host shims translate.
+    fn set_pin_direction(&mut self, _pin: (u8, u8), _out: bool) {}
+    /// Sets a GPIO pin's output level (`watch::gpio::set_pin_level`).
+    fn set_pin_level(&mut self, _pin: (u8, u8), _level: bool) {}
+    /// Reads a GPIO pin's level for a non-button (e.g. flashlight output) pin
+    /// (`watch::gpio::get_pin_level`, for pins outside the three buttons).
+    fn read_pin_level(&mut self, _pin: (u8, u8)) -> bool {
+        false
+    }
+    /// Sets the RTC date/time (`watch::rtc::set_date_time`).
+    fn set_date_time(&mut self, _dt: DateTime) {}
+    /// Clears the entire LCD display (`watch::slcd::clear_display`).
+    fn clear_display(&mut self) {}
+    /// Sets the bi-color LED to a raw (red, green) brightness pair
+    /// (`watch::led::set_led_color`); red/green/yellow setters all funnel here.
+    fn set_led_color(&mut self, _red: u8, _green: u8) {}
+    /// Reads an RTC backup register (`watch::deepsleep::get_backup_data`).
+    fn get_backup_data(&mut self, _reg: u8) -> u32 {
+        0
+    }
+    /// Writes an RTC backup register (`watch::deepsleep::store_backup_data`).
+    fn store_backup_data(&mut self, _data: u32, _reg: u8) {}
+    /// Clears all five indicator segments at once (`watch::slcd::clear_all_indicators`).
+    fn clear_all_indicators(&mut self) {}
+    /// Starts the tick (colon) animation for `duration` ms
+    /// (`watch::slcd::start_tick_animation`).
+    fn start_tick_animation(&mut self, _duration: u32) {}
+    /// Writes the RTC frequency-correction register (`watch::rtc::freqcorr_write`).
+    fn freqcorr_write(&mut self, _value: i16, _sign: i16) {}
+    /// Reads the RTC frequency-correction register (`watch::rtc::freqcorr_read`).
+    fn freqcorr_read(&mut self) -> i16 {
+        0
+    }
 }
 
 /// A reference display-level mock of the hardware.
@@ -132,8 +168,11 @@ pub struct MockHw {
     pub colon: bool,
     /// Indicator flags, indexed by [`Indicator`].
     pub indicators: [bool; 5],
-    /// Segment shadow for one-off `set_pixel` / `clear_pixel` writes.
+    /// The segment shadow for one-off `set_pixel` / `clear_pixel` writes.
     pub segments: BTreeMap<(u8, u8), bool>,
+    /// GPIO output/level shadow for non-button pins (e.g. the flashlight face's
+    /// A2 output), keyed by the `(port, pin)` tuple.
+    pub pin_levels: BTreeMap<(u8, u8), bool>,
     /// What `get_date_time()` returns.
     pub now: DateTime,
     /// What `get_button_level()` returns per button.
@@ -146,6 +185,10 @@ pub struct MockHw {
     pub display_string_calls: u64,
     /// Number of `get_date_time` calls.
     pub rtc_reads: u64,
+    /// The 8 RTC backup registers, indexed 0..8 (`deepsleep::get/store_backup_data`).
+    pub backup: [u32; 8],
+    /// The last LED color written via `set_led_color` as (red, green).
+    pub led_color: (u8, u8),
 }
 
 impl Default for MockHw {
@@ -155,6 +198,7 @@ impl Default for MockHw {
             colon: false,
             indicators: [false; 5],
             segments: BTreeMap::new(),
+            pin_levels: BTreeMap::new(),
             now: DateTime {
                 second: 0,
                 minute: 0,
@@ -168,6 +212,8 @@ impl Default for MockHw {
             tick_animation: false,
             display_string_calls: 0,
             rtc_reads: 0,
+            backup: [0; 8],
+            led_color: (0, 0),
         }
     }
 }
@@ -183,6 +229,13 @@ impl MockHw {
         self.indicators[i as usize]
     }
 
+    /// The current level of a non-button GPIO pin (`true` = high), as written by
+    /// `set_pin_level`. Defaults to `false` (e.g. for the flashlight face when it
+    /// has not yet toggled A2 on).
+    pub fn pin_level(&self, pin: (u8, u8)) -> bool {
+        *self.pin_levels.get(&pin).unwrap_or(&false)
+    }
+
     /// The current LCD text as a `String`, mapping blank cells (space or the
     /// trailing NUL bytes the firmware's `write_*` leaves behind) to nothing,
     /// so assertions read naturally (e.g. `"FR06150400"`). Note the firmware
@@ -196,6 +249,27 @@ impl MockHw {
     /// Seeds the simulated RTC clock.
     pub fn set_time(&mut self, dt: DateTime) {
         self.now = dt;
+    }
+
+    /// Clears every LCD character slot to a blank, matching `slcd::clear_display`.
+    pub fn clear_display(&mut self) {
+        self.chars.fill(' ');
+    }
+
+    /// Returns the value of RTC backup register `reg` (0-7).
+    pub fn backup(&self, reg: u8) -> u32 {
+        if (reg as usize) < self.backup.len() {
+            self.backup[reg as usize]
+        } else {
+            0
+        }
+    }
+
+    /// Seeds RTC backup register `reg` (0-7) with `data`.
+    pub fn set_backup(&mut self, reg: u8, data: u32) {
+        if (reg as usize) < self.backup.len() {
+            self.backup[reg as usize] = data;
+        }
     }
 }
 
@@ -242,6 +316,39 @@ impl Hw for MockHw {
     }
     fn get_vcc_voltage(&mut self) -> u16 {
         self.vcc_mv
+    }
+    fn set_led_off(&mut self) {}
+    fn set_pin_direction(&mut self, _pin: (u8, u8), _out: bool) {}
+    fn set_pin_level(&mut self, pin: (u8, u8), level: bool) {
+        self.pin_levels.insert(pin, level);
+    }
+    fn read_pin_level(&mut self, pin: (u8, u8)) -> bool {
+        self.pin_level(pin)
+    }
+    fn set_date_time(&mut self, dt: DateTime) {
+        self.now = dt;
+    }
+    fn clear_display(&mut self) {
+        MockHw::clear_display(self);
+    }
+    fn set_led_color(&mut self, red: u8, green: u8) {
+        self.led_color = (red, green);
+    }
+    fn get_backup_data(&mut self, reg: u8) -> u32 {
+        MockHw::backup(self, reg)
+    }
+    fn store_backup_data(&mut self, data: u32, reg: u8) {
+        MockHw::set_backup(self, reg, data);
+    }
+    fn clear_all_indicators(&mut self) {
+        self.indicators.fill(false);
+    }
+    fn start_tick_animation(&mut self, _duration: u32) {
+        self.tick_animation = true;
+    }
+    fn freqcorr_write(&mut self, _value: i16, _sign: i16) {}
+    fn freqcorr_read(&mut self) -> i16 {
+        0
     }
 }
 
