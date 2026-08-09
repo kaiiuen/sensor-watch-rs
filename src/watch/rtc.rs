@@ -230,6 +230,10 @@ pub fn disable_alarm_callback() {
 /// The number of compare-callback slots.
 pub const N_COMP_CB: usize = 8;
 
+/// The compare-callback slot reserved for the minute-wake timer, so faces and
+/// other scheduled work (slots 0-6) never collide with it.
+pub const MINUTE_WAKE_INDEX: usize = N_COMP_CB - 1;
+
 /// A single compare-callback slot.
 struct CompCallback {
     target: u32,

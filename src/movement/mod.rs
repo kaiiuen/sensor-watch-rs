@@ -1471,20 +1471,40 @@ pub fn app_init() {
 /// Sets the wake rate based on whether seconds are displayed.
 ///
 /// - Seconds shown: wake once per second (1 Hz tick).
-/// - Seconds hidden: wake once per minute (power-saving). The RTC alarm
-///   fires at :00 each minute to advance the clock.
+/// - Seconds hidden: wake once per minute (power-saving). A recurring RTC
+///   compare callback fires at :00 each minute to advance the clock. This uses
+///   the compare-callback queue (a dedicated mechanism), not the ALARM0
+///   register, so it does not clobber the per-minute background alarm callback.
 pub fn set_tick_rate(show_seconds: bool) {
     // Always keep the 128 Hz fast tick for long-press detection.
     if show_seconds {
+        rtc::disable_comp_callback(rtc::MINUTE_WAKE_INDEX);
         rtc::register_tick_callback(cb_tick);
     } else {
         rtc::disable_tick_callback();
-        // Schedule a wake at the top of each minute.
-        let now = rtc::get_date_time();
-        let mut target = now;
-        target.second = 0;
-        target.minute = (target.minute + 1) % 60;
-        rtc::schedule_wakeup(cb_tick, target);
+        arm_minute_wake();
+    }
+}
+
+/// The compare-callback slot reserved for the minute-wake timer.
+const MINUTE_WAKE_INDEX: usize = 7;
+
+/// Arms a one-shot wake at the top of the next minute via the compare queue.
+fn arm_minute_wake() {
+    let now = rtc::get_date_time();
+    let mut target = now;
+    target.second = 0;
+    target.minute = (target.minute + 1) % 60;
+    rtc::register_comp_callback(cb_minute_tick, target.to_reg(), MINUTE_WAKE_INDEX);
+}
+
+/// The recurring minute tick: advances the clock and re-arms for the next
+/// minute.
+pub fn cb_minute_tick() {
+    unsafe {
+        PENDING_EVENT = Event::Tick;
+        fault::check_heartbeat();
+        arm_minute_wake();
     }
 }
 
