@@ -79,6 +79,32 @@ but has not yet been validated on silicon. This plan closes that gap.
 | Accelerometer (if fitted) | Tap the watch | SingleTap/DoubleTap events fire; raise-to-wake shows seconds |
 | I2C | Read the accelerometer | No bus hangs; pins float in standby |
 
+## 8. Backup Register Allocation (Known Issue)
+
+Risk: the SAM L22 has only **8 RTC backup registers**, and several always-on
+subsystems currently allocate overlapping registers, which would corrupt each
+other's persisted data. Before deployment this must be reconciled into a single
+authoritative map. The overlap as of this writing:
+
+| Reg | Settings | Stats | Fault | Board | Storage | Battery/Solar |
+|-----|----------|-------|-------|-------|---------|---------------|
+| 0   | settings |       |       |       |         |               |
+| 1   |          |       |       |       |         | solar location |
+| 2   |          |       |       |       |         |               |
+| 3   |          |       | heartbeat |    |         | battery        |
+| 4   |          | btn_light | last_fault |  |       |               |
+| 5   |          | btn_mode | fault_count |  |       |               |
+| 6   |          | btn_alarm| boot_time/ |     |       |               |
+|     |          |          | reset_reason |    |       |               |
+| 7   |          | buzzer  | boot_count | board  | wear_row |           |
+
+Faces also claim registers starting at 4 via `claim_backup_register`, colliding
+with the system data above. This is the single most important thing to fix
+before fielding the firmware. Do not rely on statistics, fault codes, battery
+type, board config, or the wear cursor persisting correctly until this is
+resolved with a dedicated allocation (e.g. statically assign regs 0-7 and pack
+or drop low-value counters).
+
 ## Reporting
 
 For each test, record: date, board revision, firmware commit, result (pass/fail),
