@@ -13,8 +13,17 @@ use super::theme::Theme;
 use super::watch_config::WatchConfig;
 
 /// The serializable app configuration.
+///
+/// Every field carries a `#[serde(default)]` so that a JSON file from an older
+/// or newer version, or one missing a field, still loads by filling in defaults
+/// instead of failing the whole load.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
+    /// Schema version, bumped on backward-incompatible changes so future
+    /// migrations are possible. Old files without it default to 1.
+    #[serde(default = "default_schema_version")]
+    pub schema_version: u32,
     /// The selected language.
     pub language: String,
     /// The selected theme.
@@ -40,6 +49,9 @@ pub struct AppSettings {
     /// Defaults to a writable user folder when running as a standalone exe.
     #[serde(default = "default_output_dir")]
     pub output_dir: String,
+    /// Whether the first-run welcome overlay has been dismissed.
+    #[serde(default)]
+    pub first_run: bool,
 }
 
 impl AppSettings {
@@ -58,8 +70,10 @@ impl AppSettings {
         preset_height: f32,
         modules: &ModuleManager,
         output_dir: String,
+        first_run: bool,
     ) -> Self {
         AppSettings {
+            schema_version: 1,
             language: language.name().to_string(),
             theme: theme.name().to_string(),
             presets: presets.clone(),
@@ -72,6 +86,7 @@ impl AppSettings {
             preset_height,
             modules: modules.clone(),
             output_dir,
+            first_run,
         }
     }
 
@@ -84,6 +99,35 @@ impl AppSettings {
     pub fn from_json(json: &str) -> Result<Self, String> {
         serde_json::from_str(json).map_err(|e| e.to_string())
     }
+}
+
+/// Defaults used when a field is missing from a JSON file (or the file is
+/// absent entirely). Kept simple: empty strings and zero-values, since the app
+/// populates real defaults from the running UI state before serializing.
+impl Default for AppSettings {
+    fn default() -> Self {
+        AppSettings {
+            schema_version: 1,
+            language: String::new(),
+            theme: String::new(),
+            presets: PresetManager::new(),
+            ntp_server: 0,
+            ntp_servers: Vec::new(),
+            sim_scale: 1.0,
+            watch_config: WatchConfig::default(),
+            text_size: 1,
+            catalog_width: 0.0,
+            preset_height: 0.0,
+            modules: ModuleManager::default(),
+            output_dir: default_output_dir(),
+            first_run: false,
+        }
+    }
+}
+
+/// The default schema version for settings that predate schema tracking.
+pub fn default_schema_version() -> u32 {
+    1
 }
 
 /// The default output directory for built artifacts: `<User Documents>/FirmwareStudio`.

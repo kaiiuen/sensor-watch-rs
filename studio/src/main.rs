@@ -207,6 +207,12 @@ struct StudioApp {
     faces_log: debug::DebugLog,
     /// Dedicated log for the Simulator tab.
     sim_log: debug::DebugLog,
+    /// A pending destructive action awaiting confirmation in a modal dialog.
+    pending_confirm: Option<(String, ConfirmKind)>,
+    /// Whether the first-run welcome overlay should be shown.
+    first_run: bool,
+    /// Whether settings have been persisted on exit (guards against repeats).
+    saved_on_exit: bool,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -312,6 +318,15 @@ enum ButtonId {
     L,
     C,
     A,
+}
+
+/// A destructive action awaiting confirmation in a modal dialog.
+#[derive(Clone, PartialEq, Eq, Debug)]
+enum ConfirmKind {
+    DeletePreset(String),
+    DeleteFaceFromPreset(usize),
+    DeleteFaceFile(String),
+    RemoveModule(String),
 }
 
 impl Panel {
@@ -431,6 +446,9 @@ impl Default for StudioApp {
             pending_update: None,
             beep_armed: false,
             beep_target: 0,
+            pending_confirm: None,
+            first_run: true,
+            saved_on_exit: false,
         };
         app.log.log("Firmware Studio starting");
         app.last_uf2 = build::last_uf2(std::path::Path::new(&app.output_dir));
@@ -497,6 +515,13 @@ impl eframe::App for StudioApp {
         // Keep the UI animating even when the cursor leaves the window, so the
         // clock and sim keep running instead of freezing.
         ctx.request_repaint();
+
+        // Persist settings exactly once when the window is about to close, so
+        // presets, watch settings, panel sizes, etc. survive the session.
+        if ctx.input(|i| i.viewport().close_requested()) && !self.saved_on_exit {
+            self.saved_on_exit = true;
+            self.save_settings_internal();
+        }
 
         // If a build finished, collect its result.
         if let Some(handle) = self.pending_build.take() {
@@ -817,6 +842,92 @@ impl eframe::App for StudioApp {
             Panel::Bugs => self.bugs(ui),
             Panel::Settings => self.settings(ui),
         });
+
+        // One-time first-run welcome overlay.
+        if self.first_run {
+            egui::Window::new("Welcome")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.heading("Welcome to Firmware Studio 👋");
+                    ui.add_space(6.0);
+                    ui.label("Here's how to get started:");
+                    ui.add_space(6.0);
+                    for step in [
+                        "1. Add watch faces in the Watch Faces tab",
+                        "2. Try them in the Simulator tab",
+                        "3. Click Build & Flash, then Build UF2",
+                        "4. Plug the watch into USB in bootloader mode and click Copy to watch",
+                    ] {
+                        ui.label(step);
+                    }
+                    ui.add_space(10.0);
+                    if ui.button("Got it — Start using").clicked() {
+                        self.first_run = false;
+                        self.save_settings_internal();
+                    }
+                });
+        }
+
+        // Confirmation modal for destructive actions. When a destructive button is
+        // clicked it sets `pending_confirm` instead of acting immediately; this
+        // dialog asks before proceeding and runs the action only on confirm.
+        if let Some((message, kind)) = self.pending_confirm.clone() {
+            let mut confirm = false;
+            let mut cancel = false;
+            egui::Window::new("Confirm")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(&message);
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            cancel = true;
+                        }
+                        if ui.button("Confirm").clicked() {
+                            confirm = true;
+                        }
+                    });
+                });
+            if cancel {
+                self.pending_confirm = None;
+            }
+            if confirm {
+                self.pending_confirm = None;
+                match kind {
+                    ConfirmKind::DeletePreset(name) => {
+                        self.presets.delete_active();
+                        self.faces_log.log(format!("Deleted preset {name}"));
+                    }
+                    ConfirmKind::DeleteFaceFromPreset(index) => {
+                        let face = self
+                            .presets
+                            .active_faces()
+                            .get(index)
+                            .cloned()
+                            .unwrap_or_default();
+                        self.presets.remove_face(index);
+                        self.faces_log
+                            .log(format!("Removed {face} from active preset"));
+                    }
+                    ConfirmKind::DeleteFaceFile(name) => match editor::delete_face(&name) {
+                        Ok(_) => {
+                            self.log.log(format!("Deleted face {name}"));
+                            self.face_list = faces::discover_faces();
+                        }
+                        Err(e) => self.log.log(format!("Delete failed: {e}")),
+                    },
+                    ConfirmKind::RemoveModule(name) => {
+                        self.modules.remove(&name);
+                        self.log.log(format!("Removed module {name}"));
+                        self.save_settings_internal();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -1287,22 +1398,41 @@ impl StudioApp {
             }
             ui.separator();
             ui.add(egui::TextEdit::singleline(&mut self.new_preset_name).desired_width(150.0));
-            if ui.button("+").clicked() {
+            if ui
+                .button("+")
+                .on_hover_text("Add a new preset with the typed name")
+                .clicked()
+            {
                 self.presets.add_preset(&self.new_preset_name);
                 self.faces_log
                     .log(format!("Added preset {}", self.new_preset_name));
                 self.new_preset_name.clear();
             }
-            if ui.button("Rename").clicked() {
+            if ui
+                .button("Rename")
+                .on_hover_text("Rename the active preset to the typed name")
+                .clicked()
+            {
                 let name = self.new_preset_name.clone();
                 if !name.is_empty() {
                     self.presets.rename_active(&name);
                     self.new_preset_name.clear();
                 }
             }
-            if ui.button("Delete").clicked() {
-                self.presets.delete_active();
-                self.faces_log.log("Deleted active preset");
+            if ui
+                .button("Delete")
+                .on_hover_text("Delete the active preset and its face list")
+                .clicked()
+            {
+                let active = self
+                    .presets
+                    .active
+                    .min(self.presets.presets.len().saturating_sub(1));
+                let name = self.presets.presets[active].name.clone();
+                self.pending_confirm = Some((
+                    format!("Delete preset '{name}'? This removes its face list."),
+                    ConfirmKind::DeletePreset(name),
+                ));
             }
         });
         ui.separator();
@@ -1335,10 +1465,9 @@ impl StudioApp {
                         ui.horizontal(|ui| {
                             ui.label("Search:");
                             ui.text_edit_singleline(&mut self.catalog_search);
-                            if !self.catalog_search.is_empty()
-                                && ui.small_button("x").clicked() {
-                                    self.catalog_search.clear();
-                                }
+                            if !self.catalog_search.is_empty() && ui.small_button("x").clicked() {
+                                self.catalog_search.clear();
+                            }
                             ui.separator();
                             ui.label("Category:");
                             egui::ComboBox::from_id_source("catalog_cat")
@@ -1423,7 +1552,11 @@ impl StudioApp {
                                                 self.drag_catalog_face = None;
                                             }
                                             ui.label(&face.description);
-                                            if ui.small_button("+").clicked() {
+                                            if ui
+                                                .small_button("+")
+                                                .on_hover_text("Add this face to the active preset")
+                                                .clicked()
+                                            {
                                                 self.presets.add_face(&face.name);
                                                 self.log
                                                     .log(format!("Added {} to preset", face.name));
@@ -1504,14 +1637,32 @@ impl StudioApp {
                                         {
                                             drop_target = Some(i);
                                         }
-                                        if ui.small_button("Up").clicked() {
+                                        if ui
+                                            .small_button("Up")
+                                            .on_hover_text("Move this face up in the preset")
+                                            .clicked()
+                                        {
                                             self.presets.move_face_up(i);
                                         }
-                                        if ui.small_button("Dn").clicked() {
+                                        if ui
+                                            .small_button("Dn")
+                                            .on_hover_text("Move this face down in the preset")
+                                            .clicked()
+                                        {
                                             self.presets.move_face_down(i);
                                         }
-                                        if ui.small_button("Del").clicked() {
-                                            self.presets.remove_face(i);
+                                        if ui
+                                            .small_button("Del")
+                                            .on_hover_text(
+                                                "Remove this face from the active preset",
+                                            )
+                                            .clicked()
+                                        {
+                                            let face = self.presets.active_faces()[i].clone();
+                                            self.pending_confirm = Some((
+                                                format!("Remove '{face}' from the active preset?"),
+                                                ConfirmKind::DeleteFaceFromPreset(i),
+                                            ));
                                         }
                                         ui.end_row();
                                     }
@@ -2014,7 +2165,11 @@ impl StudioApp {
         ui.horizontal(|ui| {
             ui.label("Face name (snake_case):");
             ui.text_edit_singleline(&mut self.editor_name);
-            if ui.button("Generate from template").clicked() {
+            if ui
+                .button("Generate from template")
+                .on_hover_text("Fill the editor with a ready-made watch face")
+                .clicked()
+            {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() {
                     let source = editor::generate_face(
@@ -2036,7 +2191,11 @@ impl StudioApp {
 
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Save face").clicked() {
+            if ui
+                .button("Save face")
+                .on_hover_text("Save the editor source to the firmware project")
+                .clicked()
+            {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() && !self.editor_source.is_empty() {
                     match editor::write_face(&name, &self.editor_source) {
@@ -2048,7 +2207,11 @@ impl StudioApp {
                     }
                 }
             }
-            if ui.button("Load face").clicked() {
+            if ui
+                .button("Load face")
+                .on_hover_text("Load the face source into the editor")
+                .clicked()
+            {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() {
                     match editor::read_face(&name) {
@@ -2057,16 +2220,17 @@ impl StudioApp {
                     }
                 }
             }
-            if ui.button("Delete face").clicked() {
+            if ui
+                .button("Delete face")
+                .on_hover_text("Delete the face file from the firmware project")
+                .clicked()
+            {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() {
-                    match editor::delete_face(&name) {
-                        Ok(_) => {
-                            self.log.log(format!("Deleted face {name}"));
-                            self.face_list = faces::discover_faces();
-                        }
-                        Err(e) => self.log.log(format!("Delete failed: {e}")),
-                    }
+                    self.pending_confirm = Some((
+                        format!("Delete face '{name}'? This deletes the file from the firmware project."),
+                        ConfirmKind::DeleteFaceFile(name),
+                    ));
                 }
             }
         });
@@ -2128,7 +2292,11 @@ impl StudioApp {
                 if self.building {
                     ui.spinner();
                     ui.label(tr(self.language, Key::Building));
-                } else if ui.button(tr(self.language, Key::BuildUf2)).clicked() {
+                } else if ui
+                    .button(tr(self.language, Key::BuildUf2))
+                    .on_hover_text("Compile the firmware into a .uf2 file for the watch")
+                    .clicked()
+                {
                     self.building = true;
                     self.build_message = tr(self.language, Key::Building).to_string();
                     self.log.log("Starting firmware build");
@@ -2166,7 +2334,13 @@ impl StudioApp {
                 }
                 if let Some(uf2) = &self.last_uf2 {
                     let uf2 = uf2.clone();
-                    if ui.button(tr(self.language, Key::CopyToWatch)).clicked() {
+                    if ui
+                        .button(tr(self.language, Key::CopyToWatch))
+                        .on_hover_text(
+                            "Write the firmware to the watch's USB drive (bootloader mode)",
+                        )
+                        .clicked()
+                    {
                         self.copy_to_watch(&uf2);
                     }
                 } else {
@@ -2363,7 +2537,11 @@ impl StudioApp {
                         ui.text_edit_singleline(&mut self.module_description);
                         ui.end_row();
                     });
-                if ui.button("Register module").clicked() {
+                if ui
+                    .button("Register module")
+                    .on_hover_text("Register a new custom hardware module")
+                    .clicked()
+                {
                     let name = self.module_name.trim().to_string();
                     if !name.is_empty() {
                         self.modules.add(modules::Module {
@@ -2391,7 +2569,6 @@ impl StudioApp {
                 if self.modules.modules.is_empty() {
                     ui.weak("No custom modules registered yet.");
                 }
-                let mut to_remove: Option<String> = None;
                 let mut to_toggle: Option<String> = None;
                 let names: Vec<String> = self
                     .modules
@@ -2414,19 +2591,21 @@ impl StudioApp {
                         if !m.description.is_empty() {
                             ui.weak(&m.description);
                         }
-                        if ui.small_button("Remove").clicked() {
-                            to_remove = Some(m.name.clone());
+                        if ui
+                            .small_button("Remove")
+                            .on_hover_text("Unregister this module")
+                            .clicked()
+                        {
+                            self.pending_confirm = Some((
+                                format!("Remove module '{}'?", m.name),
+                                ConfirmKind::RemoveModule(m.name.clone()),
+                            ));
                         }
                     });
                 }
                 if let Some(name) = to_toggle {
                     self.modules.toggle(&name);
                     self.log.log(format!("Toggled module {name}"));
-                    self.save_settings_internal();
-                }
-                if let Some(name) = to_remove {
-                    self.modules.remove(&name);
-                    self.log.log(format!("Removed module {name}"));
                     self.save_settings_internal();
                 }
 
@@ -2452,6 +2631,14 @@ impl StudioApp {
             "Send commands to the watch's serial command shell (set-time / drift / help).\n\
              Top: the command surface (what you send + the watch's reply).\n\
              Bottom: the watch's brain (the low-level hardware / register view).",
+        );
+        ui.add_space(4.0);
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 180, 80),
+            "Note: this shell is simulated against the app. Over USB the watch appears \n\
+             as a file drive (bootloader), so these round-trips are for practicing \n\
+             commands — not talking to the physical watch. Real serial requires the \n\
+             debug UART header.",
         );
         ui.separator();
 
@@ -3713,6 +3900,7 @@ impl StudioApp {
     fn build_bug_report(&self) -> String {
         let mut out = String::new();
         out.push_str("Firmware Studio bug report\n");
+        out.push_str(&format!("Version: {}\n", env!("CARGO_PKG_VERSION")));
         out.push_str("=========================\n\n");
         out.push_str(&format!("Language: {}\n", self.language.name()));
         out.push_str(&format!("Theme: {}\n", self.theme.name()));
@@ -3766,6 +3954,7 @@ impl StudioApp {
             self.preset_height,
             &self.modules,
             self.output_dir.clone(),
+            self.first_run,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -3806,6 +3995,7 @@ impl StudioApp {
             self.preset_height,
             &self.modules,
             self.output_dir.clone(),
+            self.first_run,
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -3828,6 +4018,7 @@ impl StudioApp {
             self.preset_height,
             &self.modules,
             self.output_dir.clone(),
+            self.first_run,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -3883,6 +4074,7 @@ impl StudioApp {
         self.catalog_width = s.catalog_width;
         self.preset_height = s.preset_height;
         self.modules = s.modules;
+        self.first_run = s.first_run;
         self.output_dir = if s.output_dir.is_empty() {
             settings::default_output_dir()
         } else {
@@ -4098,7 +4290,7 @@ fn main() -> eframe::Result<()> {
         ..Default::default()
     };
     eframe::run_native(
-        "Firmware Studio",
+        &format!("Firmware Studio {}", env!("CARGO_PKG_VERSION")),
         options,
         Box::new(|_cc| Box::new(StudioApp::default())),
     )

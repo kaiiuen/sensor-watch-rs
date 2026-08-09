@@ -98,11 +98,12 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
         .connect(address.as_str())
         .map_err(|e| e.to_string())?;
 
+    // Address setup (bind/connect) is done above so that the T1/T4 timestamps
+    // and the ping measurement cover only the actual send/receive exchange.
+    let mut buf = [0u8; 1024];
     let t1 = local_to_ntp_seconds();
     let start = Instant::now();
     socket.send(&request).map_err(|e| e.to_string())?;
-
-    let mut buf = [0u8; 1024];
     let len = socket.recv(&mut buf).map_err(|e| e.to_string())?;
     let ping_ms = start.elapsed().as_secs_f64() * 1000.0;
     let t4 = local_to_ntp_seconds();
@@ -121,12 +122,26 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
     let t2 = ntp_fractional(r1, r2);
     let t3 = ntp_fractional(x1, x2);
 
+    // Require valid T2/T3: nonzero seconds (the mode/era bit check is handled
+    // by the Mode=4 reply check above), so empty or garbage timestamps are
+    // rejected rather than feeding the offset math.
+    if r1 == 0 || x1 == 0 {
+        return Err("NTP server returned invalid receive/transmit timestamp".to_string());
+    }
+
     // Sanity: the server's transmit timestamp must be close to our local NTP
     // time. This rejects garbage (e.g. the 1900 epoch) without hardcoding a
     // year. Allow up to 10 years of slop (well beyond any sane offset).
     let deviation = (t3 - t4).abs();
     if deviation > 10.0 * 365.25 * 86400.0 {
         return Err("NTP server returned implausible timestamp".to_string());
+    }
+
+    // Server processing delay (T3 - T2) must be non-negative and tiny. Systems
+    // usually reply in microseconds; a negative or >1s delay means bad/fake data.
+    let server_delay = t3 - t2;
+    if !(0.0..=1.0).contains(&server_delay) {
+        return Err("NTP server returned implausible processing delay".to_string());
     }
 
     // Offset = ((T2 - T1) + (T3 - T4)) / 2 (all in NTP seconds since 1900).
