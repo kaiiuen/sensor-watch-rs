@@ -252,7 +252,6 @@ pub struct MovementState {
     pub watch_face_changed: bool,
     pub is_buzzing: bool,
     pub alarm_note: BuzzerNote,
-    pub next_available_backup_register: u8,
     /// The priority of the currently playing sequence.
     pub pending_sequence_priority: BuzzerPriority,
     /// The settings register value last persisted to flash. Used to avoid
@@ -271,7 +270,6 @@ impl MovementState {
             watch_face_changed: false,
             is_buzzing: false,
             alarm_note: BuzzerNote::C8,
-            next_available_backup_register: 4,
             pending_sequence_priority: BuzzerPriority::Button,
             last_saved_settings_reg: 0,
         }
@@ -285,7 +283,6 @@ impl MovementState {
             watch_face_changed: false,
             is_buzzing: false,
             alarm_note: BuzzerNote::C8,
-            next_available_backup_register: 4,
             pending_sequence_priority: BuzzerPriority::Button,
             last_saved_settings_reg: 0,
         }

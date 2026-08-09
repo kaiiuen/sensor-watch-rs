@@ -981,18 +981,6 @@ pub fn play_sequence(note_sequence: *const i8, _callback_on_end: Option<fn()>) {
     buzzer::play_sequence(note_sequence, _callback_on_end);
 }
 
-/// Claims a backup register (4-7).
-pub fn claim_backup_register() -> u8 {
-    unsafe {
-        if MOVEMENT_STATE.next_available_backup_register >= 8 {
-            return 0;
-        }
-        let reg = MOVEMENT_STATE.next_available_backup_register;
-        MOVEMENT_STATE.next_available_backup_register += 1;
-        reg
-    }
-}
-
 /// Returns the current UTC date/time (the RTC stores UTC; no offset applied).
 pub fn get_utc_date_time() -> DateTime {
     rtc::get_date_time()
@@ -1470,7 +1458,6 @@ pub fn app_init() {
         // Remember what we loaded so the dirty-check in save_settings doesn't
         // rewrite identical settings on the first wake.
         MOVEMENT_STATE.last_saved_settings_reg = MOVEMENT_STATE.settings.reg;
-        MOVEMENT_STATE.next_available_backup_register = 4;
     }
 }
 

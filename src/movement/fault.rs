@@ -8,10 +8,16 @@
 use crate::watch::deepsleep;
 use crate::watch::led;
 
-/// Backup register for the boot-count throttle.
-const REG_BOOT_COUNT: u8 = 7;
-/// Backup register for the boot timestamp (in fast ticks, coarse).
-const REG_BOOT_TIME: u8 = 6;
+/// Backup register indices for fault storage.
+///
+/// Registers 4-6 are reserved for the fault system; register 7 is reserved for
+/// the board config. Values are packed to fit:
+///   - reg 4: last fault code
+///   - reg 5: fault count
+///   - reg 6: reset reason (byte 0) + boot time (bytes 1-2) + boot count (byte 3)
+const REG_LAST_FAULT: u8 = 4;
+const REG_FAULT_COUNT: u8 = 5;
+const REG_RESET_REASON: u8 = 6;
 
 /// Maximum number of boots allowed within the throttle window.
 const MAX_BOOTS_IN_WINDOW: u32 = 3;
@@ -49,11 +55,6 @@ pub enum Fault {
     ClockFailure = 8,
 }
 
-/// Backup register indices for fault storage (registers 4-7 are free).
-const REG_LAST_FAULT: u8 = 4;
-const REG_FAULT_COUNT: u8 = 5;
-const REG_RESET_REASON: u8 = 6;
-
 /// The reason the device last reset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u8)]
@@ -87,9 +88,11 @@ pub fn clear_faults() {
     deepsleep::store_backup_data(0, REG_FAULT_COUNT);
 }
 
-/// Records the reset reason.
+/// Records the reset reason (byte 0 of reg 6, preserving boot data).
 pub fn record_reset_reason(reason: ResetReason) {
-    deepsleep::store_backup_data(reason as u32, REG_RESET_REASON);
+    let reg = deepsleep::get_backup_data(REG_RESET_REASON);
+    let packed = (reg & !0xFF) | (reason as u32 & 0xFF);
+    deepsleep::store_backup_data(packed, REG_RESET_REASON);
 }
 
 /// Checks the hardware reset cause and records a fault if the watchdog fired.
@@ -117,8 +120,10 @@ pub fn check_reset_reason() {
 /// disables the buzzer and LED until the battery is replaced.
 pub fn check_boot_throttle() {
     let now = crate::watch::rtc::get_date_time().second as u32;
-    let last = deepsleep::get_backup_data(REG_BOOT_TIME);
-    let count = deepsleep::get_backup_data(REG_BOOT_COUNT);
+    // reg 6 layout: byte 0 = reset reason, bytes 1-2 = boot time, byte 3 = boot count.
+    let reg = deepsleep::get_backup_data(REG_RESET_REASON);
+    let last = (reg >> 8) & 0xFFFF;
+    let count = (reg >> 24) & 0xFF;
 
     let count = if now.wrapping_sub(last) <= BOOT_WINDOW_TICKS {
         count.wrapping_add(1)
@@ -126,8 +131,8 @@ pub fn check_boot_throttle() {
         1
     };
 
-    deepsleep::store_backup_data(now, REG_BOOT_TIME);
-    deepsleep::store_backup_data(count, REG_BOOT_COUNT);
+    let packed = (reg & 0xFF) | ((now & 0xFFFF) << 8) | ((count & 0xFF) << 24);
+    deepsleep::store_backup_data(packed, REG_RESET_REASON);
 
     if count > MAX_BOOTS_IN_WINDOW {
         unsafe { SAFE_STATE = true };
@@ -146,7 +151,10 @@ pub fn check_clock_failure() {
 }
 
 /// Backup register for the last heartbeat timestamp.
-const REG_HEARTBEAT: u8 = 3;
+///
+/// Uses register 2, which is not used by any other always-on subsystem
+/// (reg 0 = settings, reg 1 = solar location, reg 3 = battery type).
+const REG_HEARTBEAT: u8 = 2;
 
 /// Monitors the RTC heartbeat (the ticking seconds).
 ///
@@ -167,7 +175,7 @@ pub fn check_heartbeat() {
 
 /// Returns the reason the device last reset.
 pub fn reset_reason() -> ResetReason {
-    match deepsleep::get_backup_data(REG_RESET_REASON) {
+    match deepsleep::get_backup_data(REG_RESET_REASON) & 0xFF {
         1 => ResetReason::Watchdog,
         2 => ResetReason::Panic,
         3 => ResetReason::Software,

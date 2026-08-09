@@ -1,17 +1,11 @@
 //! Statistics tracking.
 //!
-//! Tracks usage and health counters: button presses per button, buzzer rings,
-//! brownouts, errors, warnings, and resets. Counters are stored in the RTC
-//! backup registers so they survive resets (fixed, no growth).
-
-use crate::watch::deepsleep;
-
-/// Backup register indices for the stats counters.
-const REG_BTN_LIGHT: u8 = 4;
-const REG_BTN_MODE: u8 = 5;
-const REG_BTN_ALARM: u8 = 6;
-const REG_BUZZER: u8 = 7;
-// (registers 0-3 are used for settings/location/birthdate/reserved)
+//! Tracks usage counters: button presses per button, buzzer rings. These are
+//! session diagnostics held in RAM. They intentionally do NOT use the RTC
+//! backup registers, because the backup registers are a scarce, shared resource
+//! (only 8 exist) that must be reserved for data that must survive resets
+//! (settings, board config, fault codes, battery type). Button/buzzer counters
+//! are low-value and reset on power loss, which is acceptable for diagnostics.
 
 /// A set of statistics counters.
 #[derive(Clone, Copy, Debug, Default)]
@@ -26,40 +20,39 @@ pub struct Stats {
     pub resets: u32,
 }
 
-/// Reads the current statistics from the backup registers.
+/// The in-RAM counters.
+static mut COUNTERS: Stats = Stats {
+    btn_light: 0,
+    btn_mode: 0,
+    btn_alarm: 0,
+    buzzer_rings: 0,
+    brownouts: 0,
+    errors: 0,
+    warnings: 0,
+    resets: 0,
+};
+
+/// Reads the current statistics.
 pub fn read() -> Stats {
-    Stats {
-        btn_light: deepsleep::get_backup_data(REG_BTN_LIGHT),
-        btn_mode: deepsleep::get_backup_data(REG_BTN_MODE),
-        btn_alarm: deepsleep::get_backup_data(REG_BTN_ALARM),
-        buzzer_rings: deepsleep::get_backup_data(REG_BUZZER),
-        brownouts: 0,
-        errors: 0,
-        warnings: 0,
-        resets: 0,
-    }
+    unsafe { COUNTERS }
 }
 
 /// Increments the light button press counter.
 pub fn press_light() {
-    let v = deepsleep::get_backup_data(REG_BTN_LIGHT).wrapping_add(1);
-    deepsleep::store_backup_data(v, REG_BTN_LIGHT);
+    unsafe { COUNTERS.btn_light = COUNTERS.btn_light.wrapping_add(1) };
 }
 
 /// Increments the mode button press counter.
 pub fn press_mode() {
-    let v = deepsleep::get_backup_data(REG_BTN_MODE).wrapping_add(1);
-    deepsleep::store_backup_data(v, REG_BTN_MODE);
+    unsafe { COUNTERS.btn_mode = COUNTERS.btn_mode.wrapping_add(1) };
 }
 
 /// Increments the alarm button press counter.
 pub fn press_alarm() {
-    let v = deepsleep::get_backup_data(REG_BTN_ALARM).wrapping_add(1);
-    deepsleep::store_backup_data(v, REG_BTN_ALARM);
+    unsafe { COUNTERS.btn_alarm = COUNTERS.btn_alarm.wrapping_add(1) };
 }
 
 /// Increments the buzzer ring counter.
 pub fn buzzer_ring() {
-    let v = deepsleep::get_backup_data(REG_BUZZER).wrapping_add(1);
-    deepsleep::store_backup_data(v, REG_BUZZER);
+    unsafe { COUNTERS.buzzer_rings = COUNTERS.buzzer_rings.wrapping_add(1) };
 }

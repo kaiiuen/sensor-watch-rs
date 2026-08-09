@@ -79,31 +79,29 @@ but has not yet been validated on silicon. This plan closes that gap.
 | Accelerometer (if fitted) | Tap the watch | SingleTap/DoubleTap events fire; raise-to-wake shows seconds |
 | I2C | Read the accelerometer | No bus hangs; pins float in standby |
 
-## 8. Backup Register Allocation (Known Issue)
+## 8. Backup Register Allocation
 
-Risk: the SAM L22 has only **8 RTC backup registers**, and several always-on
-subsystems currently allocate overlapping registers, which would corrupt each
-other's persisted data. Before deployment this must be reconciled into a single
-authoritative map. The overlap as of this writing:
+Backup registers (only 8 exist) are a scarce, shared resource. They are now
+allocated to a single authoritative owner each, resolved as follows:
 
-| Reg | Settings | Stats | Fault | Board | Storage | Battery/Solar |
-|-----|----------|-------|-------|-------|---------|---------------|
-| 0   | settings |       |       |       |         |               |
-| 1   |          |       |       |       |         | solar location |
-| 2   |          |       |       |       |         |               |
-| 3   |          |       | heartbeat |    |         | battery        |
-| 4   |          | btn_light | last_fault |  |       |               |
-| 5   |          | btn_mode | fault_count |  |       |               |
-| 6   |          | btn_alarm| boot_time/ |     |       |               |
-|     |          |          | reset_reason |    |       |               |
-| 7   |          | buzzer  | boot_count | board  | wear_row |           |
+| Reg | Owner | Contents |
+|-----|-------|----------|
+| 0   | settings | Packed settings register (persist) |
+| 1   | solar_time | Wearer's longitude/location |
+| 2   | fault | RTC heartbeat timestamp (RtcLostTime check) |
+| 3   | battery | Battery type |
+| 4   | fault | Last fault code |
+| 5   | fault | Fault count |
+| 6   | fault | Reset reason (byte 0) + boot time (bytes 1-2) + boot count (byte 3) |
+| 7   | board | Board type + buzzer voltage |
 
-Faces also claim registers starting at 4 via `claim_backup_register`, colliding
-with the system data above. This is the single most important thing to fix
-before fielding the firmware. Do not rely on statistics, fault codes, battery
-type, board config, or the wear cursor persisting correctly until this is
-resolved with a dedicated allocation (e.g. statically assign regs 0-7 and pack
-or drop low-value counters).
+To reach this clean map, statistics counters (button/buzzer) were moved to RAM
+(session diagnostics, low-value), the storage wear-leveling cursor was moved out
+of the backup registers into a RAM value recovered by scanning the flash rows
+for the valid magic header, and the fault system's boot data is packed into a
+single register. No subsystem writes over another's data anymore. Verify on
+hardware that statistics, fault codes, battery type, board config, and settings
+all persist correctly across resets.
 
 ## Reporting
 

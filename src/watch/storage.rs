@@ -186,22 +186,40 @@ pub fn sync() -> bool {
 /// extending the life of the EEPROM emulation area.
 const WEAR_ROWS: u32 = 8;
 
-/// The current wear-leveling row index, stored in a backup register.
-const WEAR_ROW_REG: u8 = 7;
-
 /// A magic value written at the start of each wear-leveled row to mark it as
 /// the most recent valid entry.
 const WEAR_MAGIC: u32 = 0x574C_0001; // "WL" + version
+
+/// The current wear-leveling row index, kept in RAM.
+///
+/// This is intentionally NOT stored in an RTC backup register: the backup
+/// registers are a scarce shared resource (only 8 exist) reserved for settings,
+/// board config, fault codes, and battery type. The cursor is only a hint - on
+/// boot it is recovered by scanning the rows for the valid magic header.
+static mut WEAR_ROW: u32 = 0;
+
+/// Finds the most recent valid row (matching the magic) by scanning, and
+/// initializes the RAM cursor. Returns the row index (0 if none found).
+fn find_last_row() -> u32 {
+    for i in 0..WEAR_ROWS {
+        let row = (WEAR_ROWS - i - 1) % WEAR_ROWS;
+        let mut header = [0u8; 4];
+        if read(row, 0, &mut header) && u32::from_le_bytes(header) == WEAR_MAGIC {
+            return row;
+        }
+    }
+    0
+}
 
 /// Writes data with log-structured wear leveling.
 ///
 /// The data is written to a rotating row (0..WEAR_ROWS) with a version-magic
 /// header. Each write moves to the next row, so writes are spread across the
-/// area instead of hammering one row. The current row index is persisted in an
-/// RTC backup register so it survives resets. On boot, the most recent valid
-/// row (matching the magic) is found by scanning, giving crash recovery.
+/// area instead of hammering one row. The current row index is kept in RAM and
+/// recovered on boot by scanning for the valid magic, giving crash recovery
+/// without consuming a backup register.
 pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
-    let row = crate::watch::deepsleep::get_backup_data(WEAR_ROW_REG) % WEAR_ROWS;
+    let row = unsafe { WEAR_ROW % WEAR_ROWS };
 
     // Erase the target row, then write the magic header and the data.
     if !erase(row) {
@@ -217,8 +235,7 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     }
 
     // Advance to the next row for the next write.
-    let next = (row + 1) % WEAR_ROWS;
-    crate::watch::deepsleep::store_backup_data(next, WEAR_ROW_REG);
+    unsafe { WEAR_ROW = (row + 1) % WEAR_ROWS };
     true
 }
 
@@ -229,7 +246,7 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
 pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
     // Scan all rows for the most recent valid entry (highest row index with a
     // valid magic, wrapping around from the last written row).
-    let last = crate::watch::deepsleep::get_backup_data(WEAR_ROW_REG) % WEAR_ROWS;
+    let last = find_last_row();
     for i in 0..WEAR_ROWS {
         // Search backwards from the last-written row.
         let row = (last + WEAR_ROWS - i - 1) % WEAR_ROWS;
