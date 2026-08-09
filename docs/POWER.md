@@ -154,14 +154,16 @@ this - a reaction is a handful of register writes.
 
 ### Flash (256 KB)
 
-- Release binary: ~70 KB (~27%)
+- Firmware region: `0x3A000` (~232 KB) after the bootloader
+- Release binary with all 111 faces: roughly 210-230 KB
 - Each face: ~1-3 KB
-- Headroom: ~186 KB (dozens more faces)
+- Headroom: modest (a few more faces), not dozens
 
 ### RAM (32 KB)
 
 - Static state: ~300 bytes
-- Stack: 8 KB reserved
+- Stack: placed at the bottom of RAM via flip-link (a stack overflow triggers
+  an immediate hard fault rather than silent corruption); no fixed 8 KB carve-out
 - Heap: none
 
 RAM is not a constraint. All face state lives in RAM (state survives face

@@ -146,8 +146,12 @@ The key lever is **active time per event**, not load. At ~1 ms per wake, the
 
 ### Flash (256 KB)
 
-The release binary is ~70 KB (~27% of flash). Each watch face costs ~1-3 KB.
-We have ~186 KB of headroom - room for dozens more faces.
+The firmware region is `0x3A000` (~232 KB) starting after the bootloader.
+With all 111 faces registered (via the `#[used]` face-retain array), a release
+build is roughly **210-230 KB**, i.e. most of the region is used. Each watch
+face adds roughly 1-3 KB, so there is **modest headroom for a few more faces**,
+not dozens. Adding faces beyond the current count should be validated against
+the linker region on every build.
 
 ### RAM (32 KB)
 
@@ -176,17 +180,20 @@ The reset handler in `src/main.rs` runs in this exact order:
 1. copy_ramfunc()                        - copy .ramfunc routines from flash to RAM
 2. movement::fault::check_reset_reason() - record why we reset (watchdog/panic/power-on)
 3. movement::fault::check_boot_throttle()- detect a brown-out reboot loop
-4. watch::init()                         - hardware init in dependency order:
+4. watch::crc::check_firmware_integrity() - CRC-32 integrity check; on failure record
+                                            CorruptImage fault and recovery_halt()
+5. watch::init()                         - hardware init in dependency order:
      a. irq::init()                      - interrupt priorities
      b. clock::init()                    - 32 kHz crystal + GCLK routing
      c. rtc::init()                      - RTC (depends on the clock)
      d. wdt::init()                      - watchdog backstop
-5. watch::deepsleep::init_bod33()        - brown-out detector (low-battery interrupt)
-6. movement::app_init()                  - load settings, init framework
-7. movement::board::apply()              - apply LED polarity + buzzer voltage
-8. movement::app_setup()                 - register faces, buttons, alarms
-9. watch::rtc::register_tick_callback()  - 1 Hz tick
-10. loop:
+6. movement::fault::check_clock_failure()- detect a failed 32 kHz crystal (CFD)
+7. watch::deepsleep::init_bod33()        - brown-out detector (low-battery interrupt)
+8. movement::app_init()                  - load settings, init framework
+9. movement::board::apply()              - apply LED polarity + buzzer voltage
+10. movement::app_setup()                - register faces, buttons, alarms
+11. watch::rtc::register_tick_callback() - 1 Hz tick
+12. loop:
      a. movement::app_loop()             - react to one event
      b. watch::wdt::kick()               - watchdog heartbeat
      c. watch::deepsleep::enter_standby()- enter STANDBY (SysTick-safe)
@@ -386,8 +393,8 @@ flash bit-rot is corrected on read rather than silently corrupting data.
 ### 6.20 `watch/shell.rs` - Serial command shell
 
 A minimal command interpreter over the debug UART. Provides `time`,
-`settime YYMMDDHHMMSS`, and `help` commands. This is the foundation for clock
-calibration and the companion app.
+`settime YYMMDDHHMMSS`, `drift N`, and `help` commands. This is the foundation
+for clock calibration and the companion app.
 
 ### 6.21 `watch/memory.rs` - Memory usage
 
@@ -710,8 +717,10 @@ The project has a CI pipeline (GitHub Actions) that runs on every push:
 - **Clippy** - `cargo clippy -- -D warnings` (firmware + core)
 - **Test** - `cargo test -p sensor-watch-core` (host unit tests)
 - **Format** - `cargo fmt --check`
+- **Studio** - build the GUI companion app
+- **UF2** - assemble the firmware `.uf2` artifact
 
-The core crate has 22 unit tests covering date math, settings bit-packing, and
+The core crate has 27 unit tests covering date math, settings bit-packing, and
 DateTime pack/unpack. These tests caught a real `is_leap` bug.
 
 **Why CI:** it gives *proof* the foundation is correct and prevents regressions.
