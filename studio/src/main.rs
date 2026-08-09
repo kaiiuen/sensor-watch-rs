@@ -188,6 +188,8 @@ struct StudioApp {
     last_build_time: Option<u64>,
     /// The number of builds performed this session.
     build_count: u32,
+    /// A log of recent build times (unix seconds), newest last.
+    build_history: Vec<u64>,
     /// Dedicated log for the build panel.
     build_log: debug::DebugLog,
     /// Dedicated log for the flash panel.
@@ -376,6 +378,7 @@ impl Default for StudioApp {
             preset_height: 0.0,
             last_build_time: None,
             build_count: 0,
+            build_history: Vec::new(),
             build_log: debug::DebugLog::new(),
             flash_log: debug::DebugLog::new(),
             error_log: debug::DebugLog::new(),
@@ -501,6 +504,12 @@ impl eframe::App for StudioApp {
                                     .unwrap_or(0),
                             );
                             self.build_count += 1;
+                            if let Some(t) = self.last_build_time {
+                                self.build_history.push(t);
+                                if self.build_history.len() > 50 {
+                                    self.build_history.remove(0);
+                                }
+                            }
                             if let Some(p) = &self.last_uf2 {
                                 self.log.log(format!("UF2 written to {}", p.display()));
                                 self.build_log
@@ -869,11 +878,22 @@ impl StudioApp {
                 let secs = (t as i64).rem_euclid(86400);
                 let h = (secs / 3600) % 24;
                 let m = (secs / 60) % 60;
-                let s = secs % 60;
                 ui.monospace(format!(
-                    "Last build: {h:02}:{m:02}:{s:02}  ({} builds this session)",
+                    "Last build: {h:02}:{m:02}  ({} builds this session)",
                     self.build_count
                 ));
+            }
+            // Build history log.
+            if !self.build_history.is_empty() {
+                ui.collapsing("Build history", |ui| {
+                    for (i, t) in self.build_history.iter().enumerate() {
+                        let secs = (*t as i64).rem_euclid(86400);
+                        let h = (secs / 3600) % 24;
+                        let m = (secs / 60) % 60;
+                        let s = secs % 60;
+                        ui.monospace(format!("#{:02}  {h:02}:{m:02}:{s:02}", i + 1));
+                    }
+                });
             }
         } else {
             ui.label(tr(self.language, Key::NoBuildYet));
