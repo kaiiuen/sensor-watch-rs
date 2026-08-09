@@ -2654,6 +2654,17 @@ impl StudioApp {
         // Update the display state.
         self.watch.update_display();
 
+        // Sync the sim's clock mode with the watch settings (12/24).
+        let want_24 = self.watch_config.clock_mode_24h;
+        let is_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
+        if want_24 != is_24 {
+            self.watch.time_mode = if want_24 {
+                watch_sim::TimeMode::H24
+            } else {
+                watch_sim::TimeMode::H12
+            };
+        }
+
         // Determine the current face and sync the engine's face name.
         let faces = self.presets.active_faces();
         let face_name = if faces.is_empty() {
