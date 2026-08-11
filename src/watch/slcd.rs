@@ -4,10 +4,10 @@
 //! init from the Sensor-Watch reference. This drives the 10-digit segment LCD
 //! plus the indicator segments and colon.
 
-use atsaml22j::slcd::RegisterBlock as Slcd;
 use atsaml22j::slcd::ctrla::{
     Biasselect, Dutyselect, Prescselect, Prfselect, Rrfselect, Wmodselect,
 };
+use atsaml22j::slcd::RegisterBlock as Slcd;
 
 /// Returns a reference to the SLCD peripheral register block.
 fn slcd() -> &'static Slcd {
@@ -242,8 +242,9 @@ pub fn clear_pixel(com: u8, seg: u8) {
 
 /// Sets or clears a segment. Port of `_slcd_sync_set_segment`.
 fn set_segment(com: u8, seg: u8, on: bool) {
-    // The watch only uses segments 0-23, so seg < 32 always; we only touch the
-    // SDATAL registers (bit `seg` of SDATAL{com}).
+    if com > 2 || seg >= 32 {
+        return;
+    }
     let mask = 1u32 << seg;
     // SAFETY: writing a valid segment-data bitmask.
     match com {
@@ -398,9 +399,13 @@ pub fn display_string(string: &str, position: u8) {
     let bytes = string.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
-        display_character(bytes[i], position + i as u8);
+        let display_position = match position.checked_add(i as u8) {
+            Some(position) if position < NUM_CHARS => position,
+            _ => break,
+        };
+        display_character(bytes[i], display_position);
         i += 1;
-        if position + i as u8 >= NUM_CHARS {
+        if i >= (NUM_CHARS - position) as usize {
             break;
         }
     }
@@ -447,7 +452,7 @@ pub fn start_character_blink(character: u8, duration: u32) {
         display_character(b' ', 7);
         return;
     }
-    let frames = duration / (1000 / FRAME_FREQUENCY);
+    let frames = (duration / (1000 / FRAME_FREQUENCY)).max(1);
     if duration <= FC_BYPASS_MAX_MS {
         // SAFETY: computed overflow value is valid.
         unsafe {

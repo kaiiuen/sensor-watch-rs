@@ -478,6 +478,7 @@ impl WatchFace for IntervalFace {
             Event::Tick => {
                 if self.face_state == IntervalFaceState::Intro {
                     if self.ticks == 4 {
+                        self.face_state = IntervalFaceState::Waiting;
                         watch::slcd::set_colon();
                         self.init_timer_info();
                         self.face_draw(0);

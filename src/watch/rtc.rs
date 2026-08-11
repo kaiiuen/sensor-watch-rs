@@ -5,8 +5,8 @@
 //! and wake-from-sleep behavior.
 
 use crate::watch::timeout::wait_until;
-use atsaml22j::rtc::Mode2;
 use atsaml22j::rtc::mode2::ctrla::{Modeselect, Prescalerselect};
+use atsaml22j::rtc::Mode2;
 
 /// Returns a reference to the RTC peripheral's MODE2 register block.
 ///
@@ -154,7 +154,19 @@ pub fn set_date_time(date_time: DateTime) -> Result<(), ()> {
 /// Returns the current date and time.
 pub fn get_date_time() -> DateTime {
     sync();
-    DateTime::from_reg(rtc().clock().read().bits())
+    let date_time = DateTime::from_reg(rtc().clock().read().bits());
+    if date_time.is_valid() {
+        date_time
+    } else {
+        DateTime {
+            year: 0,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }
+    }
 }
 
 /// Registers a callback invoked once per second (1 Hz tick).
@@ -179,9 +191,9 @@ pub fn register_periodic_callback(callback: Callback, frequency: u8) {
     let tmp = (frequency as u32 & 0xFF) << 24;
     let per_n = tmp.leading_zeros() as usize;
 
-    unsafe {
+    critical_section::with(|_| unsafe {
         TICK_CALLBACKS[per_n] = Some(callback);
-    }
+    });
 
     // Enable the RTC interrupt in the NVIC and set the periodic interrupt bit.
     // SAFETY: unmasking a valid interrupt and writing a valid enable bitmask.
@@ -224,7 +236,11 @@ pub fn register_alarm_callback(callback: Callback, alarm_time: DateTime, mask: A
     unsafe {
         rtc().alarm(0).write(|w| w.bits(alarm_time.to_reg()));
         rtc().mask(0).write(|w| w.bits(mask as u8));
+    }
+    critical_section::with(|_| unsafe {
         ALARM_CALLBACK = Some(callback);
+    });
+    unsafe {
         cortex_m::peripheral::NVIC::unmask(atsaml22j::Interrupt::RTC);
         rtc().intenset().write(|w| w.bits(1 << 8)); // ALARM0
     }
@@ -290,7 +306,7 @@ fn schedule_next_compare() {
 
 /// Registers a compare callback at the given target time (packed DateTime).
 pub fn register_comp_callback(callback: Callback, target: u32, index: usize) {
-    if index >= N_COMP_CB {
+    if index >= N_COMP_CB || !DateTime::from_reg(target).is_valid() {
         return;
     }
     unsafe {
@@ -303,7 +319,7 @@ pub fn register_comp_callback(callback: Callback, target: u32, index: usize) {
 
 /// Registers a compare callback without re-arming the alarm.
 pub fn register_comp_callback_no_schedule(callback: Callback, target: u32, index: usize) {
-    if index >= N_COMP_CB {
+    if index >= N_COMP_CB || !DateTime::from_reg(target).is_valid() {
         return;
     }
     unsafe {
@@ -457,5 +473,9 @@ pub fn freqcorr_write(value: i16, sign: i16) {
 pub fn freqcorr_read() -> i16 {
     let data = rtc().freqcorr().read().bits() as i16;
     let value = data & 0x7F;
-    if data & 0x80 != 0 { -value } else { value }
+    if data & 0x80 != 0 {
+        -value
+    } else {
+        value
+    }
 }

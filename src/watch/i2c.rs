@@ -20,6 +20,10 @@ pub enum I2cError {
 const SDA: Pin = Pin(1, 30);
 const SCL: Pin = Pin(1, 31);
 
+fn valid_i2c_address(addr: i16) -> bool {
+    (0x08..=0x77).contains(&addr)
+}
+
 /// Returns a reference to the SERCOM1 I2C master register block.
 fn i2cm() -> &'static I2cm {
     // SAFETY: the SERCOM1 register block lives at a fixed address for the whole
@@ -42,8 +46,23 @@ fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
 }
 
 /// Waits for the SERCOM to finish synchronizing.
-fn sync() {
-    let _ = wait_until(|| i2cm().syncbusy().read().bits() == 0);
+fn sync() -> bool {
+    wait_until(|| i2cm().syncbusy().read().bits() == 0).is_ok()
+}
+
+fn recover_bus() {
+    i2cm().ctrla().modify(|_, w| w.enable().clear_bit());
+    gpio::set_pin_function(SDA, Function::Off);
+    gpio::set_pin_function(SCL, Function::Off);
+    gpio::set_pin_direction(SDA, Direction::In);
+    gpio::set_pin_direction(SCL, Direction::Out);
+    for _ in 0..9 {
+        gpio::set_pin_level(SCL, true);
+        gpio::set_pin_level(SCL, false);
+    }
+    gpio::set_pin_direction(SCL, Direction::Off);
+    gpio::set_pin_function(SCL, Function::Off);
+    gpio::set_pin_function(SDA, Function::Off);
 }
 
 /// Enables the I2C peripheral.
@@ -107,7 +126,8 @@ pub fn pins_to_floating_before_sleep() {
 
 /// Sends a series of bytes to a device on the I2C bus.
 pub fn send(addr: i16, buf: &[u8]) {
-    if !crate::watch::safety::valid_i2c_address(addr) {
+    if !valid_i2c_address(addr) {
+        recover_bus();
         disable_i2c();
         return;
     }
@@ -118,6 +138,7 @@ pub fn send(addr: i16, buf: &[u8]) {
     }
     // Wait for the address to be acknowledged (bounded).
     if wait_until(|| i2cm().status().read().busstate().bits() == 1).is_err() {
+        recover_bus();
         return;
     }
 
@@ -128,6 +149,7 @@ pub fn send(addr: i16, buf: &[u8]) {
         }
         // Wait for the data to be transmitted (master on bus flag), bounded.
         if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+            recover_bus();
             return;
         }
     }
@@ -143,7 +165,8 @@ pub fn send(addr: i16, buf: &[u8]) {
 
 /// Receives a series of bytes from a device on the I2C bus.
 pub fn receive(addr: i16, buf: &mut [u8]) {
-    if !crate::watch::safety::valid_i2c_address(addr) {
+    if !valid_i2c_address(addr) {
+        recover_bus();
         disable_i2c();
         return;
     }
@@ -183,7 +206,7 @@ pub fn write8(addr: i16, reg: u8, data: u8) {
 
 /// Checked register write used by sensor drivers.
 pub fn write8_checked(addr: i16, reg: u8, data: u8) -> Result<(), I2cError> {
-    if !crate::watch::safety::valid_i2c_address(addr) {
+    if !valid_i2c_address(addr) {
         return Err(I2cError::InvalidAddress);
     }
     unsafe { i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1)) };
@@ -205,7 +228,7 @@ pub fn write8_checked(addr: i16, reg: u8, data: u8) -> Result<(), I2cError> {
 }
 
 pub fn write16_checked(addr: i16, reg: u8, data: u16) -> Result<(), I2cError> {
-    if !crate::watch::safety::valid_i2c_address(addr) {
+    if !valid_i2c_address(addr) {
         return Err(I2cError::InvalidAddress);
     }
     unsafe { i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1)) };
@@ -268,7 +291,7 @@ pub fn read16_le(addr: i16, reg: u8) -> u16 {
 /// Performs a register-select followed by a read without a STOP between them.
 /// This is the repeated-start transaction required by register I2C sensors.
 pub fn write_read(addr: i16, write: &[u8], read: &mut [u8]) -> Result<(), I2cError> {
-    if !crate::watch::safety::valid_i2c_address(addr) {
+    if !valid_i2c_address(addr) {
         disable_i2c();
         return Err(I2cError::InvalidAddress);
     }

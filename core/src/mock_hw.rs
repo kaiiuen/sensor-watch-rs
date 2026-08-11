@@ -16,6 +16,8 @@
 //! it wrote to the LCD. See [`crate::hostsim`] for the proof-of-concept that runs
 //! `simple_clock` through this.
 
+#![allow(clippy::result_unit_err)]
+
 use crate::datetime::DateTime;
 use crate::settings::Settings;
 use alloc::collections::BTreeMap;

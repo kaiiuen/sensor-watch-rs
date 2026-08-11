@@ -30,43 +30,41 @@ pub fn used_size() -> u32 {
     unsafe { AREA.iter().filter(|&&b| b != 0xFF).count() as u32 }
 }
 
+fn range(row: u32, offset: u32, len: usize) -> Option<(usize, usize)> {
+    let addr = row.checked_mul(ROW_SIZE)?.checked_add(offset)?;
+    let len = u32::try_from(len).ok()?;
+    let end = addr.checked_add(len)?;
+    (end <= total_size()).then_some((addr as usize, end as usize))
+}
+
 /// Reads `buffer.len()` bytes from `row` (:ROW_SIZE-aligned base) + `offset`.
 ///
 /// Returns false if the range falls outside the emulated area.
 pub fn read(row: u32, offset: u32, buffer: &mut [u8]) -> bool {
-    let addr = row * ROW_SIZE + offset;
-    let len = buffer.len() as u32;
-    if addr + len > unsafe { AREA.len() as u32 } {
+    let Some((start, end)) = range(row, offset, buffer.len()) else {
         return false;
-    }
-    buffer.copy_from_slice(&unsafe { AREA }[addr as usize..(addr + len) as usize]);
+    };
+    buffer.copy_from_slice(&unsafe { AREA }[start..end]);
     true
 }
 
 /// Writes `buffer` to `row` + `offset`. Returns false on an out-of-range write.
 pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
-    let addr = row * ROW_SIZE + offset;
-    let len = buffer.len() as u32;
-    if addr + len > unsafe { AREA.len() as u32 } {
+    let Some((start, end)) = range(row, offset, buffer.len()) else {
         return false;
-    }
+    };
     let area = unsafe { &mut AREA };
-    for (i, b) in buffer.iter().enumerate() {
-        area[addr as usize + i] = *b;
-    }
+    area[start..end].copy_from_slice(buffer);
     true
 }
 
 /// Erases a row, setting all its bytes to `0xFF`.
 pub fn erase(row: u32) -> bool {
-    let addr = row * ROW_SIZE;
-    if addr + ROW_SIZE > unsafe { AREA.len() as u32 } {
+    let Some((start, end)) = range(row, 0, ROW_SIZE as usize) else {
         return false;
-    }
+    };
     let area = unsafe { &mut AREA };
-    for b in area[addr as usize..(addr + ROW_SIZE) as usize].iter_mut() {
-        *b = 0xFF;
-    }
+    area[start..end].fill(0xFF);
     true
 }
 
@@ -79,10 +77,39 @@ pub fn sync() -> bool {
 /// Writes data with log-structured wear leveling. Host: a plain write at the
 /// given offset (the highest row acts as the "most recent" row).
 pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
-    write(0, offset + 4, buffer)
+    offset
+        .checked_add(4)
+        .is_some_and(|offset| write(0, offset, buffer))
 }
 
 /// Reads data written with log-structured wear leveling. Host: reads row 0.
 pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
-    read(0, offset + 4, buffer)
+    offset
+        .checked_add(4)
+        .is_some_and(|offset| read(0, offset, buffer))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejects_overflowing_and_out_of_range_ranges() {
+        let mut readback = [0; 4];
+        assert!(!read(u32::MAX, 0, &mut readback));
+        assert!(!read(0, u32::MAX, &mut readback));
+        assert!(!write(u32::MAX, 0, &[1]));
+        assert!(!erase(u32::MAX));
+        assert!(!wear_leveled_write(u32::MAX, &[1]));
+        assert!(!wear_leveled_read(u32::MAX, &mut readback));
+    }
+
+    #[test]
+    fn row_boundary_is_checked() {
+        let mut readback = [0; 2];
+        assert!(write(31, 254, &[1, 2]));
+        assert!(read(31, 254, &mut readback));
+        assert_eq!(readback, [1, 2]);
+        assert!(!write(31, 255, &[1, 2]));
+    }
 }

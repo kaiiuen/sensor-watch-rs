@@ -3,8 +3,9 @@
 //! Port of the C `watch_storage.c`. Provides read/write/erase access to the
 //! SAM L22's 8 kilobyte EEPROM emulation area (RWW EEPROM).
 
-use atsaml22j::nvmctrl::RegisterBlock as Nvmctrl;
+use crate::watch::timeout::wait_until;
 use atsaml22j::nvmctrl::ctrla::Cmdselect;
+use atsaml22j::nvmctrl::RegisterBlock as Nvmctrl;
 
 /// RWW EEPROM area constants.
 const RWWEE_ADDR_START: u32 = 0x0040_0000;
@@ -26,7 +27,11 @@ pub fn used_size() -> u32 {
     let mut used = 0u32;
     let mut buf = [0u8; 256];
     let mut row = 0u32;
-    while row * ROW_SIZE < total_size() {
+    while row < total_size() / ROW_SIZE
+        && row
+            .checked_mul(ROW_SIZE)
+            .is_some_and(|offset| offset < total_size())
+    {
         if read(row, 0, &mut buf) {
             for &b in buf.iter() {
                 if b != 0xFF {
@@ -51,15 +56,36 @@ fn nvmctrl() -> &'static Nvmctrl {
 
 /// Checks that the given address range is within the RWW EEPROM area.
 fn is_valid_address(addr: u32, size: u32) -> bool {
-    (RWWEE_ADDR_START..=RWWEE_ADDR_END).contains(&addr) && addr + size <= RWWEE_ADDR_END
+    addr >= RWWEE_ADDR_START && addr <= RWWEE_ADDR_END && size <= RWWEE_ADDR_END - addr
+}
+
+fn address_for(row: u32, offset: u32, size: u32) -> Option<u32> {
+    let row_offset = row.checked_mul(ROW_SIZE)?;
+    let address = RWWEE_ADDR_START
+        .checked_add(row_offset)?
+        .checked_add(offset)?;
+    is_valid_address(address, size).then_some(address)
+}
+
+fn valid_page_write(address: u32, size: u32) -> bool {
+    size <= PAGE_SIZE
+        && (address % PAGE_SIZE)
+            .checked_add(size)
+            .is_some_and(|end| end <= PAGE_SIZE)
 }
 
 /// Reads a range of bytes from the storage area.
 pub fn read(row: u32, offset: u32, buffer: &mut [u8]) -> bool {
-    let address = RWWEE_ADDR_START + row * ROW_SIZE + offset;
-    let size = buffer.len() as u32;
-    if !is_valid_address(address, size) {
-        return false;
+    let size = match u32::try_from(buffer.len()) {
+        Ok(size) => size,
+        Err(_) => return false,
+    };
+    let address = match address_for(row, offset, size) {
+        Some(address) => address,
+        None => return false,
+    };
+    if size == 0 {
+        return true;
     }
 
     sync();
@@ -97,9 +123,15 @@ pub fn read(row: u32, offset: u32, buffer: &mut [u8]) -> bool {
 /// bus when writing the RWW EEPROM area.
 #[unsafe(link_section = ".ramfunc")]
 pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
-    let address = RWWEE_ADDR_START + row * ROW_SIZE + offset;
-    let size = buffer.len() as u32;
-    if !is_valid_address(address, size) {
+    let size = match u32::try_from(buffer.len()) {
+        Ok(size) => size,
+        Err(_) => return false,
+    };
+    let address = match address_for(row, offset, size) {
+        Some(address) => address,
+        None => return false,
+    };
+    if !valid_page_write(address, size) || size == 0 {
         return false;
     }
 
@@ -151,8 +183,11 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
 /// bus when erasing the RWW EEPROM area.
 #[unsafe(link_section = ".ramfunc")]
 pub fn erase(row: u32) -> bool {
-    let address = RWWEE_ADDR_START + row * ROW_SIZE;
-    if !is_valid_address(address, ROW_SIZE) {
+    let address = match address_for(row, 0, ROW_SIZE) {
+        Some(address) => address,
+        None => return false,
+    };
+    if address % ROW_SIZE != 0 {
         return false;
     }
 
@@ -172,7 +207,9 @@ pub fn erase(row: u32) -> bool {
 
 /// Waits for any pending writes to complete.
 pub fn sync() -> bool {
-    while !nvmctrl().intflag().read().ready().bit_is_set() {}
+    if wait_until(|| nvmctrl().intflag().read().ready().bit_is_set()).is_err() {
+        return false;
+    }
     // SAFETY: clearing the status register is safe.
     unsafe {
         nvmctrl().status().write(|w| w.bits(0xFFFF));
@@ -230,7 +267,11 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     if !write(row, 0, &header) {
         return false;
     }
-    if !write(row, offset + 4, buffer) {
+    let data_offset = match offset.checked_add(4) {
+        Some(offset) => offset,
+        None => return false,
+    };
+    if !write(row, data_offset, buffer) {
         return false;
     }
 

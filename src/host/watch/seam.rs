@@ -23,10 +23,36 @@
 //! returned short-lived `&mut dyn Hw` is re-borrowed per call, mimicking the
 //! firmware's global singleton HAL functions.
 
+use core::sync::atomic::{AtomicBool, Ordering};
 use sensor_watch_core::mock_hw::Hw;
 
+/// A raw trait-object pointer cannot auto-implement `Send` because the trait
+/// itself is not required to be `Send`. The slot is protected by a critical
+/// section, and the seam's documented single-backend contract prevents the
+/// pointer from being used concurrently.
+#[derive(Clone, Copy)]
+struct DispatchPtr(*mut dyn Hw);
+
+// SAFETY: access to the slot is serialized, and callers must serialize calls
+// through the returned mutable backend as required by this host-only seam.
+unsafe impl Send for DispatchPtr {}
+
 /// The installed host backend (None until [`install_hw`] is called).
-static mut DISPATCH: Option<*mut dyn Hw> = None;
+static mut DISPATCH: Option<DispatchPtr> = None;
+static DISPATCH_LOCKED: AtomicBool = AtomicBool::new(false);
+
+fn lock_dispatch() {
+    while DISPATCH_LOCKED
+        .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+}
+
+fn unlock_dispatch() {
+    DISPATCH_LOCKED.store(false, Ordering::Release);
+}
 
 /// Installs `hw` as the backend that the `watch` free functions forward to.
 ///
@@ -47,16 +73,20 @@ pub fn install_hw(hw: &mut dyn Hw) {
     // alive until the face is done writing (mirrors the ARM HAL, where the
     // registers live for the whole firmware).
     let leaked: *mut (dyn Hw + 'static) = unsafe { core::mem::transmute(hw) };
+    lock_dispatch();
     unsafe {
-        DISPATCH = Some(leaked);
+        DISPATCH = Some(DispatchPtr(leaked));
     }
+    unlock_dispatch();
 }
 
 /// Clears the installed backend. Optional; for completeness.
 pub fn clear_hw() {
+    lock_dispatch();
     unsafe {
         DISPATCH = None;
     }
+    unlock_dispatch();
 }
 
 /// Returns the installed backend, panicking if none is installed.
@@ -64,15 +94,19 @@ pub fn clear_hw() {
 /// This is the single seam point that every host `watch::*` free function calls.
 #[inline]
 pub fn hw() -> &'static mut dyn Hw {
-    unsafe {
+    lock_dispatch();
+    let ptr = unsafe {
         match DISPATCH {
-            Some(ptr) => &mut *ptr,
-            None => {
-                panic!(
-                    "host watch: no Hw installed; call sensor_watch::watch::seam::install_hw \
-                     with a &mut MockHw before driving a face"
-                )
-            }
+            Some(DispatchPtr(ptr)) => ptr,
+            None => panic!(
+                "host watch: no Hw installed; call sensor_watch::watch::seam::install_hw \\
+                 with a &mut MockHw before driving a face"
+            ),
         }
-    }
+    };
+    unlock_dispatch();
+    // SAFETY: `install_hw` documents that the backend outlives all uses and that
+    // callers serialize access. The atomic lock protects the global slot;
+    // this conversion only reborrows the installed backend for one HAL call.
+    unsafe { &mut *ptr }
 }
