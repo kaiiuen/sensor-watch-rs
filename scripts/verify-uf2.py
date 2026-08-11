@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Validate and stage Sensor-Watch UF2 recovery artifacts.
+"""Validate, sign, backup, and stage Sensor-Watch UF2 recovery artifacts.
 
-This tool never writes the ROM bootloader and never flashes a board. It checks
-UF2 framing and SAM L22 metadata, records CRC32/SHA256, and makes explicit,
-non-destructive backup and rollback copies for USB drag-and-drop recovery.
+This tool is deliberately host-side. It never writes the ROM bootloader and
+never flashes a board. A detached manifest signature is a tamper-evident
+SHA-256 digest, not a vendor/public-key signature; authenticity still requires
+checking the manifest/signature from a trusted release channel.
 """
 
 import argparse
@@ -12,6 +13,7 @@ import json
 import shutil
 import struct
 import sys
+import time
 import zlib
 from pathlib import Path
 from typing import NoReturn
@@ -24,6 +26,7 @@ APP_START = 0x2000
 PAYLOAD = 256
 BLOCK = 512
 MAX_APP_BYTES = 0x3C000 - APP_START
+FORMAT = "sensor-watch-recovery-manifest-v2"
 
 
 def fail(message) -> NoReturn:
@@ -34,19 +37,16 @@ def fail(message) -> NoReturn:
 def inspect(path):
     try:
         file_size = path.stat().st_size
-    except OSError as exc:
-        fail(f"cannot inspect {path}: {exc}")
-    if not file_size or file_size % BLOCK:
-        fail("UF2 must be non-empty and a multiple of 512 bytes")
-    max_uf2_bytes = ((MAX_APP_BYTES + PAYLOAD - 1) // PAYLOAD) * BLOCK
-    if file_size > max_uf2_bytes:
-        fail(f"UF2 is {file_size} bytes; maximum is {max_uf2_bytes}")
-    try:
         data = path.read_bytes()
     except OSError as exc:
         fail(f"cannot read {path}: {exc}")
     if len(data) != file_size:
         fail("UF2 changed while it was being read")
+    if not file_size or file_size % BLOCK:
+        fail("UF2 must be non-empty and a multiple of 512 bytes")
+    max_uf2_bytes = ((MAX_APP_BYTES + PAYLOAD - 1) // PAYLOAD) * BLOCK
+    if file_size > max_uf2_bytes:
+        fail(f"UF2 is {file_size} bytes; maximum is {max_uf2_bytes}")
     count = len(data) // BLOCK
     image = bytearray()
     for index in range(count):
@@ -59,7 +59,7 @@ def inspect(path):
             fail(f"block {index}: family-ID flag is missing")
         if (address != APP_START + index * PAYLOAD or size != PAYLOAD or
                 number != index or total != count or family != FAMILY):
-            fail(f"block {index}: board or block metadata is invalid")
+            fail(f"block {index}: board, family, or block metadata is invalid")
         if struct.unpack_from("<I", block, 508)[0] != END:
             fail(f"block {index}: invalid UF2 end magic")
         image.extend(block[32:32 + PAYLOAD])
@@ -68,10 +68,16 @@ def inspect(path):
     return data, bytes(image), count
 
 
-def record(path):
+def generation_id(data):
+    # Time makes each backup selectable even when two images have the same hash.
+    return f"g{time.time_ns()}-{hashlib.sha256(data).hexdigest()[:12]}"
+
+
+def record(path, generation=None):
     data, image, blocks = inspect(path)
-    return {
-        "format": "sensor-watch-recovery-manifest-v1",
+    manifest = {
+        "format": FORMAT,
+        "generation_id": generation or generation_id(data),
         "board": "ATSAML22J18A",
         "family_id": f"0x{FAMILY:08X}",
         "application_start": f"0x{APP_START:08X}",
@@ -84,10 +90,36 @@ def record(path):
         "payload_sha256": hashlib.sha256(image).hexdigest(),
         "artifact": str(path),
     }
+    manifest["signature"] = sign_manifest(manifest)
+    return manifest
+
+
+def sign_manifest(manifest):
+    unsigned = {key: value for key, value in manifest.items() if key != "signature"}
+    canonical = json.dumps(unsigned, sort_keys=True, separators=(",", ":")).encode("ascii")
+    return "sha256:" + hashlib.sha256(canonical).hexdigest()
 
 
 def write_manifest(path, manifest):
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="ascii")
+    path.with_suffix(path.suffix + ".sig").write_text(
+        manifest["signature"] + "\n", encoding="ascii"
+    )
+
+
+def verify_manifest(path, manifest_path):
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="ascii"))
+    except (OSError, ValueError) as exc:
+        fail(f"cannot read manifest: {exc}")
+    if manifest.get("format") != FORMAT or manifest.get("signature") != sign_manifest(manifest):
+        fail("manifest signature is invalid")
+    actual = record(path, generation=manifest.get("generation_id"))
+    for field in ("board", "family_id", "uf2_bytes", "uf2_blocks", "crc32_ieee", "sha256", "payload_sha256"):
+        if actual.get(field) != manifest.get(field):
+            fail(f"manifest mismatch for {field}")
+    return manifest
 
 
 def main():
@@ -106,6 +138,7 @@ def main():
     rollback = sub.add_parser("rollback", help="validate a backup and stage it for flashing")
     rollback.add_argument("backup", type=Path)
     rollback.add_argument("output", type=Path)
+    rollback.add_argument("--manifest", type=Path)
 
     args = parser.parse_args()
     if args.command == "verify":
@@ -121,18 +154,28 @@ def main():
             fail(f"refusing to overwrite existing known-good backup: {args.backup}")
         args.backup.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(args.uf2, args.backup)
-        if args.manifest:
-            write_manifest(args.manifest, manifest)
+        write_manifest(args.manifest or args.backup.with_suffix(args.backup.suffix + ".json"), manifest)
         print(f"preserved known-good UF2 at {args.backup}")
+        print(f"generation {manifest['generation_id']}")
         print(f"sha256 {manifest['sha256']}")
         return
 
-    manifest = record(args.backup)
+    manifest_path = args.manifest or args.backup.with_suffix(args.backup.suffix + ".json")
+    if manifest_path.exists():
+        manifest = verify_manifest(args.backup, manifest_path)
+    else:
+        manifest = record(args.backup)
     if args.output.resolve() == args.backup.resolve():
         fail("rollback output must differ from the backup")
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(args.backup, args.output)
+    temp = args.output.with_suffix(args.output.suffix + ".tmp")
+    shutil.copy2(args.backup, temp)
+    if temp.stat().st_size != args.backup.stat().st_size:
+        temp.unlink(missing_ok=True)
+        fail("rollback copy size verification failed")
+    temp.replace(args.output)
     print(f"staged rollback UF2 at {args.output}")
+    print(f"generation {manifest['generation_id']}")
     print(f"sha256 {manifest['sha256']}")
     print("Drag the staged UF2 to the watch USB drive; this tool does not flash hardware.")
 

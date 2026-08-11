@@ -44,5 +44,11 @@ sysinfo = { version = "0.35", features = ["network"] }
 # HTTP client for fetching the release checksum
 ureq = "2"
 
+# Offline artifact manifests and generation checksums
+sha2 = "0.10"
+
 # Open the GitHub repo in the default browser when the title is clicked
 webbrowser = "1"
+
+# Cross-platform host serial ports for the documented UART jig (not USB CDC)
+serialport = "4.7"

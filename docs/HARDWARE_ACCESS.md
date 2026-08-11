@@ -58,7 +58,11 @@ Once connected, type a command and press Enter. The supported commands are:
 - `help` - list the commands (`CMDS: time, settime YYMMDDHHMMSS, drift N`).
 
 This is how clock setting and drift correction can be driven from a PC, for
-example by the companion app during calibration.
+example by the companion app during calibration. Studio's **Shell Access**
+panel exposes this as an explicit **UART Jig** mode: refresh host ports, select
+the adapter, connect, and then send commands. The default **Simulated** mode
+continues to operate entirely on the in-app watch model. A port-open, write, or
+read timeout is shown as an error; it is never reported as a watch response.
 
 ## Path B: SWD probe (full debug)
 
@@ -90,7 +94,8 @@ talking to the running shell.
 
 ## Summary
 
-- Serial-over-USB (CDC) is not available without replacing the ROM bootloader.
+- Serial-over-USB (CDC) is not available without replacing the ROM bootloader;
+  Studio does not pretend that the UF2 drive is a serial port.
 - Two real access paths exist: a UART jig (3 debug pads, 9600 baud, the shell
   with `time` / `settime` / `drift N` / `help`) and an SWD probe.
 - Both require hardware and soldering, so this stays a backburner / hardware

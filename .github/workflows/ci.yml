@@ -60,6 +60,8 @@ jobs:
       - name: Run core tests
         # Override the workspace's embedded target so tests run on the host.
         run: cargo test -p sensor-watch-core --target x86_64-unknown-linux-gnu
+      - name: Test recovery validator
+        run: python3 scripts/test_verify_uf2.py
 
   studio:
     name: Build Studio (GUI app)
@@ -105,11 +107,16 @@ jobs:
           cargo run -p sensor-watch-core --bin uf2tool -- \
             target/thumbv6m-none-eabi/release/sensor-watch.bin \
             target/thumbv6m-none-eabi/release/sensor-watch.uf2
-      - name: Upload UF2 artifact
+      - name: Validate UF2 and write manifest
+        run: python3 scripts/verify-uf2.py verify target/thumbv6m-none-eabi/release/sensor-watch.uf2 --manifest target/thumbv6m-none-eabi/release/sensor-watch.uf2.json
+      - name: Upload UF2 artifact and recovery manifest
         uses: actions/upload-artifact@v4
         with:
           name: sensor-watch-uf2
-          path: target/thumbv6m-none-eabi/release/sensor-watch.uf2
+          path: |
+            target/thumbv6m-none-eabi/release/sensor-watch.uf2
+            target/thumbv6m-none-eabi/release/sensor-watch.uf2.json
+            target/thumbv6m-none-eabi/release/sensor-watch.uf2.json.sig
 
   fmt:
     name: Format

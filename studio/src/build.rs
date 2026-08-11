@@ -4,6 +4,8 @@
 //! binary to a `.uf2` file using the `sensor-watch-core` UF2 encoder. This is
 //! the "assembler" part of Firmware Studio.
 
+use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -211,8 +213,60 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
             uf2_path: None,
         };
     }
+    // Never discard the previous artifact. Preserve it as a uniquely named,
+    // validated recovery generation before publishing the new output.
     if had_old {
+        let recovery_dir = output_dir.join("recovery").join("generations");
+        if let Err(e) = std::fs::create_dir_all(&recovery_dir) {
+            return BuildResult {
+                success: false,
+                message: format!("built UF2, but could not create recovery directory: {e}"),
+                uf2_path: Some(uf2),
+            };
+        }
+        let old_data = match std::fs::read(&backup) {
+            Ok(data) => data,
+            Err(e) => {
+                return BuildResult {
+                    success: false,
+                    message: format!("built UF2, but could not read previous backup: {e}"),
+                    uf2_path: Some(uf2),
+                };
+            }
+        };
+        if let Err(e) = sensor_watch_core::uf2::validate(&old_data) {
+            return BuildResult {
+                success: false,
+                message: format!("refusing to retain invalid previous UF2: {e}"),
+                uf2_path: Some(uf2),
+            };
+        }
+        let old_sha = hex_sha256(&old_data);
+        let generation = format!("g{}-{}", unix_nanos(), &old_sha[..12]);
+        let old_path = recovery_dir.join(format!("{generation}.uf2"));
+        if let Err(e) = std::fs::copy(&backup, &old_path) {
+            return BuildResult {
+                success: false,
+                message: format!("built UF2, but could not preserve previous generation: {e}"),
+                uf2_path: Some(uf2),
+            };
+        }
+        if let Err(e) = write_manifest(&old_path, &old_data, &generation) {
+            return BuildResult {
+                success: false,
+                message: format!("built UF2, but could not write recovery manifest: {e}"),
+                uf2_path: Some(uf2),
+            };
+        }
         let _ = std::fs::remove_file(&backup);
+    }
+    let generation = format!("g{}-{}", unix_nanos(), &hex_sha256(&uf2_data)[..12]);
+    if let Err(e) = write_manifest(&uf2, &uf2_data, &generation) {
+        return BuildResult {
+            success: false,
+            message: format!("UF2 published, but manifest write failed: {e}"),
+            uf2_path: Some(uf2),
+        };
     }
 
     BuildResult {
@@ -224,6 +278,73 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
         ),
         uf2_path: Some(uf2),
     }
+}
+
+fn unix_nanos() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0)
+}
+
+fn hex_sha256(data: &[u8]) -> String {
+    Sha256::digest(data)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// Writes the same signed, offline-verifiable manifest used by verify-uf2.py.
+fn write_manifest(uf2: &Path, data: &[u8], generation: &str) -> std::io::Result<()> {
+    let parsed = sensor_watch_core::uf2::validate(data).map_err(std::io::Error::other)?;
+    let mut fields = BTreeMap::new();
+    fields.insert(
+        "application_start",
+        serde_json::json!(format!("0x{:08X}", sensor_watch_core::uf2::APP_START_ADDR)),
+    );
+    fields.insert("artifact", serde_json::json!(uf2.display().to_string()));
+    fields.insert("board", serde_json::json!("ATSAML22J18A"));
+    fields.insert(
+        "crc32_ieee",
+        serde_json::json!(format!(
+            "0x{:08X}",
+            sensor_watch_core::uf2::crc32(&parsed.image)
+        )),
+    );
+    fields.insert(
+        "family_id",
+        serde_json::json!(format!(
+            "0x{:08X}",
+            sensor_watch_core::uf2::SAML22_FAMILY_ID
+        )),
+    );
+    fields.insert(
+        "format",
+        serde_json::json!("sensor-watch-recovery-manifest-v2"),
+    );
+    fields.insert("generation_id", serde_json::json!(generation));
+    fields.insert(
+        "maximum_application_bytes",
+        serde_json::json!(sensor_watch_core::uf2::MAX_APPLICATION_BYTES),
+    );
+    fields.insert("payload_bytes", serde_json::json!(parsed.image.len()));
+    fields.insert(
+        "payload_sha256",
+        serde_json::json!(hex_sha256(&parsed.image)),
+    );
+    fields.insert("sha256", serde_json::json!(hex_sha256(data)));
+    fields.insert("uf2_blocks", serde_json::json!(parsed.block_count));
+    fields.insert("uf2_bytes", serde_json::json!(data.len()));
+    let canonical = serde_json::to_vec(&fields).map_err(std::io::Error::other)?;
+    let signature = format!("sha256:{}", hex_sha256(&canonical));
+    fields.insert("signature", serde_json::json!(signature.clone()));
+    let manifest = serde_json::to_string_pretty(&fields).map_err(std::io::Error::other)? + "\n";
+    let manifest_path = uf2.with_extension("uf2.json");
+    std::fs::write(&manifest_path, manifest)?;
+    std::fs::write(
+        manifest_path.with_extension("json.sig"),
+        format!("{signature}\n"),
+    )
 }
 
 /// Locates `rust-objcopy` under the Rust toolchain.

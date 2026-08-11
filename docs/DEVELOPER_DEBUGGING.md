@@ -164,9 +164,23 @@ device without any debug tooling.
 
 The firmware keeps a small, RAM-only structured event ring in
 `src/watch/event_log.rs`. It has fixed storage (16 entries, no heap), retains the
-newest entries when full, and records a sequence, packed RTC timestamp (or an
+newest entries when full, and records a sequence, packed RTC timestamp (or
 untimed fallback during early boot/panic), stable event code, and small payload.
 Faults are recorded automatically alongside the persistent fault summary.
+
+The optional `defmt-log` Cargo feature mirrors each event to an RTT backend for
+an SWD probe. It also emits fault codes, reset reasons, and panic fingerprints;
+the persistent backup-register summary and the event ring remain in place as
+fallbacks. Enable it only for an ARM firmware build:
+
+```sh
+cargo build --target thumbv6m-none-eabi -p sensor-watch --features defmt-log
+```
+
+Use the resulting ELF with `probe-rs run` as in the flashing section above. The
+normal build command does not enable this feature, so it does not add `defmt`,
+RTT, RTT sections, or logging call-site code to the default firmware. The
+feature is target-checked and intentionally rejected for host builds.
 
 Over the UART shell:
 
@@ -178,14 +192,8 @@ events clear
 
 The fields are sequence, timestamp, event code, and payload, all hexadecimal.
 This is deliberately a local breadcrumb buffer rather than a persistent log;
-reset clears it. A future RTT/defmt backend can stream the same event values
-without changing the event-producing call sites. No `defmt` dependency is
-currently enabled, keeping the firmware size and UART behavior unchanged.
-
-## Optional / not yet done
-
-- RTT (`rtt_target`) or `defmt` transport for streaming the event values over
-  SWD without a second UART dongle.
+reset clears it. RTT/defmt is a separate live stream and is not a replacement
+for the fallback ring or the reset-surviving fault/fingerprint registers.
 
 ## Summary
 

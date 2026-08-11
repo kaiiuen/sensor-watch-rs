@@ -24,9 +24,17 @@ if [ -z "$OBJCOPY" ]; then
 fi
 "$OBJCOPY" -O binary "$ELF" "$BIN"
 
+echo "==> Preserving the previous UF2, if present..."
+if [ -f "$UF2" ]; then
+    mkdir -p target/thumbv6m-none-eabi/release/recovery/generations
+    GENERATION="target/thumbv6m-none-eabi/release/recovery/generations/$(date +%s).uf2"
+    python3 scripts/verify-uf2.py backup "$UF2" "$GENERATION"
+fi
+
 echo "==> Converting to UF2..."
 # Run the tool on the host target (not the embedded target).
 cargo run -p sensor-watch-core --bin uf2tool --target x86_64-pc-windows-msvc -- "$BIN" "$UF2"
+python3 scripts/verify-uf2.py verify "$UF2" --manifest "$UF2.json"
 
-echo "==> Done: $UF2"
+echo "==> Done: $UF2 (manifest: $UF2.json)"
 ls -la "$UF2"
