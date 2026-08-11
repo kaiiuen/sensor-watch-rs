@@ -5,6 +5,15 @@ fn usage() -> ! {
     eprintln!("usage: sensor-watch-tools <build|uf2|verify|backup|rollback|report|flash> ...");
     std::process::exit(2)
 }
+fn help() {
+    println!("usage: sensor-watch-tools <build|uf2|verify|backup|rollback|report|flash> ...");
+}
+fn ensure_no_extra(args: &mut impl Iterator<Item = String>) {
+    if let Some(extra) = args.next() {
+        eprintln!("error: unexpected argument: {extra} (try --help)");
+        std::process::exit(2);
+    }
+}
 fn fail(message: impl std::fmt::Display) -> ! {
     eprintln!("error: {message}");
     std::process::exit(1)
@@ -20,16 +29,23 @@ fn main() -> ExitCode {
     let mut args = env::args().skip(1);
     let command = args.next().unwrap_or_else(|| usage());
     match command.as_str() {
-        "build" => println!(
-            "built {}",
-            tools::build_firmware()
-                .unwrap_or_else(|e| fail(e))
-                .uf2_path
-                .display()
-        ),
+        "help" | "--help" | "-h" => {
+            help();
+        }
+        "build" => {
+            ensure_no_extra(&mut args);
+            println!(
+                "built {}",
+                tools::build_firmware()
+                    .unwrap_or_else(|e| fail(e))
+                    .uf2_path
+                    .display()
+            )
+        }
         "uf2" => {
             let input = PathBuf::from(required(&mut args));
             let output = PathBuf::from(required(&mut args));
+            ensure_no_extra(&mut args);
             tools::convert_uf2(&input, &output).unwrap_or_else(|e| fail(e));
             println!("wrote {}", output.display());
         }
@@ -39,8 +55,10 @@ fn main() -> ExitCode {
             let mut trusted = None;
             while let Some(arg) = args.next() {
                 match arg.as_str() {
-                    "--manifest" => manifest = Some(PathBuf::from(required(&mut args))),
-                    "--trusted-sha256" => trusted = Some(required(&mut args)),
+                    "--manifest" if manifest.is_none() => {
+                        manifest = Some(PathBuf::from(required(&mut args)))
+                    }
+                    "--trusted-sha256" if trusted.is_none() => trusted = Some(required(&mut args)),
                     _ => usage(),
                 }
             }
@@ -55,6 +73,7 @@ fn main() -> ExitCode {
         "backup" => {
             let src = PathBuf::from(required(&mut args));
             let dst = PathBuf::from(required(&mut args));
+            ensure_no_extra(&mut args);
             tools::backup_uf2(&src, &dst).unwrap_or_else(|e| fail(e));
             println!("preserved known-good UF2 at {}", dst.display());
         }
@@ -62,6 +81,7 @@ fn main() -> ExitCode {
             let src = PathBuf::from(required(&mut args));
             let dst = PathBuf::from(required(&mut args));
             let trusted = required(&mut args);
+            ensure_no_extra(&mut args);
             let m = tools::rollback_uf2(&src, &dst, &trusted).unwrap_or_else(|e| fail(e));
             println!(
                 "staged rollback UF2 at {}\ngeneration {}\nsha256 {}",
@@ -73,6 +93,7 @@ fn main() -> ExitCode {
         "report" => {
             let path = PathBuf::from(required(&mut args));
             let trusted = required(&mut args);
+            ensure_no_extra(&mut args);
             let report = tools::recovery_report(&path, &trusted).unwrap_or_else(|e| fail(e));
             println!("{}", serde_json::to_string_pretty(&report).unwrap());
         }
@@ -81,6 +102,7 @@ fn main() -> ExitCode {
                 args.next()
                     .unwrap_or_else(|| "target/thumbv6m-none-eabi/release/sensor-watch".into()),
             );
+            ensure_no_extra(&mut args);
             tools::flash_firmware(&elf).unwrap_or_else(|e| fail(e));
         }
         _ => usage(),

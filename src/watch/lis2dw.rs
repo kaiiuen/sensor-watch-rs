@@ -374,11 +374,13 @@ pub fn disable_fifo() {
 pub fn read_fifo(fifo: &mut Fifo, timeout: u32) -> bool {
     let temp = i2c::read8(ADDRESS, REG_FIFO_SAMPLE);
     let overrun = temp & FIFO_SAMPLE_OVERRUN != 0;
-    fifo.count = temp & FIFO_SAMPLE_COUNT;
+    // The register exposes a 6-bit count, but the sensor FIFO and our storage
+    // buffer both hold at most 32 samples. Keep `count` consistent with the
+    // number of readings actually written so callers cannot index past the
+    // fixed-size buffer when the device reports a saturated/invalid count.
+    let available = (temp & FIFO_SAMPLE_COUNT).min(fifo.readings.len() as u8);
+    fifo.count = available.min(timeout.min(u8::MAX as u32) as u8);
     for i in 0..fifo.count as usize {
-        if i as u32 >= timeout {
-            break;
-        }
         fifo.readings[i] = get_raw_reading();
     }
     overrun

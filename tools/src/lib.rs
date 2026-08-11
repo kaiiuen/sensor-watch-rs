@@ -5,10 +5,51 @@ use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::{
     env, fs,
-    io::Write,
+    io::{Read, Write},
     path::{Path, PathBuf},
     process::Command,
 };
+
+struct BuildLock {
+    path: PathBuf,
+}
+
+impl Drop for BuildLock {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_build_lock(root: &Path) -> ToolResult<BuildLock> {
+    let target = root.join("target");
+    fs::create_dir_all(&target).map_err(|e| format!("cannot create build directory: {e}"))?;
+    let path = target.join(".sensor-watch-build.lock");
+    fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map(|_| BuildLock { path })
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                "another firmware build is already running".into()
+            } else {
+                format!("cannot acquire build lock: {e}")
+            }
+        })
+}
+
+fn remove_regular_file(path: &Path) -> ToolResult<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() || !metadata.is_file() => {
+            Err(format!("refusing non-regular path: {}", path.display()))
+        }
+        Ok(_) => {
+            fs::remove_file(path).map_err(|e| format!("cannot remove {}: {e}", path.display()))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(format!("cannot inspect {}: {e}", path.display())),
+    }
+}
 
 pub const MANIFEST_FORMAT: &str = "sensor-watch-recovery-manifest-v2";
 pub const MAX_UF2_BYTES: usize = MAX_APPLICATION_BYTES.div_ceil(UF2_PAYLOAD_SIZE) * UF2_BLOCK_SIZE;
@@ -28,15 +69,33 @@ pub struct BuildResult {
 }
 
 fn read_file(path: &Path, maximum: usize) -> ToolResult<Vec<u8>> {
-    if path.is_symlink() {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|e| format!("cannot inspect {}: {e}", path.display()))?;
+    if metadata.file_type().is_symlink() {
         return Err(format!("refusing symlinked file path: {}", path.display()));
     }
-    let data = fs::read(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-    if data.len() > maximum {
+    if !metadata.is_file() {
+        return Err(format!("refusing non-file input path: {}", path.display()));
+    }
+    if metadata.len() > maximum as u64 {
         return Err(format!(
             "{} is {} bytes; maximum is {maximum}",
             path.display(),
-            data.len()
+            metadata.len()
+        ));
+    }
+
+    // Read one byte beyond the limit as well: the file can grow after the
+    // metadata check, and this keeps the allocation bounded in that case.
+    let file = fs::File::open(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    let mut data = Vec::new();
+    file.take(maximum as u64 + 1)
+        .read_to_end(&mut data)
+        .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    if data.len() > maximum {
+        return Err(format!(
+            "{} is larger than the maximum of {maximum} bytes",
+            path.display()
         ));
     }
     Ok(data)
@@ -348,6 +407,9 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
     None
 }
 pub fn build_firmware() -> ToolResult<BuildResult> {
+    let root =
+        env::current_dir().map_err(|e| format!("cannot determine workspace directory: {e}"))?;
+    let _build_lock = acquire_build_lock(&root)?;
     let mut c = Command::new("cargo");
     c.args([
         "build",
@@ -383,16 +445,28 @@ pub fn build_firmware() -> ToolResult<BuildResult> {
     }
     write_binary(&uf2_path, &encoded)?;
     let manifest_path = uf2_path.with_extension("uf2.json");
-    if manifest_path.exists() {
-        verify_uf2(&uf2_path, Some(&manifest_path), None)?;
-    } else {
-        write_manifest(&manifest_path, &create_manifest(&uf2_path, None, None)?)?;
-    }
+    let signature_path = manifest_path.with_extension("json.sig");
+    remove_regular_file(&manifest_path)?;
+    remove_regular_file(&signature_path)?;
+    write_manifest(&manifest_path, &create_manifest(&uf2_path, None, None)?)?;
     Ok(BuildResult { uf2_path })
 }
 pub fn flash_firmware(elf: &Path) -> ToolResult<()> {
-    if !elf.is_file() {
-        return Err(format!("firmware ELF not found at {}", elf.display()));
+    match fs::symlink_metadata(elf) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(format!(
+                "refusing symlinked firmware ELF: {}",
+                elf.display()
+            ));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(format!(
+                "firmware ELF is not a regular file: {}",
+                elf.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(e) => return Err(format!("firmware ELF not found at {}: {e}", elf.display())),
     }
     let mut c = Command::new("probe-rs");
     c.args([
