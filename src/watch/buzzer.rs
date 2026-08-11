@@ -247,7 +247,7 @@ pub fn set_buzzer_off() {
 /// blocks the CPU for the duration, so it is only suitable for short, explicit
 /// tones (e.g. a single button beep).
 pub fn play_note(note: Note, duration_ms: u16) {
-    if note == Note::Rest {
+    if (note as usize) >= NOTE_PERIODS.len() || note == Note::Rest {
         set_buzzer_off();
         return;
     }
@@ -323,6 +323,12 @@ fn tc3_initialize() {
 /// with a zero. A negative note value rewinds the sequence by that many notes;
 /// the following byte is the loop count.
 pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
+    // The legacy ABI supplies only a pointer, so reject null and validate a
+    // bounded sequence before retaining it for the interrupt callback.
+    if note_sequence.is_null() || !validate_sequence(note_sequence) {
+        set_buzzer_off();
+        return;
+    }
     if unsafe { CALLBACK_RUNNING } {
         tc3_stop();
     }
@@ -340,13 +346,34 @@ pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
     tc3_start();
 }
 
+fn validate_sequence(sequence: *const i8) -> bool {
+    for pair in 0..128usize {
+        let note = unsafe { *sequence.add(pair * 2) };
+        let duration = unsafe { *sequence.add(pair * 2 + 1) };
+        if note == 0 {
+            return true;
+        }
+        if note < 0 {
+            if duration <= 0 {
+                return false;
+            }
+        } else if note as usize >= NOTE_PERIODS.len() || duration <= 0 {
+            return false;
+        }
+    }
+    false
+}
+
 /// The 64 Hz sequence callback.
 fn cb_watch_buzzer_seq() {
     unsafe {
         if TONE_TICKS == 0 {
             let seq = SEQUENCE;
             let pos = SEQ_POSITION as isize;
-            if *seq.add(pos as usize) < 0 && *seq.add(pos as usize + 1) != 0 {
+            if *seq.add(pos as usize) < 0
+                && *seq.add(pos as usize) != Note::Rest as i8
+                && *seq.add(pos as usize + 1) != 0
+            {
                 // Repeat indicator found.
                 if REPEAT_COUNTER == -1 {
                     REPEAT_COUNTER = *seq.add(pos as usize + 1);
@@ -372,7 +399,12 @@ fn cb_watch_buzzer_seq() {
                 // Read note.
                 let note = *seq.add(pos as usize) as u8;
                 if note != Note::Rest as u8 {
-                    set_buzzer_period(NOTE_PERIODS[note as usize] as u32);
+                    if (note as usize) < NOTE_PERIODS.len() {
+                        let _ = set_buzzer_period(NOTE_PERIODS[note as usize] as u32);
+                    } else {
+                        abort_sequence();
+                        return;
+                    }
                     set_buzzer_on();
                 } else {
                     set_buzzer_off();

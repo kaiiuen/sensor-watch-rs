@@ -13,6 +13,19 @@ const A2: Pin = Pin(1, 2);
 const A3: Pin = Pin(1, 3);
 const A4: Pin = Pin(1, 0);
 
+fn valid_uart_pin(pin: Pin, tx: bool) -> bool {
+    pin.0 == 1
+        && if tx {
+            pin.1 == 0 || pin.1 == 2
+        } else {
+            pin.1 <= 3
+        }
+}
+
+fn valid_baud(baud: u32) -> bool {
+    (300..=250_000).contains(&baud)
+}
+
 /// Returns a reference to the SERCOM3 USART register block.
 fn usart() -> &'static Usart {
     // SAFETY: the SERCOM3 register block lives at a fixed address for the whole
@@ -44,6 +57,12 @@ fn sync() {
 /// `tx_pin` is A2 or A4 (or 0 for receive-only); `rx_pin` is A1/A2/A3/A4
 /// (or 0 for transmit-only).
 pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
+    let tx_valid = tx_pin.map_or(true, |pin| valid_uart_pin(pin, true));
+    let rx_valid = rx_pin.map_or(true, |pin| valid_uart_pin(pin, false));
+    if !tx_valid || !rx_valid || !valid_baud(baud) {
+        disable_uart();
+        return;
+    }
     // Enable clocks: SERCOM3 core (GCLK0) plus the APBC clock.
     gclk()
         .pchctrl(19)
@@ -73,7 +92,7 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
     if let Some(pin) = tx_pin {
         gpio::set_pin_direction(pin, Direction::Out);
         gpio::set_pin_function(pin, Function::Mux(2)); // function C
-        // SAFETY: writing valid TXPO values.
+                                                       // SAFETY: writing valid TXPO values.
         unsafe {
             if pin == A2 {
                 usart()
@@ -92,7 +111,7 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
     if let Some(pin) = rx_pin {
         gpio::set_pin_direction(pin, Direction::In);
         gpio::set_pin_function(pin, Function::Mux(2)); // function C
-        // SAFETY: writing valid RXPO values.
+                                                       // SAFETY: writing valid RXPO values.
         unsafe {
             let rxpo = match pin {
                 A1 => 3,
@@ -121,6 +140,11 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
 }
 
 /// Transmits a string of bytes on the UART's TX pin.
+pub fn disable_uart() {
+    usart().ctrla().modify(|_, w| w.enable().clear_bit());
+    mclk().apbcmask().modify(|_, w| w.sercom3_().clear_bit());
+}
+
 pub fn puts(s: &str) {
     for &byte in s.as_bytes() {
         // Wait for the data register to be empty (bounded).
@@ -136,9 +160,19 @@ pub fn puts(s: &str) {
     let _ = wait_until(|| usart().intflag().read().txc().bit_is_set());
 }
 
-/// Receives a single byte from the UART's RX pin (blocking).
+/// Receives a byte if one is already available.
+pub fn try_getc() -> Option<u8> {
+    if usart().intflag().read().rxc().bit_is_set() {
+        Some(usart().data().read().bits() as u8)
+    } else {
+        None
+    }
+}
+
+/// Receives a single byte from the UART (bounded blocking).
 pub fn getc() -> u8 {
-    // Wait for a byte (bounded).
-    let _ = wait_until(|| usart().intflag().read().rxc().bit_is_set());
+    if wait_until(|| usart().intflag().read().rxc().bit_is_set()).is_err() {
+        return 0;
+    }
     usart().data().read().bits() as u8
 }

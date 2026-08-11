@@ -16,7 +16,12 @@ controller. This workspace also has no TinyUSB or compatible Rust USB device
 stack. Implementing transfers by guessing those addresses would be unsafe and
 could present a nonfunctional device as working.
 
-The opt-in feature is therefore compile-safe scaffolding, not a CDC claim:
+A CDC application mode is technically feasible without changing the UF2
+bootloader, because the application has its own USB device address space and the
+existing shell already has a feature-gated transport boundary. It is not yet a
+working reference implementation: the missing PAC/HAL coverage and device stack
+must be supplied and reviewed first. The opt-in feature is currently
+compile-safe scaffolding, not a CDC claim:
 
 ```sh
 cargo build --target thumbv6m-none-eabi -p sensor-watch
@@ -28,4 +33,4 @@ and the existing UF2 application/bootloader split. If `usb-cdc` is enabled,
 firmware initialization returns an explicit `UsbError::Unsupported` and stops
 rather than silently running a partial USB implementation. Completing this
 feature requires a PAC update or a reviewed SAM L22 USB SRAM HAL plus a device
-stack, followed by transfer and host enumeration tests.
+stack, followed by transfer, host enumeration, suspend/resume, and power tests.

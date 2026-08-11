@@ -13,13 +13,13 @@ use crate::watch::uart;
 use crate::watch::usb;
 
 #[cfg(not(feature = "usb-cdc"))]
-fn transport_getc() -> u8 {
-    uart::getc()
+fn transport_getc() -> Option<u8> {
+    uart::try_getc()
 }
 
 #[cfg(feature = "usb-cdc")]
-fn transport_getc() -> u8 {
-    usb::read().ok().flatten().unwrap_or(0)
+fn transport_getc() -> Option<u8> {
+    usb::read().ok().flatten()
 }
 
 #[cfg(not(feature = "usb-cdc"))]
@@ -57,11 +57,11 @@ impl Shell {
     pub fn poll(&mut self) {
         // Read as many bytes as are available (bounded).
         for _ in 0..16 {
-            let c = transport_getc();
+            let Some(c) = transport_getc() else { break };
             if c == b'\n' || c == b'\r' {
                 self.execute();
                 self.len = 0;
-            } else if c != 0 && self.len < LINE_MAX {
+            } else if self.len < LINE_MAX {
                 self.line[self.len] = c;
                 self.len += 1;
             }
@@ -91,6 +91,19 @@ impl Shell {
                 transport_puts("\\r\\n");
             }
             b"events" => dump_events(),
+            b"drift" => {
+                transport_puts("DRIFT ");
+                let value = rtc::freqcorr_read();
+                let mut buf = [b'0'; 5];
+                let magnitude = value.unsigned_abs();
+                buf[0] = if value < 0 { b'-' } else { b'+' };
+                buf[1] = b'0' + ((magnitude / 100) % 10) as u8;
+                buf[2] = b'0' + ((magnitude / 10) % 10) as u8;
+                buf[3] = b'0' + (magnitude % 10) as u8;
+                buf[4] = b'\r';
+                transport_puts(core::str::from_utf8(&buf[..4]).unwrap_or(""));
+                transport_puts("\r\n");
+            }
             b"events clear" => {
                 event_log::clear();
                 transport_puts("OK\\r\\n");
@@ -111,8 +124,18 @@ impl Shell {
                 transport_puts("\r\n");
             }
             _ => {
+                if line.len() >= 7 && &line[..6] == b"drift " {
+                    if let Some(value) = parse_signed(&line[6..]) {
+                        rtc::freqcorr_write(
+                            value.unsigned_abs() as i16,
+                            if value < 0 { 1 } else { 0 },
+                        );
+                        transport_puts("OK\r\n");
+                    } else {
+                        transport_puts("ERR drift\r\n");
+                    }
                 // settime YYMMDDHHMMSS
-                if line.len() == 21 && &line[..7] == b"settime" {
+                } else if line.len() == 20 && &line[..7] == b"settime" {
                     if let Some(dt) = parse_settime(&line[8..]) {
                         if rtc::set_date_time(dt).is_ok() {
                             transport_puts("OK\r\n");
@@ -171,6 +194,31 @@ fn write_dt(buf: &mut [u8; 12], dt: DateTime) {
 }
 
 /// Parses a settime command body "YYMMDDHHMMSS" into a DateTime.
+fn parse_signed(s: &[u8]) -> Option<i16> {
+    if s.is_empty() {
+        return None;
+    }
+    let (negative, digits) = match s[0] {
+        b'-' => (true, &s[1..]),
+        b'+' => (false, &s[1..]),
+        _ => (false, s),
+    };
+    if digits.is_empty() {
+        return None;
+    }
+    let mut value: i16 = 0;
+    for digit in digits {
+        if !digit.is_ascii_digit() {
+            return None;
+        }
+        value = value.checked_mul(10)?.checked_add((digit - b'0') as i16)?;
+    }
+    if value > 127 {
+        return None;
+    }
+    Some(if negative { -value } else { value })
+}
+
 fn parse_settime(s: &[u8]) -> Option<DateTime> {
     if s.len() != 12 {
         return None;
