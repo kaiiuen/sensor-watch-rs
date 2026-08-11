@@ -1,8 +1,8 @@
 # Hardware Test Plan
 
 This document defines the formal test procedure for validating the firmware on
-real Sensor Watch hardware. The firmware is host-tested (unit tests, fuzz tests)
-but has not yet been validated on silicon. This plan closes that gap.
+real Sensor Watch hardware. The firmware has host-side seam and real-face
+coverage, but physical testing remains unexecuted. This plan closes that gap.
 
 > **Status:** Not yet executed. This is the procedure to follow once a board is
 > available for flashing.
@@ -19,7 +19,7 @@ but has not yet been validated on silicon. This plan closes that gap.
 | Test | Procedure | Pass criteria |
 |------|-----------|---------------|
 | Flash | Copy `sensor-watch.uf2` to the bootloader drive | Watch reboots into the firmware; display shows the clock |
-| Boot integrity | Power-cycle the watch 10 times | No corruption LED flash; boots to clock each time |
+| Boot integrity | Power-cycle the watch 10 times | No bricking or recovery halt; boots to clock each time |
 | Boot throttle | Rapidly reset 5+ times within 5 s | Watch enters safe state (dim LED, low-battery symbol) |
 
 ## 2. RTC Accuracy
@@ -35,10 +35,10 @@ but has not yet been validated on silicon. This plan closes that gap.
 
 | Test | Procedure | Pass criteria |
 |------|-----------|---------------|
-| Standby | Measure current on the main face, seconds hidden | < 10 µA |
+| Standby | Measure current on the main face, seconds hidden | < 10 uA |
 | Active | Measure current while a button is held (LED on) | Matches the LED draw (~10 mA) |
 | Low-energy | Enable LE mode, wait for timeout | Current drops to standby levels |
-| Deep sleep | Enter BACKUP mode | Current < 2 µA; RTC keeps time |
+| Deep sleep | Enter BACKUP mode | Current < 2 uA; RTC keeps time |
 | Battery | Measure at 3.0 V, 2.6 V, 2.2 V | BOD33 triggers at ~2.6 V; low-battery indicator at 2.2 V |
 
 ## 4. Flash Wear & Persistence
@@ -58,7 +58,7 @@ but has not yet been validated on silicon. This plan closes that gap.
 | Stopwatch | Start, run 60 s, stop | Shows 1:00 |
 | Timer | Set 5 s, start | Counts down and alarms at 0 |
 | Alarm | Set, enable, wait | Sounds at the set time |
-| Diagnostics | Navigate all submenus | Each screen renders; tests run without crashing |
+| Diagnostics | Navigate all submenus | Simulated diagnostics render and run without crashing; hardware diagnostics require a connected UART jig |
 | Fuzz | Run the Studio fuzz tool on each face | No panics, no invalid display |
 
 ## 6. Fault & Recovery

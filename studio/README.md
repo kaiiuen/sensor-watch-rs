@@ -33,10 +33,12 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   the stopwatch/timer/counter run, the alarm toggles, and the diagnostics face
   is navigable (including a power-on uptime stat). Text renders with the
   firmware's real 7-segment character set. Shows both the sim's face counter
-  and the engine's actual loaded face for catching face-switching bugs. With
-  the opt-in `real-faces` feature, the simulator runs the **real firmware
-  faces** through the `real_face.rs` host seam (see below) instead of the
-  hand-written engine.
+  and the engine's actual loaded face for catching face-switching bugs. These
+  diagnostics are simulated unless a UART jig is connected. With the opt-in
+  `real-faces` feature, the simulator runs the **real firmware faces** through
+  the `real_face.rs` host seam (see below) instead of the hand-written engine;
+  the host seam and real-face coverage do not constitute physical hardware
+  testing.
 - **Build & Flash** - combined panel: select the target board, build the
   firmware into a `.uf2` (with estimated compile/flash times), then flash it to
   the watch. The app **auto-detects** the watch's USB drive and auto-selects
@@ -48,6 +50,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Modules** - register custom hardware modules for modded boards (e.g. a BLE
   board instead of the accelerometer). Each module targets a HAL file in
   `src/watch/`; modules are persisted and can be enabled/disabled/removed.
+  Component profiles remain planning-only and are not implemented.
 - **Debug** - background activity log with Copy All / Export / Clear. Logs
   auto-scroll to the bottom and honor a configurable line limit.
 - **Bugs** - dedicated error/warning log, plus a **Generate bug report** button
@@ -58,7 +61,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Wiki** - a built-in reference browser for project concepts, with search,
   navigation history, and **Browse repos** buttons that open the upstream
   Sensor-Watch and author's repos in the browser.
-- **Settings** - language (English, 简体中文, 繁體中文), theme, text size
+- **Settings** - language (English, Simplified Chinese, Traditional Chinese), theme, text size
   (small/normal/big), configurable **log line limit**, app resource usage
   (app-only, adjustable update rate), settings save/export/import, source
   export, integrity (SHA-256 + release checksum verification), credits with
@@ -101,10 +104,12 @@ invokes the firmware's own `cargo build` and uses the core crate's
 
 The Simulator can also run the **real firmware faces** through a host seam:
 `real_face.rs` drives the firmware's own `WatchFace` code against a mock HAL,
-so the rendered digits come from the same code the firmware runs. This is an
-**opt-in** `real-faces` feature (off by default) because it requires the
-firmware host lib to compile as a host dependency; with it off, the Simulator
-falls back to the hand-written `face_sim` engine.
+so the rendered digits come from the same code the firmware runs. The host seam
+and its real-face coverage are available, but this is an **opt-in**
+`real-faces` feature (off by default) because it requires the firmware host lib
+to compile as a host dependency; with it off, the Simulator falls back to the
+hand-written `face_sim` engine. This remains host-side coverage, not physical
+hardware validation.
 
 ## Dependencies
 
@@ -122,7 +127,7 @@ falls back to the hand-written `face_sim` engine.
 - `face_sim.rs` - the stateful watch-face simulation engine
 - `watch_display.rs` - renders faces to the SVG using the firmware character set
 - `watch_sim.rs` - the F-91W clock/light/CASIO logic and live time accessor
-- `build.rs` - firmware build → UF2, path resolution
+- `build.rs` - firmware build -> UF2, path resolution
 - `faces.rs` - discovers faces from the firmware `mod.rs`
 - `editor.rs` - face templates + read/write/delete
 - `presets.rs` - preset manager

@@ -39,6 +39,15 @@ Apply a crystal frequency correction to the RTC.
 (`freqcorr_write` / `freqcorr_read` in `src/watch/rtc.rs`), and the shell's
 `drift N` command applies a correction step.
 
+### Guided calibration
+
+Provide directed clock and drift calibration instead of requiring manual shell
+commands.
+
+**Status:** Done. Studio provides guided clock calibration at the next minute
+boundary and guided drift calibration. The hardware path still requires a UART
+jig; see `docs/HARDWARE_ACCESS.md`.
+
 ### Raise-to-wake (accelerometer)
 
 Show seconds when the user raises their wrist, then return to the power-saving
@@ -114,8 +123,9 @@ rollback, or any replacement of the ROM bootloader.
   behavior.
 
 **Status:** Partially done. A benchmark/self-test (ECC + CRC) is available in
-the diagnostics face; a hardware test plan lives in `docs/TESTING.md`. Fuzzing
-and `defmt`/RTT structured logging are not yet implemented.
+the diagnostics face, and the fixed-size RAM event log is implemented. Fuzzing
+and `defmt`/RTT transport are not yet implemented; the event log is not
+persistent. A hardware test plan lives in `docs/TESTING.md`.
 
 ### 2. Dual-boot / self-healing partitioning
 
@@ -123,26 +133,12 @@ Split the flash into a minimal protected Golden Image bootloader plus an
 Application slot. If the application fails its CRC check, force a safe recovery
 display instead of running corrupted code.
 
-**Status:** Partially done. The CRC-32 integrity check is implemented, and on
-failure `recovery_halt()` blinks the LED and halts. A true dual-boot with a
-separate Golden Image bootloader partition is not implemented.
+**Status:** Partially done. The CRC-32 integrity check is implemented as a
+non-bricking check; it does not call `recovery_halt()` or provide device-side
+recovery. True dual boot with a separate Golden Image bootloader partition
+remains unavailable.
 
-### 3. Serial shell as a calibration flow
-
-The shell currently has primitive commands (`time`, `settime`, `drift N`), but
-the calibration workflows are not built end-to-end. Shape this into a directed
-PC-driven calibration flow:
-
-- A next-minute-boundary calibration flow (the PC waits for the exact minute
-  and sends a precise timestamp).
-- An automated measure-and-apply drift loop (measure drift over time, then set
-  the frequency correction).
-
-**Status:** Backburner. The primitives exist, but the guided flows are not
-built, and the shell is only reachable via the UART jig (see
-`docs/HARDWARE_ACCESS.md`).
-
-### 4. USB serial console (CDC)
+### 3. USB serial console (CDC)
 
 Expose a virtual serial port over USB so the shell is reachable over the cable
 rather than a UART jig.
@@ -153,7 +149,7 @@ from the firmware (which starts at `0x0000_2000`). Serial-over-USB (CDC) is not
 possible without replacing that ROM bootloader, which is out of scope. The real
 access paths are a UART jig and an SWD probe; see `docs/HARDWARE_ACCESS.md`.
 
-### 5. Configurable boot / OTA deployment tools
+### 4. Configurable boot / OTA deployment tools
 
 Polish and harden the deployment story around the UF2 bootloader:
 
