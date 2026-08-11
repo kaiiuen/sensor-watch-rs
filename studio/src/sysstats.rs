@@ -14,9 +14,8 @@ pub struct SysStats {
     // App (this process).
     /// App CPU usage as a percentage of one core (0-100).
     pub cpu_percent: f32,
-    /// System CPU frequency in MHz, using the highest frequency exposed by
-    /// sysinfo (0 if unknown). This is not a process-specific speed.
-    pub system_cpu_freq_mhz: u64,
+    /// Number of physical CPU cores reported by the system, if available.
+    pub system_cpu_cores: Option<usize>,
     /// Number of threads the app is using, if sysinfo can provide it.
     pub threads: Option<usize>,
     /// App memory usage in bytes.
@@ -35,17 +34,6 @@ pub struct SysStats {
     pub run_time_secs: u64,
 }
 
-/// Formats a system CPU frequency for display.
-///
-/// A zero frequency means that the platform did not report a value.
-pub fn format_system_cpu_frequency(freq_mhz: u64) -> String {
-    if freq_mhz == 0 {
-        "Unknown".to_owned()
-    } else {
-        format!("{freq_mhz} MHz")
-    }
-}
-
 /// Formats the process thread count for display.
 ///
 /// `None` means that the platform/sysinfo backend could not expose the
@@ -53,22 +41,16 @@ pub fn format_system_cpu_frequency(freq_mhz: u64) -> String {
 pub fn format_process_threads(threads: Option<usize>) -> String {
     threads
         .map(|count| count.to_string())
-        .unwrap_or_else(|| "Unavailable on this platform".to_owned())
+        .unwrap_or_else(|| "unavailable on this platform".to_owned())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{format_process_threads, format_system_cpu_frequency};
-
-    #[test]
-    fn formats_unknown_system_frequency() {
-        assert_eq!(format_system_cpu_frequency(0), "Unknown");
-        assert_eq!(format_system_cpu_frequency(1300), "1300 MHz");
-    }
+    use super::format_process_threads;
 
     #[test]
     fn formats_unavailable_process_threads() {
-        assert_eq!(format_process_threads(None), "Unavailable on this platform");
+        assert_eq!(format_process_threads(None), "unavailable on this platform");
         assert_eq!(format_process_threads(Some(12)), "12");
     }
 }
@@ -93,19 +75,19 @@ pub fn spawn_sampler(
 
         loop {
             sys.refresh_cpu_usage();
-            sys.refresh_cpu_frequency();
             sys.refresh_memory();
             sys.refresh_processes(sysinfo::ProcessesToUpdate::All, true);
 
-            let cores = sysinfo::System::physical_core_count().unwrap_or(0);
-
-            let mut stats = SysStats::default();
+            let mut stats = SysStats {
+                system_cpu_cores: sysinfo::System::physical_core_count(),
+                ..SysStats::default()
+            };
 
             if let Some(proc) = sys.process(pid) {
                 // sysinfo's cpu_usage() is per-core (100% = one full core) and
                 // can exceed 100 on multi-core use. Normalize to a 0-100 total
                 // by dividing by the core count.
-                let cores = cores.max(1) as f32;
+                let cores = stats.system_cpu_cores.unwrap_or(1).max(1) as f32;
                 stats.cpu_percent = (proc.cpu_usage() / cores).min(100.0);
                 stats.mem_bytes = proc.memory();
                 stats.virtual_mem_bytes = proc.virtual_memory();
@@ -123,15 +105,6 @@ pub fn spawn_sampler(
                 prev_disk_read = du.total_read_bytes;
                 prev_disk_write = du.total_written_bytes;
             }
-
-            // sysinfo exposes per-CPU system frequencies, not a process speed.
-            // Use the highest reported value and let the UI identify it honestly.
-            stats.system_cpu_freq_mhz = sys
-                .cpus()
-                .iter()
-                .map(|cpu| cpu.frequency())
-                .max()
-                .unwrap_or(0);
 
             // Smooth the app CPU reading over a few samples.
             cpu_accum += stats.cpu_percent;

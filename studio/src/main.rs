@@ -4786,15 +4786,9 @@ impl StudioApp {
                     real.tick();
                 }
             }
-            // Log the tick into the shell sim, debug output, and terminal so the
-            // three live views stay in sync with the simulated watch.
-            let (_, _, _, h, m, s, _) = self.watch.get_time();
-            let line = format!("tick: {h:02}:{m:02}:{s:02}");
-            self.shell_log.log(line.clone());
-            self.shell_hw_log
-                .log("RTC tick: 1 Hz interrupt".to_string());
-            self.log.log(line.clone());
-            self.push_terminal(line);
+            // Route the high-frequency event without touching the main logs when
+            // ticks are hidden. This keeps the per-frame path allocation-free.
+            self.record_tick();
         }
 
         // Use the watch's live simulated time so the clock ticks and the date
@@ -5482,21 +5476,24 @@ impl StudioApp {
             .spacing([24.0, 6.0])
             .num_columns(2)
             .show(ui, |ui| {
+                ui.label("System CPU cores");
+                ui.monospace(
+                    self.sys_stats
+                        .system_cpu_cores
+                        .map(|cores| cores.to_string())
+                        .unwrap_or_else(|| "unknown".to_owned()),
+                );
+                ui.end_row();
                 ui.label("Process CPU");
                 ui.monospace(format!("{:.1}%", self.sys_stats.cpu_percent));
-                ui.end_row();
-                ui.label("System CPU frequency");
-                ui.monospace(sysstats::format_system_cpu_frequency(
-                    self.sys_stats.system_cpu_freq_mhz,
-                ));
                 ui.end_row();
                 ui.label("Process threads");
                 ui.monospace(sysstats::format_process_threads(self.sys_stats.threads));
                 ui.end_row();
-                ui.label("Memory");
+                ui.label("Process memory");
                 ui.monospace(fmt_bytes(self.sys_stats.mem_bytes));
                 ui.end_row();
-                ui.label("Virtual memory");
+                ui.label("Process virtual memory");
                 ui.monospace(fmt_bytes(self.sys_stats.virtual_mem_bytes));
                 ui.end_row();
                 ui.label("Disk read");
