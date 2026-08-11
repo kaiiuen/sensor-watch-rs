@@ -1094,8 +1094,15 @@ impl eframe::App for StudioApp {
                         if ui.small_button("Export").clicked() {
                             let text = self.terminal_history.join("\n");
                             let path = std::path::Path::new("terminal.log");
-                            if std::fs::write(path, text).is_ok() {
-                                self.status = format!("Terminal exported to {}", path.display());
+                            match std::fs::write(path, text) {
+                                Ok(()) => {
+                                    self.status =
+                                        format!("Terminal exported to {}", path.display());
+                                }
+                                Err(error) => {
+                                    self.status = format!("Terminal export failed: {error}");
+                                    self.log_error(&format!("Terminal export failed: {error}"));
+                                }
                             }
                         }
                         if ui
@@ -1160,6 +1167,7 @@ impl eframe::App for StudioApp {
                     | Panel::Debug
                     | Panel::Bugs
                     | Panel::FileBrowser
+                    | Panel::Probe
             )
         {
             self.current_panel = Panel::Dashboard;
@@ -4119,9 +4127,15 @@ impl StudioApp {
                     .collect::<Vec<_>>()
                     .join("\n");
                 let path = std::path::Path::new("debug.log");
-                if std::fs::write(path, text).is_ok() {
-                    self.status = format!("Log exported to {}", path.display());
-                    self.log.log(format!("Log exported to {}", path.display()));
+                match std::fs::write(path, text) {
+                    Ok(()) => {
+                        self.status = format!("Log exported to {}", path.display());
+                        self.log.log(format!("Log exported to {}", path.display()));
+                    }
+                    Err(error) => {
+                        self.status = format!("Log export failed: {error}");
+                        self.log_error(&format!("Log export failed: {error}"));
+                    }
                 }
             }
         });
@@ -4739,7 +4753,7 @@ impl StudioApp {
                     // Adjustable size slider.
                     ui.label("Size:");
                     ui.add(
-                        egui::Slider::new(&mut self.sim_scale, 0.4..=2.0)
+                        egui::Slider::new(&mut self.sim_scale, 0.5..=2.0)
                             .step_by(0.1)
                             .suffix("x"),
                     );
@@ -5630,7 +5644,7 @@ impl StudioApp {
                     let mut limit = self.line_limit as i64;
                     let resp = ui.add(
                         egui::DragValue::new(&mut limit)
-                            .clamp_range(10..=100000)
+                            .clamp_range(10..=10000)
                             .speed(10)
                             .suffix(" lines"),
                     );
@@ -6835,6 +6849,13 @@ fn required_cli_arg(args: &mut impl Iterator<Item = String>) -> Result<String, S
         .ok_or_else(|| "missing required argument (try --help)".to_string())
 }
 
+fn ensure_cli_no_extra(args: &mut impl Iterator<Item = String>) -> Result<(), String> {
+    if let Some(extra) = args.next() {
+        return Err(format!("unexpected argument: {extra} (try --help)"));
+    }
+    Ok(())
+}
+
 fn print_manifest_cli(manifest: &sensor_watch_tools::Manifest) -> Result<(), String> {
     let output = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
     println!("{output}");
@@ -6851,6 +6872,7 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
             Ok(())
         }
         "build" => {
+            ensure_cli_no_extra(&mut args)?;
             let result = sensor_watch_tools::build_firmware()?;
             println!("built {}", result.uf2_path.display());
             Ok(())
@@ -6858,6 +6880,7 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         "uf2" => {
             let input = std::path::PathBuf::from(required_cli_arg(&mut args)?);
             let output = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            ensure_cli_no_extra(&mut args)?;
             sensor_watch_tools::convert_uf2(&input, &output)?;
             println!("wrote {}", output.display());
             Ok(())
@@ -6868,10 +6891,12 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
             let mut trusted = None;
             while let Some(arg) = args.next() {
                 match arg.as_str() {
-                    "--manifest" => {
+                    "--manifest" if manifest.is_none() => {
                         manifest = Some(std::path::PathBuf::from(required_cli_arg(&mut args)?));
                     }
-                    "--trusted-sha256" => trusted = Some(required_cli_arg(&mut args)?),
+                    "--trusted-sha256" if trusted.is_none() => {
+                        trusted = Some(required_cli_arg(&mut args)?)
+                    }
                     _ => return Err(format!("unknown verify option: {arg}")),
                 }
             }
@@ -6886,6 +6911,7 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         "backup" => {
             let src = std::path::PathBuf::from(required_cli_arg(&mut args)?);
             let dst = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            ensure_cli_no_extra(&mut args)?;
             sensor_watch_tools::backup_uf2(&src, &dst)?;
             println!("preserved known-good UF2 at {}", dst.display());
             Ok(())
@@ -6894,6 +6920,7 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
             let src = std::path::PathBuf::from(required_cli_arg(&mut args)?);
             let dst = std::path::PathBuf::from(required_cli_arg(&mut args)?);
             let trusted = required_cli_arg(&mut args)?;
+            ensure_cli_no_extra(&mut args)?;
             let manifest = sensor_watch_tools::rollback_uf2(&src, &dst, &trusted)?;
             println!(
                 "staged rollback UF2 at {}\ngeneration {}\nsha256 {}",
@@ -6906,6 +6933,7 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         "report" => {
             let path = std::path::PathBuf::from(required_cli_arg(&mut args)?);
             let trusted = required_cli_arg(&mut args)?;
+            ensure_cli_no_extra(&mut args)?;
             let report = sensor_watch_tools::recovery_report(&path, &trusted)?;
             let output = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
             println!("{output}");
@@ -6918,6 +6946,7 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
                 .unwrap_or_else(|| {
                     std::path::PathBuf::from("target/thumbv6m-none-eabi/release/sensor-watch")
                 });
+            ensure_cli_no_extra(&mut args)?;
             sensor_watch_tools::flash_firmware(&elf)
         }
         _ => Err(format!("unknown command: {command} (try --help)")),
@@ -6927,10 +6956,15 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
 #[cfg(windows)]
 fn ensure_cli_console() {
     unsafe extern "system" {
+        fn AttachConsole(process_id: u32) -> i32;
         fn AllocConsole() -> i32;
     }
+    // A GUI-subsystem executable has no console when launched from Explorer,
+    // but should reuse the caller's console when launched from a terminal.
     unsafe {
-        let _ = AllocConsole();
+        if AttachConsole(u32::MAX) == 0 {
+            let _ = AllocConsole();
+        }
     }
 }
 
@@ -6946,7 +6980,15 @@ fn main() -> eframe::Result<()> {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("error: {error}");
-                1
+                if error.starts_with("missing ")
+                    || error.starts_with("unexpected argument:")
+                    || error.starts_with("unknown command:")
+                    || error.starts_with("unknown verify option:")
+                {
+                    2
+                } else {
+                    1
+                }
             }
         };
         std::process::exit(exit_code);

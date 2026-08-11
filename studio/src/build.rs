@@ -9,6 +9,34 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+struct BuildLock {
+    path: PathBuf,
+}
+
+impl Drop for BuildLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+fn acquire_build_lock(root: &Path) -> Result<BuildLock, String> {
+    let target = root.join("target");
+    std::fs::create_dir_all(&target).map_err(|e| format!("cannot create build directory: {e}"))?;
+    let path = target.join(".sensor-watch-build.lock");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .map(|_| BuildLock { path })
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                "another firmware build is already running".into()
+            } else {
+                format!("cannot acquire build lock: {e}")
+            }
+        })
+}
+
 /// Resolves the firmware project directory.
 ///
 /// The app can be run from anywhere (e.g. double-clicking the exe in
@@ -74,6 +102,16 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
         };
     }
     let fw_dir = firmware_dir();
+    let _build_lock = match acquire_build_lock(&fw_dir) {
+        Ok(lock) => lock,
+        Err(error) => {
+            return BuildResult {
+                success: false,
+                message: error,
+                uf2_path: None,
+            };
+        }
+    };
 
     // Ensure the output directory exists (it may not on a fresh standalone exe),
     // then validate it again. The second check closes the gap where a path could
