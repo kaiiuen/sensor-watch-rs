@@ -10,6 +10,9 @@ pub use sensor_watch_core::mock_hw::Indicator;
 
 /// Displays a string at digit position 0-9. A space clears that digit.
 pub fn display_string(string: &str, position: u8) {
+    if !sensor_watch_core::safety::valid_display_position(position) {
+        return;
+    }
     seam::hw().display_string(string, position);
 }
 
@@ -17,7 +20,14 @@ pub fn display_string(string: &str, position: u8) {
 /// character substitutions as the real `src/watch/slcd.rs` so host `text()`
 /// snapshots match what the firmware actually draws.
 pub fn display_character(character: u8, position: u8) {
-    let mut character = character;
+    if !sensor_watch_core::safety::valid_display_position(position) {
+        return;
+    }
+    let mut character = if sensor_watch_core::safety::valid_display_character(character) {
+        character
+    } else {
+        b' '
+    };
 
     if position == 4 || position == 6 {
         if character == b'7' {
@@ -110,12 +120,16 @@ pub fn clear_indicator(indicator: Indicator) {
 
 /// Sets a raw (com, seg) pixel.
 pub fn set_pixel(com: u8, seg: u8) {
-    seam::hw().set_pixel(com, seg);
+    if com <= 2 && seg < 32 {
+        seam::hw().set_pixel(com, seg);
+    }
 }
 
 /// Clears a raw (com, seg) pixel.
 pub fn clear_pixel(com: u8, seg: u8) {
-    seam::hw().clear_pixel(com, seg);
+    if com <= 2 && seg < 32 {
+        seam::hw().clear_pixel(com, seg);
+    }
 }
 
 /// Clears the entire display.
@@ -141,4 +155,17 @@ pub fn clear_all_indicators() {
 /// Starts the tick (colon) animation for `duration` ms.
 pub fn start_tick_animation(duration: u32) {
     seam::hw().start_tick_animation(duration);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_display_inputs_fail_closed_without_a_host_backend() {
+        display_character(b'A', 10);
+        display_string("x", 10);
+        set_pixel(3, 0);
+        clear_pixel(0, 32);
+    }
 }

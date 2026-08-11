@@ -419,10 +419,15 @@ pub extern "C" fn RTC() {
     let interrupt_status = rtc().intflag().read().bits();
     let interrupt_enabled = rtc().intenset().read().bits();
 
-    if (interrupt_status & interrupt_enabled) & 0x00FF != 0 {
+    let pending = interrupt_status & interrupt_enabled;
+
+    // These sources are independent. Handle and clear all pending sources in
+    // one entry; an else-if chain can strand an alarm or tamper flag when it
+    // arrives in the same RTC cycle as the periodic tick.
+    if pending & 0x00FF != 0 {
         // Handle the periodic (tick) callbacks, starting from the 1 Hz tick (PER7).
         for i in (0..8).rev() {
-            if (interrupt_status & interrupt_enabled) & (1 << i) != 0 {
+            if pending & (1 << i) != 0 {
                 let callback = critical_section::with(|_| unsafe { TICK_CALLBACKS[i] });
                 if let Some(cb) = callback {
                     cb();
@@ -431,7 +436,9 @@ pub extern "C" fn RTC() {
                 unsafe { rtc().intflag().write(|w| w.bits(1 << i)) };
             }
         }
-    } else if (interrupt_status & interrupt_enabled) & 0x4000 != 0 {
+    }
+
+    if pending & 0x4000 != 0 {
         // Tamper (external wake) interrupts.
         let reason = rtc().tampid().read().bits();
         if reason & 0x04 != 0 {
@@ -440,13 +447,15 @@ pub extern "C" fn RTC() {
             if let Some(cb) = callback {
                 cb();
             }
-        } else if reason & 0x02 != 0 {
+        }
+        if reason & 0x02 != 0 {
             // TAMPID1 = A2
             let callback = critical_section::with(|_| unsafe { A2_CALLBACK });
             if let Some(cb) = callback {
                 cb();
             }
-        } else if reason & 0x01 != 0 {
+        }
+        if reason & 0x01 != 0 {
             // TAMPID0 = A4
             let callback = critical_section::with(|_| unsafe { A4_CALLBACK });
             if let Some(cb) = callback {
@@ -459,8 +468,14 @@ pub extern "C" fn RTC() {
             rtc().tampid().write(|w| w.bits(reason));
             rtc().intflag().write(|w| w.bits(0x4000));
         }
-    } else if (interrupt_status & interrupt_enabled) & 0x0100 != 0 {
-        // Alarm0.
+    }
+
+    if pending & 0x0100 != 0 {
+        // Alarm0 is a one-shot source. Disable it before invoking the callback;
+        // callbacks may schedule a replacement alarm and must not have that
+        // replacement immediately disabled on return.
+        // SAFETY: writing a valid interrupt-disable bitmask.
+        unsafe { rtc().intenclr().write(|w| w.bits(1 << 8)) };
         let callback = critical_section::with(|_| unsafe { ALARM_CALLBACK });
         if let Some(cb) = callback {
             cb();

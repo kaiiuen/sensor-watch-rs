@@ -40,6 +40,9 @@
 // `src/host/watch/seam.rs`.
 #![allow(static_mut_refs)]
 
+#[cfg(test)]
+extern crate std;
+
 #[cfg(all(feature = "defmt-log", not(target_arch = "arm")))]
 compile_error!("the `defmt-log` feature is only supported for the ARM firmware target");
 

@@ -23,8 +23,12 @@
 //! returned short-lived `&mut dyn Hw` is re-borrowed per call, mimicking the
 //! firmware's global singleton HAL functions.
 
+#[cfg(not(test))]
 use core::sync::atomic::{AtomicBool, Ordering};
 use sensor_watch_core::mock_hw::Hw;
+
+#[cfg(test)]
+use core::cell::Cell;
 
 /// A raw trait-object pointer cannot auto-implement `Send` because the trait
 /// itself is not required to be `Send`. The slot is protected by a critical
@@ -38,9 +42,20 @@ struct DispatchPtr(*mut dyn Hw);
 unsafe impl Send for DispatchPtr {}
 
 /// The installed host backend (None until [`install_hw`] is called).
+#[cfg(not(test))]
 static mut DISPATCH: Option<DispatchPtr> = None;
+#[cfg(not(test))]
 static DISPATCH_LOCKED: AtomicBool = AtomicBool::new(false);
 
+// Unit tests run in parallel. Keeping each test's backend in thread-local
+// storage preserves the single-backend API without allowing one test to
+// replace another test's raw pointer while it is in use.
+#[cfg(test)]
+std::thread_local! {
+    static TEST_DISPATCH: Cell<Option<DispatchPtr>> = const { Cell::new(None) };
+}
+
+#[cfg(not(test))]
 fn lock_dispatch() {
     while DISPATCH_LOCKED
         .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -50,6 +65,7 @@ fn lock_dispatch() {
     }
 }
 
+#[cfg(not(test))]
 fn unlock_dispatch() {
     DISPATCH_LOCKED.store(false, Ordering::Release);
 }
@@ -73,20 +89,30 @@ pub fn install_hw(hw: &mut dyn Hw) {
     // alive until the face is done writing (mirrors the ARM HAL, where the
     // registers live for the whole firmware).
     let leaked: *mut (dyn Hw + 'static) = unsafe { core::mem::transmute(hw) };
-    lock_dispatch();
-    unsafe {
-        DISPATCH = Some(DispatchPtr(leaked));
+    #[cfg(test)]
+    TEST_DISPATCH.with(|slot| slot.set(Some(DispatchPtr(leaked))));
+    #[cfg(not(test))]
+    {
+        lock_dispatch();
+        unsafe {
+            DISPATCH = Some(DispatchPtr(leaked));
+        }
+        unlock_dispatch();
     }
-    unlock_dispatch();
 }
 
 /// Clears the installed backend. Optional; for completeness.
 pub fn clear_hw() {
-    lock_dispatch();
-    unsafe {
-        DISPATCH = None;
+    #[cfg(test)]
+    TEST_DISPATCH.with(|slot| slot.set(None));
+    #[cfg(not(test))]
+    {
+        lock_dispatch();
+        unsafe {
+            DISPATCH = None;
+        }
+        unlock_dispatch();
     }
-    unlock_dispatch();
 }
 
 /// Returns the installed backend, panicking if none is installed.
@@ -94,19 +120,31 @@ pub fn clear_hw() {
 /// This is the single seam point that every host `watch::*` free function calls.
 #[inline]
 pub fn hw() -> &'static mut dyn Hw {
-    lock_dispatch();
-    let ptr = unsafe {
-        match DISPATCH {
-            Some(DispatchPtr(ptr)) => ptr,
-            None => panic!(
-                "host watch: no Hw installed; call sensor_watch::watch::seam::install_hw \\
-                 with a &mut MockHw before driving a face"
-            ),
-        }
+    #[cfg(test)]
+    let ptr = TEST_DISPATCH.with(|slot| match slot.get() {
+        Some(DispatchPtr(ptr)) => ptr,
+        None => panic!(
+            "host watch: no Hw installed; call sensor_watch::watch::seam::install_hw \\
+             with a &mut MockHw before driving a face"
+        ),
+    });
+    #[cfg(not(test))]
+    let ptr = {
+        lock_dispatch();
+        let ptr = unsafe {
+            match DISPATCH {
+                Some(DispatchPtr(ptr)) => ptr,
+                None => panic!(
+                    "host watch: no Hw installed; call sensor_watch::watch::seam::install_hw \\
+                     with a &mut MockHw before driving a face"
+                ),
+            }
+        };
+        unlock_dispatch();
+        ptr
     };
-    unlock_dispatch();
     // SAFETY: `install_hw` documents that the backend outlives all uses and that
-    // callers serialize access. The atomic lock protects the global slot;
-    // this conversion only reborrows the installed backend for one HAL call.
+    // callers serialize access. The atomic lock protects the global slot in
+    // non-test builds; test builds isolate the slot per thread.
     unsafe { &mut *ptr }
 }
