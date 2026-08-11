@@ -208,8 +208,13 @@ impl CasioF91W {
 
     /// Applies the 12/24 hour display conversion.
     fn display_hour(&self, hours: u32) -> u32 {
-        if self.time_mode == TimeMode::H12 && hours > 12 {
-            hours - 12
+        if self.time_mode == TimeMode::H12 {
+            let hour = hours % 12;
+            if hour == 0 {
+                12
+            } else {
+                hour
+            }
         } else {
             hours
         }
@@ -219,6 +224,21 @@ impl CasioF91W {
 impl Default for CasioF91W {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CasioF91W, TimeMode};
+
+    #[test]
+    fn twelve_hour_display_uses_twelve_for_midnight_and_noon() {
+        let mut watch = CasioF91W::new();
+        watch.time_mode = TimeMode::H12;
+        assert_eq!(watch.display_hour(0), 12);
+        assert_eq!(watch.display_hour(12), 12);
+        assert_eq!(watch.display_hour(13), 1);
+        assert_eq!(watch.display_hour(23), 11);
     }
 }
 

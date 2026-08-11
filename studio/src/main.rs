@@ -41,6 +41,7 @@ use eframe::egui;
 use i18n::{tr, Key, Language};
 use presets::PresetManager;
 use sha2::{Digest, Sha256};
+use std::io::Read;
 use theme::Theme;
 use watch_sim::CasioF91W;
 
@@ -68,6 +69,10 @@ struct StudioApp {
     language: Language,
     /// The selected theme.
     theme: Theme,
+    /// Theme value applied to egui on the previous frame.
+    applied_theme: Option<Theme>,
+    /// Text-size value applied to egui on the previous frame.
+    applied_text_size: Option<u8>,
     /// The debug log.
     log: debug::DebugLog,
     /// Shared filter for high-frequency tick/process events.
@@ -469,6 +474,8 @@ impl Default for StudioApp {
             // Default to English and Dark.
             language: Language::English,
             theme: Theme::Dark,
+            applied_theme: None,
+            applied_text_size: None,
             log: debug::DebugLog::new(),
             tick_verbosity: debug::TickVerbosity::Hide,
             tick_log: debug::DebugLog::new(),
@@ -611,40 +618,45 @@ impl eframe::App for StudioApp {
             self.fonts_installed = true;
         }
 
-        // Apply the theme.
-        self.theme.apply(ctx);
-
-        // Apply the text size (small/normal/big).
-        let scale = match self.text_size {
-            0 => 0.85,
-            2 => 1.2,
-            _ => 1.0,
-        };
-        ctx.set_pixels_per_point(ctx.pixels_per_point() * 1.0);
-        ctx.style_mut(|s| {
-            s.text_styles = std::collections::BTreeMap::from([
-                (
-                    egui::TextStyle::Small,
-                    egui::FontId::proportional(11.0 * scale),
-                ),
-                (
-                    egui::TextStyle::Body,
-                    egui::FontId::proportional(14.0 * scale),
-                ),
-                (
-                    egui::TextStyle::Button,
-                    egui::FontId::proportional(14.0 * scale),
-                ),
-                (
-                    egui::TextStyle::Heading,
-                    egui::FontId::proportional(20.0 * scale),
-                ),
-                (
-                    egui::TextStyle::Monospace,
-                    egui::FontId::monospace(13.0 * scale),
-                ),
-            ]);
-        });
+        // Theme and text styles are context-wide settings. Reapplying them on
+        // every frame rebuilds egui state and can trigger unnecessary repaint
+        // work, so only update them when the user changes the setting.
+        if self.applied_theme != Some(self.theme) {
+            self.theme.apply(ctx);
+            self.applied_theme = Some(self.theme);
+        }
+        if self.applied_text_size != Some(self.text_size) {
+            let scale = match self.text_size {
+                0 => 0.85,
+                2 => 1.2,
+                _ => 1.0,
+            };
+            ctx.style_mut(|s| {
+                s.text_styles = std::collections::BTreeMap::from([
+                    (
+                        egui::TextStyle::Small,
+                        egui::FontId::proportional(11.0 * scale),
+                    ),
+                    (
+                        egui::TextStyle::Body,
+                        egui::FontId::proportional(14.0 * scale),
+                    ),
+                    (
+                        egui::TextStyle::Button,
+                        egui::FontId::proportional(14.0 * scale),
+                    ),
+                    (
+                        egui::TextStyle::Heading,
+                        egui::FontId::proportional(20.0 * scale),
+                    ),
+                    (
+                        egui::TextStyle::Monospace,
+                        egui::FontId::monospace(13.0 * scale),
+                    ),
+                ]);
+            });
+            self.applied_text_size = Some(self.text_size);
+        }
 
         // Only schedule polling while work can complete asynchronously. Static
         // tabs now sleep until input/OS events; the simulator and calibration
@@ -685,16 +697,27 @@ impl eframe::App for StudioApp {
             }
         }
 
-        // Persist settings exactly once when the window is about to close, so
-        // presets, watch settings, panel sizes, etc. survive the session.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.saved_on_exit {
-            self.saved_on_exit = true;
-            self.shutting_down = true;
-            if self.building || self.pending_build.is_some() {
+        // Do not let the UI close while a worker can still touch project files
+        // or return state to this app. eframe drops the JoinHandle on shutdown;
+        // cancelling the close request lets the worker be collected normally on
+        // a later frame instead of racing process teardown.
+        if ctx.input(|i| i.viewport().close_requested()) {
+            let active_workers = self.pending_build.is_some()
+                || self.pending_ntp.is_some()
+                || self.pending_checksum.is_some()
+                || self.pending_update.is_some();
+            if active_workers {
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                self.status = "Finish background work before closing".to_string();
                 self.log
-                    .log("Warning: closing with an active build; build thread will not be joined");
+                    .log("Close postponed while background work is active");
+            } else if !self.saved_on_exit {
+                // Persist settings exactly once when the window is about to
+                // close, so presets, watch settings, and panel sizes survive.
+                self.saved_on_exit = true;
+                self.shutting_down = true;
+                self.save_settings_internal();
             }
-            self.save_settings_internal();
         }
 
         // If a build finished, collect its result.
@@ -6315,9 +6338,14 @@ impl StudioApp {
         for drive in 'A'..='Z' {
             let root = format!("{drive}:\\");
             if let Ok(entries) = std::fs::read_dir(&root) {
+                // CURRENT.UF2 is not a sufficient identity check: any removable
+                // drive can contain a file with that name. Require the UF2
+                // bootloader's information file before allowing a write.
                 let is_watch = entries.flatten().any(|e| {
-                    let name = e.file_name().to_string_lossy().to_lowercase();
-                    name == "info_uf2.txt" || name == "current.uf2"
+                    e.file_name()
+                        .to_string_lossy()
+                        .eq_ignore_ascii_case("info_uf2.txt")
+                        && read_info_uf2(e.path()).is_some()
                 });
                 if is_watch {
                     let dest = format!("{root}CURRENT.UF2");
@@ -6325,32 +6353,60 @@ impl StudioApp {
                     // crash or full-drive mid-write doesn't corrupt the existing
                     // CURRENT.UF2. Then verify the size on disk matches.
                     let tmp = format!("{root}.current.uf2.tmp");
-                    let safe_destination = regular_or_absent(std::path::Path::new(&dest));
-                    let safe_temp = regular_or_absent(std::path::Path::new(&tmp));
-                    let write_ok = safe_destination.is_ok()
-                        && safe_temp.is_ok()
-                        && std::fs::remove_file(&tmp)
+                    let destination = std::path::Path::new(&dest);
+                    let temp = std::path::Path::new(&tmp);
+                    let backup_name = format!("{root}.current.uf2.previous");
+                    let backup = std::path::Path::new(&backup_name);
+                    let mut write_ok = regular_or_absent(destination).is_ok()
+                        && regular_or_absent(temp).is_ok()
+                        && regular_or_absent(backup).is_ok()
+                        && std::fs::remove_file(temp)
                             .or_else(|e| {
                                 (e.kind() == std::io::ErrorKind::NotFound)
                                     .then_some(())
                                     .ok_or(e)
                             })
                             .is_ok()
-                        && std::fs::write(&tmp, &data).is_ok()
-                        && std::fs::read(&tmp)
+                        && std::fs::write(temp, &data).is_ok()
+                        && std::fs::read(temp)
                             .map(|written| {
                                 written.len() == data.len()
                                     && written == data
                                     && sensor_watch_core::uf2::validate(&written).is_ok()
                             })
-                            .unwrap_or(false)
-                        && std::fs::rename(&tmp, &dest).is_ok()
-                        && std::fs::read(&dest)
-                            .map(|published| {
-                                published == data
-                                    && sensor_watch_core::uf2::validate(&published).is_ok()
-                            })
                             .unwrap_or(false);
+                    if write_ok {
+                        // std::fs::rename does not replace an existing file on
+                        // Windows. Stage the old artifact only after the new
+                        // temp file has been fully validated, and restore it if
+                        // publication or the post-write verification fails.
+                        let had_old = destination.is_file();
+                        let staged_old = if had_old {
+                            (!backup.exists() || std::fs::remove_file(backup).is_ok())
+                                && std::fs::rename(destination, backup).is_ok()
+                        } else {
+                            true
+                        };
+                        write_ok = staged_old && std::fs::rename(temp, destination).is_ok();
+                        if !write_ok && had_old {
+                            let _ = std::fs::rename(backup, destination);
+                        }
+                        if write_ok {
+                            write_ok = std::fs::read(destination)
+                                .map(|published| {
+                                    published == data
+                                        && sensor_watch_core::uf2::validate(&published).is_ok()
+                                })
+                                .unwrap_or(false);
+                            if !write_ok && had_old {
+                                let _ = std::fs::remove_file(destination);
+                                let _ = std::fs::rename(backup, destination);
+                            }
+                        }
+                        if had_old {
+                            let _ = std::fs::remove_file(backup);
+                        }
+                    }
                     if write_ok {
                         self.status = format!("Flashed to {dest}");
                         self.log.log(format!("Flashed to {dest}"));
@@ -6386,9 +6442,15 @@ impl StudioApp {
                 for e in entries.flatten() {
                     let name = e.file_name().to_string_lossy().to_lowercase();
                     if name == "info_uf2.txt" {
+                        // Require a bounded, regular INFO_UF2.TXT read so a
+                        // symlink or unexpectedly large file cannot influence
+                        // detection or consume unbounded memory.
+                        let Some(text) = read_info_uf2(e.path()) else {
+                            continue;
+                        };
                         is_watch = true;
                         // Try to auto-select the board from the info file.
-                        if let Ok(text) = std::fs::read_to_string(e.path()) {
+                        {
                             let lower = text.to_lowercase();
                             let board = if lower.contains("pro") {
                                 Some(Board::Pro)
@@ -6411,8 +6473,6 @@ impl StudioApp {
                                 }
                             }
                         }
-                    } else if name == "current.uf2" {
-                        is_watch = true;
                     }
                 }
                 if is_watch {
@@ -6450,6 +6510,27 @@ impl StudioApp {
         // UF2 adds ~512-byte headers; estimate flash + 10% overhead.
         self.estimate_flash_kb(selected) + self.estimate_flash_kb(selected) / 10
     }
+}
+
+const MAX_INFO_UF2_BYTES: u64 = 16 * 1024;
+
+fn read_info_uf2(path: std::path::PathBuf) -> Option<String> {
+    let metadata = std::fs::symlink_metadata(&path).ok()?;
+    if metadata.file_type().is_symlink()
+        || !metadata.is_file()
+        || metadata.len() > MAX_INFO_UF2_BYTES
+    {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(MAX_INFO_UF2_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .ok()?;
+    if bytes.len() as u64 > MAX_INFO_UF2_BYTES {
+        return None;
+    }
+    String::from_utf8(bytes).ok()
 }
 
 fn regular_or_absent(path: &std::path::Path) -> Result<(), String> {
