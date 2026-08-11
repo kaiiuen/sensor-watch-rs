@@ -2,7 +2,7 @@
 //!
 //! Computes a SHA-256 hash of the app's own executable so the user can verify
 //! the binary hasn't been modified or corrupted. The user-defined data (settings
-//! file, custom NTP servers, watch faces) is intentionally NOT hashed — those
+//! file, custom NTP servers, watch faces) is intentionally NOT hashed - those
 //! change at runtime and are expected to differ.
 //!
 //! A running executable cannot meaningfully hash itself for authenticity (the

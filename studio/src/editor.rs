@@ -94,7 +94,7 @@ pub fn delete_face(name: &str) -> Result<(), String> {
 /// Best-effort and defensive: this only guarantees the `pub mod <name>;`
 /// declaration exists in `src/movement/mod.rs`. It does NOT touch the
 /// `WATCH_FACES[]` array, the `MOVEMENT_NUM_FACES` const, or any `#[used]`
-/// static declaration — those require matching struct storage the template may
+/// static declaration - those require matching struct storage the template may
 /// not guarantee, and editing numeric consts is risky. If the declaration is
 /// already present, this is treated as success.
 pub fn register_face(name: &str) -> Result<(), String> {

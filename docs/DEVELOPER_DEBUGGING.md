@@ -1,7 +1,7 @@
 # Developer Debugging (SWD / probe-rs)
 
 An on-silicon debug path for developers who have the hardware on the bench.
-This is **optional tooling** — normal USB drag-and-drop `.uf2` flashing and the
+This is **optional tooling** - normal USB drag-and-drop `.uf2` flashing and the
 companion `studio` app are completely unchanged. Everything here is additive.
 
 See [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) for the background on why the USB
@@ -17,7 +17,7 @@ registers, or get a real backtrace on a fault, you need the **SWD** interface
 
 ## Prerequisites
 
-- **An SWD probe** supported by probe-rs — a CMSIS-DAP style probe (e.g. a
+- **An SWD probe** supported by probe-rs - a CMSIS-DAP style probe (e.g. a
   Raspberry Pi Pico / picoprobe, a DAPLink, or a commercial CMSIS-DAP), or a
   J-Link. It must support the Microchip SAM L22 / Cortex-M0+.
 - **Wired to the SWD pads**: SWDIO, SWCLK, and GND. (Some debug headers also
@@ -46,7 +46,7 @@ probe-rs run --chip ATSAML22J18A --protocol swd --connect-under-reset \
 ```
 
 `probe-rs run` flashes the ELF, resets the chip, and starts executing while
-opening a (paused) RTT console — the closest thing probe-rs has to a "flash and
+opening a (paused) RTT console - the closest thing probe-rs has to a "flash and
 go". If you only want to write the image without running, use:
 
 ```sh
@@ -59,7 +59,7 @@ The scripts check that the ELF exists and that `probe-rs` is on your `PATH`.
 > **Caveat:** the firmware links at `0x0000_2000` (it sits after the USB
 > bootloader; see `memory.x`). probe-rs flashes at the ELF's declared load
 > addresses, so this correctly writes only the application region and leaves
-> the bootloader intact — just as `build.sh`'s `.uf2` does.
+> the bootloader intact - just as `build.sh`'s `.uf2` does.
 
 ## Attaching a debugger
 
@@ -148,11 +148,11 @@ authoritative way to find a panic's real source location today.
 For fast iteration you usually do **not** need a debugger at all. The firmware
 has a minimal command shell over the UART (9600 baud, SERCOM3, pads A4/A2/GND):
 
-- `time` — report RTC time
-- `settime YYMMDDHHMMSS` — set the clock
-- `drift N` — drift-correction step
-- `panic` — report the stored panic fingerprint (see above)
-- `help` — list commands
+- `time` - report RTC time
+- `settime YYMMDDHHMMSS` - set the clock
+- `drift N` - drift-correction step
+- `panic` - report the stored panic fingerprint (see above)
+- `help` - list commands
 
 See [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) for wiring and `src/watch/shell.rs`
 for the code. This is the fastest way to get textual feedback from the running

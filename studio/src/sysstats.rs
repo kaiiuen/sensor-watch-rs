@@ -83,8 +83,9 @@ pub fn spawn_sampler(
                 prev_disk_write = du.total_written_bytes;
             }
 
-            // CPU frequency: report the max across cores as a rough app value.
-            stats.cpu_freq_mhz = sys.cpus().iter().map(|c| c.frequency()).max().unwrap_or(0);
+            // CPU frequency: sysinfo only exposes the max/core frequency of the
+            // system, not the per-process value, so reporting it here would be
+            // misleading. Leave it at 0; the UI shows it as "N/A".
 
             // Smooth the app CPU reading over a few samples.
             cpu_accum += stats.cpu_percent;

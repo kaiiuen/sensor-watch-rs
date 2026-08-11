@@ -2,7 +2,7 @@
 //!
 //! Renders the actual F-91W SVG (a 1:1 replica of the online simulator) using
 //! `usvg` + `resvg`. Each segment/indicator is toggled on/off by injecting an
-//! `opacity` attribute into the SVG source before rendering — exactly like the
+//! `opacity` attribute into the SVG source before rendering - exactly like the
 //! JS `displayScreen` sets `el.style.opacity`.
 
 use eframe::egui::{self, ColorImage, TextureHandle, TextureOptions};
