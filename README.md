@@ -37,7 +37,7 @@ graph TD
     subgraph Firmware[Firmware - src/]
         HAL[watch/ - hardware abstraction]
         MV[movement/ - watchface framework]
-        FACES[111 firmware watch faces]
+        FACES[111 registered firmware watch faces]
         MAIN[main.rs - boot & event loop]
         PANIC[panic.rs - fault recovery]
         MAIN --> MV
@@ -208,16 +208,19 @@ complete warning count because of the existing vec! macro error.
       not implemented.
 - [x] Guided clock and drift calibration in Studio. A real watch still needs the
       UART jig path for command execution.
-- [x] 72 real firmware faces are wired into the opt-in Studio host seam. The
-      remaining firmware faces use the simulated engine; this is not hardware
+- [x] Optical command framing and validation exist as a protocol-only core module;
+      no optical receiver integration is claimed.
+- [x] 72 real firmware faces are wired into the Studio host seam, which is
+      enabled by default by Studio's `real-faces` feature. The remaining firmware
+      faces use the simulated engine; this is host coverage, not hardware
       coverage.
 - [ ] Component profiles for board-wide hardware presets (planning only).
-- [ ] Native USB CDC transfers (compile-safe scaffolding only; see
-      docs/USB_CDC.md).
+- [ ] Native USB CDC transfers (compile-safe scaffolding only; enabling it returns
+      `UsbError::Unsupported`; see `docs/USB_CDC.md`).
 
 ## Status and validation snapshot
 
-- The source tree currently contains 189 `#[test]` attributes across core,
+- The source tree currently contains 206 `#[test]` attributes across core,
   firmware host seams, and Studio. This is a source count, not a passing test
   result.
 - The last host core test attempt is currently blocked before execution by the

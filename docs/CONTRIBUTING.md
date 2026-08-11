@@ -39,7 +39,7 @@ cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 
 (On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin`.)
 
-The source tree currently contains 189 `#[test]` attributes across core,
+The source tree currently contains 206 `#[test]` attributes across core,
 firmware host seams, and Studio. The host test command exercises date math,
 settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging, and
 other host seams, but the current checkout is blocked by the existing `vec!`

@@ -10,7 +10,7 @@ that mode in `src/watch/shell.rs` and the descriptor constants are retained in
 ## Current status
 
 Native CDC is **not yet supported**. The `atsaml22j` `0.1.0` PAC exposes the
-The `atsaml22j` `0.1.0` PAC exposes the SAM L22 USB device control/status
+SAM L22 USB device control/status
 register surface, but does not expose the controller's descriptor/endpoint
 transfer SRAM interface required to install descriptors and service endpoint
 buffers. The workspace dependency graph also contains no TinyUSB port and no

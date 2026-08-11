@@ -15,7 +15,6 @@ rewrite in Rust.
 | [BACKBURNER.md](BACKBURNER.md) | Ideas captured for later, plus a record of recently implemented items. |
 | [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) | How to talk to the board: the USB-is-file-transfer-only constraint, the ROM UF2 bootloader, the UART jig, and the SWD probe. |
 | [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) | Optional on-silicon debugging via SWD / probe-rs for developers with bench hardware. |
-| [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) | UART jig shell, SWD access, and the USB file-transfer constraint. |
 | [USB_CDC.md](USB_CDC.md) | Native CDC status: feasible in principle, but currently scaffolding only. |
 | [RECOVERY.md](RECOVERY.md) | Host-side UF2 validation, backup, and rollback staging; no device-side dual boot. |
 

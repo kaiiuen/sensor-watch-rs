@@ -34,11 +34,11 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   is navigable (including a power-on uptime stat). Text renders with the
   firmware's real 7-segment character set. Shows both the sim's face counter
   and the engine's actual loaded face for catching face-switching bugs. These
-  diagnostics are simulated unless a UART jig is connected. With the opt-in
-  `real-faces` feature, the simulator runs **72 real firmware faces** through
-  the `real_face.rs` host seam (see below) instead of the hand-written engine;
-  the remaining faces use `face_sim`. Host seam coverage does not constitute
-  physical hardware testing.
+  diagnostics are simulated unless a UART jig is connected. With Studio's
+  default `real-faces` feature, the simulator runs **72 real firmware faces**
+  through the `real_face.rs` host seam (see below) instead of the hand-written
+  engine; the remaining faces use `face_sim`. Host seam coverage does not
+  constitute physical hardware testing.
 - **Build & Flash** - combined panel: select the target board, build the
   firmware into a `.uf2` (with estimated compile/flash times), then flash it to
   the watch. The app **auto-detects** the watch's USB drive and auto-selects
@@ -117,11 +117,11 @@ invokes the firmware's own `cargo build` and uses the core crate's
 The Simulator can also run the **real firmware faces** through a host seam:
 `real_face.rs` drives the firmware's own `WatchFace` code against a mock HAL,
 so the rendered digits come from the same code the firmware runs. The host seam
-and its real-face coverage are available, but this is an **opt-in**
-`real-faces` feature (off by default) because it requires the firmware host lib
-to compile as a host dependency; with it off, the Simulator falls back to the
-hand-written `face_sim` engine. This remains host-side coverage, not physical
-hardware validation.
+and its real-face coverage are available through Studio's default `real-faces`
+feature because it requires the firmware host lib to compile as a host
+ dependency. If the feature is disabled, the Simulator falls back to the
+ hand-written `face_sim` engine. This remains host-side coverage, not physical
+ hardware validation.
 
 ## Dependencies
 
@@ -158,8 +158,8 @@ hardware validation.
 - `drift.rs` - drift calibration
 - `fuzz.rs` - face-engine fuzz testing
 - `wiki.rs` - the built-in reference wiki
-- `real_face.rs` - host seam that runs real firmware faces (behind the opt-in
-  `real-faces` feature)
+- `real_face.rs` - host seam that runs real firmware faces (behind Studio's
+  default-enabled `real-faces` feature)
 - `transport.rs` - simulated/UART-jig transport selection, serial discovery,
   line framing, timeout handling, and host tests
 

@@ -151,8 +151,9 @@ With all 111 faces registered (via the `#[used]` face-retain array), a release
 build is roughly **210-230 KB**, so most of the region is used. Each watch face
 adds roughly 1-3 KB, leaving modest headroom for a few more faces, not dozens.
 Adding faces beyond the current count should be validated against the linker
-region on every build. Studio currently wires 72 of those faces into the opt-in
-`real-faces` host seam; the other faces use the simulated engine in Studio.
+region on every build. Studio currently wires 72 of those faces into its
+ default-enabled `real-faces` host seam; the other faces use the simulated engine
+ in Studio.
 
 ### RAM (32 KB)
 
@@ -398,8 +399,9 @@ flash bit-rot is corrected on read rather than silently corrupting data.
 
 A minimal command interpreter over the debug UART. Provides `time`,
 `settime YYMMDDHHMMSS`, `drift`/`drift N`, `optical`, `panic`, `events`,
-`events clear`, and `help` commands. RX is nonblocking with a bounded ring and
-bounded line/error responses. The optional `shell-auth` feature locks mutating
+`events clear`, and `help` commands. The optical implementation is protocol-only;
+ it does not provide optical receiver hardware integration. RX is nonblocking with
+ a bounded ring and bounded line/error responses. The optional `shell-auth` feature locks mutating
 commands until board code confirms physical presence; the default preserves the
 UART-jig transport used by Studio.
 
