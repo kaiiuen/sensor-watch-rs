@@ -70,6 +70,10 @@ struct StudioApp {
     theme: Theme,
     /// The debug log.
     log: debug::DebugLog,
+    /// Shared filter for high-frequency tick/process events.
+    tick_verbosity: debug::TickVerbosity,
+    /// Bounded dedicated tick/process event log.
+    tick_log: debug::DebugLog,
     /// The Casio F-91W simulator.
     watch: CasioF91W,
     /// The simulator's stopwatch accumulator (centiseconds).
@@ -466,6 +470,8 @@ impl Default for StudioApp {
             language: Language::English,
             theme: Theme::Dark,
             log: debug::DebugLog::new(),
+            tick_verbosity: debug::TickVerbosity::Hide,
+            tick_log: debug::DebugLog::new(),
             watch: CasioF91W::new(),
             sim_last_tick: std::time::Instant::now(),
             watch_renderer: watch_display::WatchRenderer::new(),
@@ -640,10 +646,17 @@ impl eframe::App for StudioApp {
             ]);
         });
 
-        // Poll background work without forcing a full-rate repaint when the
-        // simulator is not visible. The simulator requests a faster cadence
-        // while it is active.
-        ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        // Only schedule polling while work can complete asynchronously. Static
+        // tabs now sleep until input/OS events; the simulator and calibration
+        // request their own timing cadence below.
+        let background_work = self.pending_build.is_some()
+            || self.pending_ntp.is_some()
+            || self.pending_checksum.is_some()
+            || self.pending_update.is_some()
+            || self.beep_armed;
+        if background_work {
+            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        }
 
         // Detect a window resize (or the very first frame) and reset the Watch
         // Faces panel ratios so they re-derive proportionally to the new size
@@ -1032,6 +1045,8 @@ impl eframe::App for StudioApp {
                     {
                         self.terminal_wrap = !self.terminal_wrap;
                     }
+                    ui.label("Ticks:");
+                    self.tick_filter_ui(ui, "terminal_tick_filter");
                     ui.weak("(max 500)");
                 });
                 if self.terminal_open {
@@ -1042,6 +1057,9 @@ impl eframe::App for StudioApp {
                         .max_height(120.0)
                         .show(ui, |ui| {
                             for line in &self.terminal_history {
+                                if !self.show_main_event(line) {
+                                    continue;
+                                }
                                 if self.terminal_wrap {
                                     ui.label(line);
                                 } else {
@@ -1049,6 +1067,7 @@ impl eframe::App for StudioApp {
                                 }
                             }
                         });
+                    self.tick_log_ui(ui, "terminal_tick_log");
                     ui.horizontal(|ui| {
                         ui.label(">");
                         let resp = ui.text_edit_singleline(&mut self.terminal_input);
@@ -3348,6 +3367,8 @@ impl StudioApp {
         ui.separator();
         ui.horizontal(|ui| {
             ui.strong("Live log");
+            ui.label("Ticks:");
+            self.tick_filter_ui(ui, "diagnostics_tick_filter");
             ui.weak(format!(
                 "{} / 200 lines · auto-scroll",
                 self.diagnostics.log.len()
@@ -3366,9 +3387,12 @@ impl StudioApp {
                     ui.weak("(run a diagnostic to populate the simulated activity log)");
                 }
                 for line in &self.diagnostics.log {
-                    ui.monospace(line);
+                    if self.show_main_event(line) {
+                        ui.monospace(line);
+                    }
                 }
             });
+        self.tick_log_ui(ui, "diagnostics_tick_log");
     }
 
     fn simulated_command(&mut self, command: &str) -> String {
@@ -3684,6 +3708,8 @@ impl StudioApp {
                 ui.horizontal(|ui| {
                     ui.strong("Command surface");
                     ui.separator();
+                    ui.label("Ticks:");
+                    self.tick_filter_ui(ui, "shell_tick_filter");
                     if ui.small_button("Clear comms").clicked() {
                         self.shell_log.clear();
                     }
@@ -3711,6 +3737,7 @@ impl StudioApp {
                     }
                 });
                 ui.add_space(4.0);
+                self.tick_log_ui(ui, "shell_tick_log");
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .stick_to_bottom(true)
@@ -3719,6 +3746,9 @@ impl StudioApp {
                             ui.weak("(no commands sent yet)");
                         }
                         for entry in self.shell_log.entries() {
+                            if !self.show_main_event(&entry.message) {
+                                continue;
+                            }
                             let secs = entry.timestamp % 60;
                             let mins = (entry.timestamp / 60) % 60;
                             let hrs = (entry.timestamp / 3600) % 24;
@@ -3734,6 +3764,8 @@ impl StudioApp {
             ui.horizontal(|ui| {
                 ui.strong("Watch brain (hardware level)");
                 ui.separator();
+                ui.label("Ticks:");
+                self.tick_filter_ui(ui, "shell_hw_tick_filter");
                 if ui.small_button("Clear log").clicked() {
                     self.shell_hw_log.clear();
                 }
@@ -3757,12 +3789,16 @@ impl StudioApp {
                         ui.weak("(hardware events will appear here)");
                     }
                     for entry in self.shell_hw_log.entries() {
+                        if !self.show_main_event(&entry.message) {
+                            continue;
+                        }
                         let secs = entry.timestamp % 60;
                         let mins = (entry.timestamp / 60) % 60;
                         let hrs = (entry.timestamp / 3600) % 24;
                         ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
                     }
                 });
+            self.tick_log_ui(ui, "shell_hw_tick_log");
         });
     }
 
@@ -3848,6 +3884,8 @@ impl StudioApp {
     fn debug(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(tr(self.language, Key::DebugOutput));
+            ui.label("Ticks:");
+            self.tick_filter_ui(ui, "debug_tick_filter");
             if ui.button(tr(self.language, Key::Clear)).clicked() {
                 self.log.clear();
             }
@@ -3896,6 +3934,9 @@ impl StudioApp {
                         ui.strong("Message");
                         ui.end_row();
                         for entry in self.log.entries() {
+                            if !self.show_main_event(&entry.message) {
+                                continue;
+                            }
                             let secs = entry.timestamp % 60;
                             let mins = (entry.timestamp / 60) % 60;
                             let hrs = (entry.timestamp / 3600) % 24;
@@ -3905,6 +3946,7 @@ impl StudioApp {
                         }
                     });
             });
+        self.tick_log_ui(ui, "debug_tick_log");
     }
 
     /// Searchable reference table for known errors, faults, and safe recovery.
@@ -5570,7 +5612,7 @@ impl StudioApp {
         let mut rename_index = None;
         for (index, point) in self.restore_store.points.iter().enumerate() {
             ui.horizontal(|ui| {
-                ui.label(format!("{} — {}", point.name, point.timestamp));
+                ui.label(format!("{} - {}", point.name, point.timestamp));
                 if ui.small_button("Restore").clicked() {
                     restore_index = Some(index);
                 }
@@ -5808,6 +5850,64 @@ impl StudioApp {
         self.error_log.log(msg);
     }
 
+    fn record_tick(&mut self) {
+        if self.tick_verbosity == debug::TickVerbosity::Hide {
+            return;
+        }
+        let (_, _, _, h, m, s, _) = self.watch.get_time();
+        let line = format!("tick: {h:02}:{m:02}:{s:02}");
+        self.tick_log.log(line.clone());
+        if self.tick_verbosity == debug::TickVerbosity::Main {
+            self.shell_log.log(line.clone());
+            self.shell_hw_log.log("RTC tick: 1 Hz interrupt");
+            self.log.log(line.clone());
+            self.push_terminal(line);
+        }
+    }
+
+    fn tick_filter_ui(&mut self, ui: &mut egui::Ui, id: &'static str) {
+        let mut changed = false;
+        egui::ComboBox::from_id_source(id)
+            .selected_text(self.tick_verbosity.label())
+            .show_ui(ui, |ui| {
+                for mode in debug::TickVerbosity::ALL {
+                    changed |= ui
+                        .selectable_value(&mut self.tick_verbosity, mode, mode.label())
+                        .changed();
+                }
+            });
+        if changed {
+            self.save_settings_internal();
+        }
+    }
+
+    fn show_main_event(&self, message: &str) -> bool {
+        self.tick_verbosity == debug::TickVerbosity::Main || !debug::is_tick_or_process(message)
+    }
+
+    fn tick_log_ui(&self, ui: &mut egui::Ui, id: &'static str) {
+        if self.tick_verbosity != debug::TickVerbosity::Dedicated {
+            return;
+        }
+        ui.separator();
+        ui.strong("Tick log");
+        ui.weak(format!(
+            "{} / {} lines · auto-scroll",
+            self.tick_log.entries().len(),
+            self.line_limit
+        ));
+        egui::ScrollArea::vertical()
+            .id_source(id)
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .max_height(120.0)
+            .show(ui, |ui| {
+                for entry in self.tick_log.entries() {
+                    ui.monospace(&entry.message);
+                }
+            });
+    }
+
     /// Appends a line to the terminal history, dropping the oldest lines once
     /// it exceeds the configured line limit.
     fn push_terminal(&mut self, line: impl Into<String>) {
@@ -5890,6 +5990,7 @@ impl StudioApp {
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
+            self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
         )
@@ -5935,6 +6036,7 @@ impl StudioApp {
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
+            self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
         )
@@ -5987,6 +6089,7 @@ impl StudioApp {
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
+            self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
         )
@@ -6022,6 +6125,7 @@ impl StudioApp {
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
+            self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
         )
@@ -6115,6 +6219,7 @@ impl StudioApp {
             _ => Board::Green,
         };
         self.line_limit = s.line_limit.max(1);
+        self.tick_verbosity = debug::TickVerbosity::from_setting(&s.tick_verbosity);
         self.apply_line_limit();
         self.save_settings_internal();
     }
@@ -6126,6 +6231,7 @@ impl StudioApp {
         let limit = self.line_limit.max(1);
         let terminal_limit = limit.min(MAX_TERMINAL_ENTRIES);
         self.log.set_limit(limit);
+        self.tick_log.set_limit(limit);
         self.shell_log.set_limit(limit);
         self.shell_hw_log.set_limit(limit);
         self.build_log.set_limit(limit);

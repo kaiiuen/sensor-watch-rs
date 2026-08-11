@@ -245,7 +245,10 @@ pub fn face_display_to_svg(fd: &FaceDisplay) -> Display {
     d.alarm_on_mark = fd.signal;
     d.time_signal_on_mark = fd.bell;
     d.time_mode_24 = fd.h24;
-    d.time_mode_12 = fd.pm;
+    // The SVG's `timeMode12` group is the physical PM glyph (despite its
+    // historical ID), not a generic "12-hour mode" indicator. PM is never
+    // shown alongside the 24-hour glyph.
+    d.time_mode_12 = fd.pm && !fd.h24;
     d.lap = fd.lap;
     // Map the 10 LCD positions to the SVG display IDs.
     // positions: 0,1 -> mode_2,mode_1 ; 2,3 -> day_2,day_1 ; 4,5 -> hour_2,hour_1
@@ -266,5 +269,38 @@ pub fn face_display_to_svg(fd: &FaceDisplay) -> Display {
 impl Default for WatchRenderer {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pm_maps_to_pm_glyph_without_24_hour_glyph() {
+        let fd = FaceDisplay {
+            pm: true,
+            h24: false,
+            ..FaceDisplay::default()
+        };
+        let display = face_display_to_svg(&fd);
+        assert!(!display.time_mode_24);
+        assert!(display.time_mode_12);
+        assert_eq!(element_opacity("timeMode12", &display), Some(1.0));
+        assert_eq!(element_opacity("timeMode24", &display), Some(0.0));
+    }
+
+    #[test]
+    fn twenty_four_hour_display_never_maps_pm_to_mode_glyph() {
+        let fd = FaceDisplay {
+            pm: true,
+            h24: true,
+            ..FaceDisplay::default()
+        };
+        let display = face_display_to_svg(&fd);
+        assert!(display.time_mode_24);
+        assert!(!display.time_mode_12);
+        assert_eq!(element_opacity("timeMode24", &display), Some(1.0));
+        assert_eq!(element_opacity("timeMode12", &display), Some(0.0));
     }
 }

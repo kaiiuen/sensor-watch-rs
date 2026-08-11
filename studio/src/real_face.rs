@@ -913,8 +913,15 @@ mod tests {
     }
 
     #[test]
-    fn real_simple_clock_24h_renders_midnight_noon_and_late_night() {
-        for hour in [0, 12, 23] {
+    fn real_simple_clock_24h_renders_boundary_hours_without_pm() {
+        for (hour, expected) in [
+            (0, "FR060010\0\0"),
+            (1, "FR060110\0\0"),
+            (11, "FR061110\0\0"),
+            (12, "FR061210\0\0"),
+            (13, "FR061310\0\0"),
+            (23, "FR062310\0\0"),
+        ] {
             let snap = render_real_face(
                 "SIMPLE_CLOCK",
                 2023,
@@ -929,8 +936,10 @@ mod tests {
                 false,
             )
             .unwrap();
+            let text: String = snap.chars.iter().collect();
+            assert_eq!(text, expected, "unexpected 24-hour display at {hour:02}:10");
             assert!(snap.h24);
-            assert!(!snap.pm);
+            assert!(!snap.pm, "PM must be separate from the 24-hour indicator");
         }
     }
 

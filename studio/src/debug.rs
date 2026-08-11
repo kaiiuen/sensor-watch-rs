@@ -11,6 +11,56 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// The default maximum number of log lines kept.
 const MAX_LINES: usize = 500;
 
+/// Controls where high-frequency tick/process events are displayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TickVerbosity {
+    Hide,
+    Dedicated,
+    Main,
+}
+
+/// Identifies high-frequency tick/process messages without allocating.
+pub fn is_tick_or_process(message: &str) -> bool {
+    fn contains_word(haystack: &[u8], needle: &[u8]) -> bool {
+        haystack.windows(needle.len()).any(|window| {
+            window
+                .iter()
+                .zip(needle)
+                .all(|(a, b)| a.to_ascii_lowercase() == *b)
+        })
+    }
+    let bytes = message.as_bytes();
+    contains_word(bytes, b"tick") || contains_word(bytes, b"process")
+}
+
+impl TickVerbosity {
+    pub const ALL: [Self; 3] = [Self::Hide, Self::Dedicated, Self::Main];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hide => "Hide ticks",
+            Self::Dedicated => "Tick log",
+            Self::Main => "Show all in main output",
+        }
+    }
+
+    pub fn setting_name(self) -> &'static str {
+        match self {
+            Self::Hide => "hide",
+            Self::Dedicated => "dedicated",
+            Self::Main => "main",
+        }
+    }
+
+    pub fn from_setting(value: &str) -> Self {
+        match value {
+            "dedicated" => Self::Dedicated,
+            "main" => Self::Main,
+            _ => Self::Hide,
+        }
+    }
+}
+
 /// A single log entry.
 #[derive(Clone)]
 pub struct LogEntry {

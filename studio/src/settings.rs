@@ -109,6 +109,9 @@ pub struct AppSettings {
     /// Oldest lines are dropped past this so the logs never grow without bound.
     #[serde(default = "default_line_limit")]
     pub line_limit: usize,
+    /// Where high-frequency tick/process events are displayed.
+    #[serde(default = "default_tick_verbosity")]
+    pub tick_verbosity: String,
     /// Named hardware component/build profiles used for configuration review.
     #[serde(default)]
     pub component_profiles: Vec<BuildProfile>,
@@ -140,6 +143,7 @@ impl AppSettings {
         drift_ppm: f64,
         rtc_calibration: &RtcCalibrationSettings,
         line_limit: usize,
+        tick_verbosity: String,
         component_profiles: &[BuildProfile],
         active_component_profile: usize,
     ) -> Self {
@@ -161,6 +165,7 @@ impl AppSettings {
             drift_ppm,
             rtc_calibration: rtc_calibration.clone(),
             line_limit,
+            tick_verbosity,
             component_profiles: component_profiles.to_vec(),
             active_component_profile,
             board: default_board(),
@@ -268,6 +273,9 @@ impl AppSettings {
         if self.line_limit == 0 || self.line_limit > 10_000 {
             return Err("line limit must be between 1 and 10000".into());
         }
+        if !matches!(self.tick_verbosity.as_str(), "hide" | "dedicated" | "main") {
+            return Err("tick verbosity is invalid".into());
+        }
         if !matches!(self.board.as_str(), "Green" | "Red / Lite" | "Blue" | "Pro") {
             return Err("board is not a supported revision".into());
         }
@@ -316,6 +324,7 @@ impl Default for AppSettings {
             drift_ppm: 0.0,
             rtc_calibration: RtcCalibrationSettings::default(),
             line_limit: default_line_limit(),
+            tick_verbosity: default_tick_verbosity(),
             component_profiles: Vec::new(),
             active_component_profile: 0,
             board: default_board(),
@@ -326,6 +335,10 @@ impl Default for AppSettings {
 /// The default maximum number of lines kept in each output log.
 fn sensor_watch_studio_ntp_server_count(custom: &[(String, String)]) -> usize {
     super::ntp::SERVERS.len() + custom.len()
+}
+
+pub fn default_tick_verbosity() -> String {
+    "hide".to_string()
 }
 
 pub fn default_line_limit() -> usize {
