@@ -5650,6 +5650,9 @@ impl StudioApp {
                 ui.end_row();
             });
 
+        ui.add_space(8.0);
+        ui.weak("All-in-one CLI: run Firmware Studio with --help");
+
         if !self.advanced_mode {
             ui.add_space(16.0);
             ui.separator();
@@ -6821,7 +6824,134 @@ fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
+fn print_cli_help() {
+    println!(
+        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Build firmware and write the UF2 artifact\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
+    );
+}
+
+fn required_cli_arg(args: &mut impl Iterator<Item = String>) -> Result<String, String> {
+    args.next()
+        .ok_or_else(|| "missing required argument (try --help)".to_string())
+}
+
+fn print_manifest_cli(manifest: &sensor_watch_tools::Manifest) -> Result<(), String> {
+    let output = serde_json::to_string_pretty(manifest).map_err(|e| e.to_string())?;
+    println!("{output}");
+    Ok(())
+}
+
+fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
+    let command = args
+        .next()
+        .ok_or_else(|| "missing command (try --help)".to_string())?;
+    match command.as_str() {
+        "help" | "--help" | "-h" => {
+            print_cli_help();
+            Ok(())
+        }
+        "build" => {
+            let result = sensor_watch_tools::build_firmware()?;
+            println!("built {}", result.uf2_path.display());
+            Ok(())
+        }
+        "uf2" => {
+            let input = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            let output = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            sensor_watch_tools::convert_uf2(&input, &output)?;
+            println!("wrote {}", output.display());
+            Ok(())
+        }
+        "verify" => {
+            let path = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            let mut manifest = None;
+            let mut trusted = None;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--manifest" => {
+                        manifest = Some(std::path::PathBuf::from(required_cli_arg(&mut args)?));
+                    }
+                    "--trusted-sha256" => trusted = Some(required_cli_arg(&mut args)?),
+                    _ => return Err(format!("unknown verify option: {arg}")),
+                }
+            }
+            let result =
+                sensor_watch_tools::verify_uf2(&path, manifest.as_deref(), trusted.as_deref())?;
+            let output = manifest.unwrap_or_else(|| path.with_extension("uf2.json"));
+            if !output.exists() {
+                sensor_watch_tools::write_manifest(&output, &result)?;
+            }
+            print_manifest_cli(&result)
+        }
+        "backup" => {
+            let src = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            let dst = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            sensor_watch_tools::backup_uf2(&src, &dst)?;
+            println!("preserved known-good UF2 at {}", dst.display());
+            Ok(())
+        }
+        "rollback" => {
+            let src = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            let dst = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            let trusted = required_cli_arg(&mut args)?;
+            let manifest = sensor_watch_tools::rollback_uf2(&src, &dst, &trusted)?;
+            println!(
+                "staged rollback UF2 at {}\ngeneration {}\nsha256 {}",
+                dst.display(),
+                sensor_watch_tools::manifest_value(&manifest, "generation_id"),
+                sensor_watch_tools::manifest_value(&manifest, "sha256")
+            );
+            Ok(())
+        }
+        "report" => {
+            let path = std::path::PathBuf::from(required_cli_arg(&mut args)?);
+            let trusted = required_cli_arg(&mut args)?;
+            let report = sensor_watch_tools::recovery_report(&path, &trusted)?;
+            let output = serde_json::to_string_pretty(&report).map_err(|e| e.to_string())?;
+            println!("{output}");
+            Ok(())
+        }
+        "flash" => {
+            let elf = args
+                .next()
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|| {
+                    std::path::PathBuf::from("target/thumbv6m-none-eabi/release/sensor-watch")
+                });
+            sensor_watch_tools::flash_firmware(&elf)
+        }
+        _ => Err(format!("unknown command: {command} (try --help)")),
+    }
+}
+
+#[cfg(windows)]
+fn ensure_cli_console() {
+    unsafe extern "system" {
+        fn AllocConsole() -> i32;
+    }
+    unsafe {
+        let _ = AllocConsole();
+    }
+}
+
+#[cfg(not(windows))]
+fn ensure_cli_console() {}
+
 fn main() -> eframe::Result<()> {
+    let mut args = std::env::args();
+    let _executable = args.next();
+    if args.next().is_some() {
+        ensure_cli_console();
+        let exit_code = match run_cli(std::env::args().skip(1)) {
+            Ok(()) => 0,
+            Err(error) => {
+                eprintln!("error: {error}");
+                1
+            }
+        };
+        std::process::exit(exit_code);
+    }
+
     let options = eframe::NativeOptions {
         // Launch at 640x480 (480p, 4:3) so there's ample space by default while
         // remaining adjustable.

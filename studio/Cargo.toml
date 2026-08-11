@@ -24,6 +24,8 @@ usvg = "0.42"
 
 # Firmware logic (UF2 encoding, date math, settings) - reused from the firmware
 sensor-watch-core = { path = "../core" }
+# Host-side firmware build, UF2, recovery, and flashing tools for CLI mode.
+sensor-watch-tools = { path = "../tools" }
 # The firmware crate's host [lib] (`sensor_watch`, feature `hostmock`), used to
 # render faces through the real `Hw` seam (see `src/real_face.rs`), falling back
 # to `face_sim` for faces not yet migrated. The `std` feature makes the firmware

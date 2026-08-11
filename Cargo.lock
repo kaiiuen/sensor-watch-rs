@@ -3196,6 +3196,7 @@ dependencies = [
  "resvg",
  "sensor-watch",
  "sensor-watch-core",
+ "sensor-watch-tools",
  "serde",
  "serde_json",
  "serialport",
