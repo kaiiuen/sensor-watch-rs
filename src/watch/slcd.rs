@@ -284,7 +284,14 @@ pub fn clear_display() {
 
 /// Displays a single character at the given position (0-9).
 pub fn display_character(character: u8, position: u8) {
-    let mut character = character;
+    if !crate::watch::safety::valid_display_position(position) {
+        return;
+    }
+    let mut character = if crate::watch::safety::valid_display_character(character) {
+        character
+    } else {
+        b' '
+    };
 
     // Special cases for positions 4 and 6.
     if position == 4 || position == 6 {
@@ -385,6 +392,9 @@ pub fn display_character(character: u8, position: u8) {
 
 /// Displays a string at the given position (0-9). A space clears that digit.
 pub fn display_string(string: &str, position: u8) {
+    if !crate::watch::safety::valid_display_position(position) {
+        return;
+    }
     let bytes = string.as_bytes();
     let mut i = 0;
     while i < bytes.len() {
@@ -433,6 +443,10 @@ pub fn start_character_blink(character: u8, duration: u32) {
     sync();
 
     // Set the frame counter 0 overflow value.
+    if duration == 0 {
+        display_character(b' ', 7);
+        return;
+    }
     let frames = duration / (1000 / FRAME_FREQUENCY);
     if duration <= FC_BYPASS_MAX_MS {
         // SAFETY: computed overflow value is valid.

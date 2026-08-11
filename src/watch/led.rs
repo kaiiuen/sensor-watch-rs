@@ -84,16 +84,18 @@ pub fn set_led_color(red: u8, green: u8) {
 
 /// Sets the LED to a custom RGB color by modulating each output's duty cycle.
 pub fn set_led_color_rgb(red: u8, green: u8, _blue: u8) {
+    // u8 channels are already the full safe PWM input range. Keep the
+    // calculation bounded by the hardware period configured below.
     if is_enabled() {
         let period = tcc0().per().read().bits();
         // SAFETY: writing valid compare-buffer values.
         unsafe {
             tcc0()
                 .ccbuf(RED_TCC_CHANNEL)
-                .write(|w| w.bits((period * red as u32 * 1000) / 255000));
+                .write(|w| w.bits((period.min(20_000) * red as u32 * 1000) / 255000));
             tcc0()
                 .ccbuf(GREEN_TCC_CHANNEL)
-                .write(|w| w.bits((period * green as u32 * 1000) / 255000));
+                .write(|w| w.bits((period.min(20_000) * green as u32 * 1000) / 255000));
         }
     }
 }

@@ -23,10 +23,19 @@ static mut BUZZER_VOLTAGE: u8 = 0;
 ///
 /// This is stored and applied to the buzzer drive. On boards with an
 /// adjustable buzzer supply, this controls the output level.
-pub fn set_voltage(voltage: u8) {
+pub fn set_voltage(voltage: u8) -> Result<(), ()> {
+    if !crate::watch::safety::valid_buzzer_voltage(voltage) {
+        // Keep the output disabled rather than retaining an unsafe request.
+        unsafe {
+            BUZZER_VOLTAGE = 0;
+        }
+        set_buzzer_off();
+        return Err(());
+    }
     unsafe {
         BUZZER_VOLTAGE = voltage;
     }
+    Ok(())
 }
 
 /// Returns the configured buzzer voltage (in tenths of a volt).
@@ -200,14 +209,19 @@ pub fn enable_buzzer() {
 /// Sets the period of the buzzer.
 ///
 /// `period = 1000000 / freq`.
-pub fn set_buzzer_period(period: u32) {
-    // SAFETY: writing valid period/compare-buffer values.
+pub fn set_buzzer_period(period: u32) -> Result<(), ()> {
+    if !crate::watch::safety::valid_buzzer_period(period) {
+        set_buzzer_off();
+        return Err(());
+    }
+    // SAFETY: the validator constrains the TCC period and compare value.
     unsafe {
         tcc0().perbuf().write(|w| w.bits(period));
         tcc0()
             .ccbuf(BUZZER_TCC_CHANNEL)
             .write(|w| w.bits(period / 2));
     }
+    Ok(())
 }
 
 /// Disables the TCC peripheral that drives the buzzer.
@@ -237,7 +251,10 @@ pub fn play_note(note: Note, duration_ms: u16) {
         set_buzzer_off();
         return;
     }
-    set_buzzer_period(NOTE_PERIODS[note as usize] as u32);
+    if set_buzzer_period(NOTE_PERIODS[note as usize] as u32).is_err() {
+        set_buzzer_off();
+        return;
+    }
     set_buzzer_on();
     delay_ms(duration_ms);
     set_buzzer_off();

@@ -50,6 +50,7 @@ pub mod led;
 pub mod lis2dw;
 pub mod memory;
 pub mod rtc;
+pub mod safety;
 pub mod shell;
 pub mod slcd;
 pub mod spi;

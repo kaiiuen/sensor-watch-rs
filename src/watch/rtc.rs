@@ -44,6 +44,17 @@ pub struct DateTime {
 
 impl DateTime {
     /// Packs the fields into the 32-bit hardware register value.
+    pub fn is_valid(self) -> bool {
+        crate::watch::safety::valid_datetime(
+            self.year,
+            self.month,
+            self.day,
+            self.hour,
+            self.minute,
+            self.second,
+        )
+    }
+
     pub fn to_reg(self) -> u32 {
         (self.second as u32 & 0x3F)
             | ((self.minute as u32 & 0x3F) << 6)
@@ -128,12 +139,16 @@ pub fn init() {
 }
 
 /// Sets the date and time.
-pub fn set_date_time(date_time: DateTime) {
+pub fn set_date_time(date_time: DateTime) -> Result<(), ()> {
+    if !date_time.is_valid() {
+        return Err(());
+    }
     // Double sync: without it, setting the time at high tick rates is unreliable.
     sync();
     // SAFETY: writing the full CLOCK register with a valid packed value.
     unsafe { rtc().clock().write(|w| w.bits(date_time.to_reg())) };
     sync();
+    Ok(())
 }
 
 /// Returns the current date and time.
@@ -156,7 +171,7 @@ pub fn disable_tick_callback() {
 ///
 /// `frequency` must be a power of two from 1 to 128 (inclusive).
 pub fn register_periodic_callback(callback: Callback, frequency: u8) {
-    if !frequency.is_power_of_two() {
+    if !(1..=128).contains(&frequency) || !frequency.is_power_of_two() {
         return;
     }
     // Left-justify the period in a 32-bit int, then count leading zeros.
@@ -178,7 +193,7 @@ pub fn register_periodic_callback(callback: Callback, frequency: u8) {
 
 /// Disables the periodic callback at the given frequency.
 pub fn disable_periodic_callback(frequency: u8) {
-    if !frequency.is_power_of_two() {
+    if !(1..=128).contains(&frequency) || !frequency.is_power_of_two() {
         return;
     }
     let tmp = (frequency as u32 & 0xFF) << 24;
@@ -201,6 +216,9 @@ pub fn disable_all_periodic_callbacks() {
 /// Registers an alarm callback that fires when the RTC time matches `alarm_time`
 /// as masked by `mask`.
 pub fn register_alarm_callback(callback: Callback, alarm_time: DateTime, mask: AlarmMatch) {
+    if !alarm_time.is_valid() {
+        return;
+    }
     // SAFETY: writing valid alarm register values, storing the callback, and
     // unmasking the RTC interrupt.
     unsafe {

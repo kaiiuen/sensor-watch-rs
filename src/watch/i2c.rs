@@ -98,6 +98,10 @@ pub fn pins_to_floating_before_sleep() {
 
 /// Sends a series of bytes to a device on the I2C bus.
 pub fn send(addr: i16, buf: &[u8]) {
+    if !crate::watch::safety::valid_i2c_address(addr) {
+        disable_i2c();
+        return;
+    }
     // Set the peripheral address (7-bit) and issue a START condition.
     // SAFETY: writing a valid ADDR value.
     unsafe {
@@ -130,6 +134,10 @@ pub fn send(addr: i16, buf: &[u8]) {
 
 /// Receives a series of bytes from a device on the I2C bus.
 pub fn receive(addr: i16, buf: &mut [u8]) {
+    if !crate::watch::safety::valid_i2c_address(addr) {
+        disable_i2c();
+        return;
+    }
     // Set the peripheral address (7-bit, read) and issue a START condition.
     // SAFETY: writing a valid ADDR value.
     unsafe {

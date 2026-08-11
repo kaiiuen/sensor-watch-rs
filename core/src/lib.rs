@@ -16,6 +16,7 @@ pub mod event_log;
 // The hardware seam: the `Hw` trait, reference mock, and the reusable
 // `Event`/`Button`/`Indicator` types used by face logic.
 pub mod mock_hw;
+pub mod safety;
 pub mod settings;
 pub mod uf2;
 pub mod utility;

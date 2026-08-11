@@ -88,8 +88,11 @@ impl Shell {
                 // settime YYMMDDHHMMSS
                 if line.len() == 21 && &line[..7] == b"settime" {
                     if let Some(dt) = parse_settime(&line[8..]) {
-                        rtc::set_date_time(dt);
-                        uart::puts("OK\r\n");
+                        if rtc::set_date_time(dt).is_ok() {
+                            uart::puts("OK\r\n");
+                        } else {
+                            uart::puts("ERR invalid date/time\r\n");
+                        }
                     } else {
                         uart::puts("ERR\r\n");
                     }

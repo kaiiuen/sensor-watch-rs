@@ -143,6 +143,9 @@ pub fn enable_adc() {
 
 /// Configures the selected pin for analog input.
 pub fn enable_analog_input(pin: Pin) {
+    if !matches!(pin, A0 | A1 | A2 | A3 | A4) {
+        return;
+    }
     gpio::set_pin_direction(pin, Direction::Off);
     // The ADC pins use PMUX function B (value 1).
     gpio::set_pin_function(pin, Function::Mux(1));
@@ -181,6 +184,9 @@ pub fn set_analog_num_samples(samples: u16) {
 
 /// Sets the length of time spent sampling (1-64 cycles).
 pub fn set_analog_sampling_length(cycles: u8) {
+    if !(1..=64).contains(&cycles) {
+        return;
+    }
     // The ADC always needs at least one cycle; subtract one and clamp.
     // SAFETY: the clamped value is a valid SAMPLEN value.
     unsafe {

@@ -46,6 +46,9 @@ fn pmux(port_idx: usize, pair_idx: usize) -> &'static atsaml22j::port::Pmux0_ {
 
 /// Sets the direction of a pin.
 pub fn set_pin_direction(pin: Pin, direction: Direction) {
+    if !crate::watch::safety::valid_pin(pin.0, pin.1) {
+        return;
+    }
     let (port_idx, pin_idx) = (pin.0 as usize, pin.1 as usize);
     let mask = 1u32 << pin.1;
     // SAFETY: writing valid direction bitmasks.
@@ -75,6 +78,9 @@ pub fn set_pin_direction(pin: Pin, direction: Direction) {
 
 /// Sets the pull mode of a pin.
 pub fn set_pin_pull_mode(pin: Pin, pull: PullMode) {
+    if !crate::watch::safety::valid_pin(pin.0, pin.1) {
+        return;
+    }
     let (port_idx, pin_idx) = (pin.0 as usize, pin.1 as usize);
     let mask = 1u32 << pin.1;
     match pull {
@@ -110,6 +116,11 @@ pub fn set_pin_pull_mode(pin: Pin, pull: PullMode) {
 
 /// Sets the peripheral function of a pin.
 pub fn set_pin_function(pin: Pin, function: Function) {
+    if !crate::watch::safety::valid_pin(pin.0, pin.1)
+        || matches!(function, Function::Mux(v) if !crate::watch::safety::valid_pmux(v))
+    {
+        return;
+    }
     let (port_idx, pin_idx) = (pin.0 as usize, pin.1 as usize);
     match function {
         Function::Off => {
@@ -122,6 +133,9 @@ pub fn set_pin_function(pin: Pin, function: Function) {
 
 /// Enables the peripheral multiplexer and sets the PMUX value for a pin.
 fn set_pmux(port_idx: usize, pin_idx: usize, value: u8) {
+    if port_idx >= 2 || pin_idx >= 32 || !crate::watch::safety::valid_pmux(value) {
+        return;
+    }
     // SAFETY: writing valid PINCFG/PMUX values.
     unsafe {
         pincfg(port_idx, pin_idx).modify(|_, w| w.pmuxen().set_bit());
@@ -136,6 +150,9 @@ fn set_pmux(port_idx: usize, pin_idx: usize, value: u8) {
 
 /// Gets the input level of a pin.
 pub fn get_pin_level(pin: Pin) -> bool {
+    if !crate::watch::safety::valid_pin(pin.0, pin.1) {
+        return false;
+    }
     let port_idx = pin.0 as usize;
     let mask = 1u32 << pin.1;
     let dir = port_iobus().dir(port_idx).read().bits();
@@ -149,6 +166,9 @@ pub fn get_pin_level(pin: Pin) -> bool {
 
 /// Sets the output level of a pin.
 pub fn set_pin_level(pin: Pin, level: bool) {
+    if !crate::watch::safety::valid_pin(pin.0, pin.1) {
+        return;
+    }
     let port_idx = pin.0 as usize;
     let mask = 1u32 << pin.1;
     // SAFETY: writing a valid output bitmask.
