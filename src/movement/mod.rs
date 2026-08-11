@@ -1354,6 +1354,30 @@ pub fn get_drift_correction() -> i16 {
     rtc::freqcorr_read()
 }
 
+/// Applies an explicitly supplied temperature-compensated calibration.
+///
+/// This is intentionally not called from boot or the normal tick path: a
+/// calibration has no effect unless a caller has loaded and supplied one.
+/// The register is read first so unrelated/manual FREQCORR settings are not
+/// rewritten when the requested encoded value is already active.
+#[cfg(feature = "hostmock")]
+pub fn apply_temperature_calibration(
+    calibration: sensor_watch_core::rtc_calibration::RtcCalibration,
+    temperature_c: f32,
+) -> bool {
+    if !calibration.is_enabled() || !temperature_c.is_finite() {
+        return false;
+    }
+    let correction = libm::roundf(calibration.correction_ppm(temperature_c)) as i16;
+    let clamped = correction.clamp(-127, 127);
+    if rtc::freqcorr_read() == clamped {
+        return false;
+    }
+    let sign = if clamped < 0 { 1 } else { 0 };
+    rtc::freqcorr_write(clamped.unsigned_abs() as i16, sign);
+    true
+}
+
 /// Detects and enables the accelerometer on the 9-pin connector.
 ///
 /// Returns true if a LIS2DW is present. When present, the watch can use

@@ -112,6 +112,15 @@ pub trait Hw {
     }
     /// Returns an approximate VCC in millivolts (`watch::adc::get_vcc_voltage`).
     fn get_vcc_voltage(&mut self) -> u16;
+    fn get_analog_pin_level(&mut self, _pin: (u8, u8)) -> u16 {
+        0
+    }
+    fn i2c_write16(&mut self, _addr: i16, _reg: u8, _data: u16) -> Result<(), ()> {
+        Err(())
+    }
+    fn i2c_read16(&mut self, _addr: i16, _reg: u8) -> Result<u16, ()> {
+        Err(())
+    }
     /// The movement hooks a face calls via `crate::movement::...`. Provided with
     /// a default no-op so the mock is usable before any framework wiring exists.
     fn set_tick_rate(&mut self, _show_seconds: bool) {}
@@ -189,6 +198,10 @@ pub struct MockHw {
     pub backup: [u32; 8],
     /// The last LED color written via `set_led_color` as (red, green).
     pub led_color: (u8, u8),
+    /// Optional OPT3001 result register value; `None` means no sensor.
+    pub opt3001_result: Option<u16>,
+    /// Raw 16-bit thermistor ADC sample; zero means no sensor.
+    pub thermistor_raw: u16,
 }
 
 impl Default for MockHw {
@@ -214,6 +227,8 @@ impl Default for MockHw {
             rtc_reads: 0,
             backup: [0; 8],
             led_color: (0, 0),
+            opt3001_result: None,
+            thermistor_raw: 0,
         }
     }
 }
@@ -316,6 +331,22 @@ impl Hw for MockHw {
     }
     fn get_vcc_voltage(&mut self) -> u16 {
         self.vcc_mv
+    }
+
+    fn get_analog_pin_level(&mut self, _pin: (u8, u8)) -> u16 {
+        self.thermistor_raw
+    }
+
+    fn i2c_write16(&mut self, _addr: i16, _reg: u8, _data: u16) -> Result<(), ()> {
+        if self.opt3001_result.is_some() {
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
+
+    fn i2c_read16(&mut self, _addr: i16, _reg: u8) -> Result<u16, ()> {
+        self.opt3001_result.ok_or(())
     }
     fn set_led_off(&mut self) {}
     fn set_pin_direction(&mut self, _pin: (u8, u8), _out: bool) {}

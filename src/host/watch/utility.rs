@@ -14,6 +14,26 @@ pub use sensor_watch_core::utility::{
 /// Offsets a timestamp by a given amount. Same logic as the real
 /// `src/watch/utility.rs`; defined here (not in `core`) so the host shim mirrors
 /// the ARM HAL surface without touching the shared core crate.
+pub fn thermistor_temperature(
+    value: u16,
+    highside: bool,
+    b: f32,
+    nominal_temp: f32,
+    nominal_resistance: f32,
+    series_resistance: f32,
+) -> f32 {
+    if value == 0 || value == u16::MAX {
+        return f32::NAN;
+    }
+    let reading = if highside {
+        (65535.0 * series_resistance) / value as f32 - series_resistance
+    } else {
+        series_resistance / (65535.0 / value as f32 - 1.0)
+    };
+    let inv_t = 1.0 / (nominal_temp + 273.15) + libm::logf(reading / nominal_resistance) / b;
+    1.0 / inv_t - 273.15
+}
+
 pub fn offset_timestamp(now: u32, hours: i8, minutes: i8, seconds: i8) -> u32 {
     let mut new = now as i64;
     new += hours as i64 * 60 * 60;

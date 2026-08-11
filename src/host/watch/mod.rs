@@ -15,10 +15,13 @@ pub mod buzzer;
 pub mod deepsleep;
 pub mod extint;
 pub mod gpio;
+pub mod i2c;
 pub mod led;
+pub mod opt3001;
 pub mod rtc;
 pub mod slcd;
 pub mod storage;
+pub mod thermistor;
 pub mod utility;
 
 /// The `Hw`-seam plumbing: [`install_hw`](seam::install_hw) + [`hw`](seam::hw).

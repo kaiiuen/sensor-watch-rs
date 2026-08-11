@@ -9,22 +9,32 @@ use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch;
 use crate::watch::rtc;
 use crate::watch::slcd::Indicator;
+use crate::watch::thermistor::Thermistor;
 
 /// The thermistor readout face state.
-pub struct ThermistorReadoutFace;
+pub struct ThermistorReadoutFace {
+    thermistor: Thermistor,
+    temperature_c: Option<f32>,
+}
 
 impl ThermistorReadoutFace {
     /// A const constructor for use in a static initializer.
     pub const fn new_static() -> Self {
-        ThermistorReadoutFace
+        ThermistorReadoutFace {
+            thermistor: Thermistor::new(),
+            temperature_c: None,
+        }
     }
 
     pub fn new() -> Self {
-        ThermistorReadoutFace
+        Self::new_static()
     }
 
     fn update_display(&self, in_fahrenheit: bool) {
-        let temperature_c = 25.0f32;
+        let Some(temperature_c) = self.temperature_c else {
+            watch::slcd::display_string("NO TE", 0);
+            return;
+        };
         let mut buf = [0u8; 11];
         let v = if in_fahrenheit {
             temperature_c * 1.8 + 32.0
@@ -46,6 +56,8 @@ impl WatchFace for ThermistorReadoutFace {
     fn setup(&mut self, _settings: &Settings, _watch_face_index: usize) {}
 
     fn activate(&mut self, _settings: &Settings) {
+        self.thermistor.begin();
+        self.temperature_c = self.thermistor.read_celsius().ok();
         watch::slcd::display_string("TE", 0);
     }
 
@@ -63,6 +75,7 @@ impl WatchFace for ThermistorReadoutFace {
                 if date_time.second % 5 == 4 {
                     watch::slcd::set_indicator(Indicator::Signal);
                 } else if date_time.second % 5 == 0 {
+                    self.temperature_c = self.thermistor.read_celsius().ok();
                     self.update_display(settings.use_imperial_units());
                     watch::slcd::clear_indicator(Indicator::Signal);
                 }

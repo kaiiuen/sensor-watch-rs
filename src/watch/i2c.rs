@@ -7,6 +7,15 @@ use crate::watch::gpio::{self, Direction, Function, Pin};
 use crate::watch::timeout::wait_until;
 use atsaml22j::sercom0::i2cm::I2cm;
 
+/// Errors reported by the SERCOM I2C master.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum I2cError {
+    InvalidAddress,
+    Timeout,
+    Nack,
+    Bus,
+}
+
 /// The I2C pins (SDA=PB30, SCL=PB31).
 const SDA: Pin = Pin(1, 30);
 const SCL: Pin = Pin(1, 31);
@@ -167,25 +176,143 @@ pub fn receive(addr: i16, buf: &mut [u8]) {
     }
 }
 
-/// Writes a byte to a register in an I2C device.
+/// Writes a byte to a register in an I2C device (legacy best-effort API).
 pub fn write8(addr: i16, reg: u8, data: u8) {
-    send(addr, &[reg, data]);
+    let _ = write8_checked(addr, reg, data);
+}
+
+/// Checked register write used by sensor drivers.
+pub fn write8_checked(addr: i16, reg: u8, data: u8) -> Result<(), I2cError> {
+    if !crate::watch::safety::valid_i2c_address(addr) {
+        return Err(I2cError::InvalidAddress);
+    }
+    unsafe { i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1)) };
+    for byte in [reg, data] {
+        if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+            return Err(I2cError::Timeout);
+        }
+        unsafe { i2cm().data().write(|w| w.bits(byte)) };
+    }
+    if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+        return Err(I2cError::Timeout);
+    }
+    unsafe {
+        i2cm()
+            .ctrlb()
+            .modify(|r, w| w.bits((r.bits() & !(0x3 << 16)) | (0x3 << 16)))
+    };
+    Ok(())
+}
+
+pub fn write16_checked(addr: i16, reg: u8, data: u16) -> Result<(), I2cError> {
+    if !crate::watch::safety::valid_i2c_address(addr) {
+        return Err(I2cError::InvalidAddress);
+    }
+    unsafe { i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1)) };
+    for byte in [reg, (data >> 8) as u8, data as u8] {
+        if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+            return Err(I2cError::Timeout);
+        }
+        unsafe { i2cm().data().write(|w| w.bits(byte)) };
+    }
+    if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+        return Err(I2cError::Timeout);
+    }
+    unsafe {
+        i2cm()
+            .ctrlb()
+            .modify(|r, w| w.bits((r.bits() & !(0x3 << 16)) | (0x3 << 16)))
+    };
+    Ok(())
 }
 
 /// Reads a byte from a register in an I2C device.
 pub fn read8(addr: i16, reg: u8) -> u8 {
-    send(addr, &[reg]);
-    let mut data = [0u8; 1];
-    receive(addr, &mut data);
-    data[0]
+    read8_checked(addr, reg).unwrap_or(0)
 }
 
-/// Reads an unsigned little-endian word from a register in an I2C device.
-pub fn read16(addr: i16, reg: u8) -> u16 {
-    send(addr, &[reg]);
+pub fn read8_checked(addr: i16, reg: u8) -> Result<u8, I2cError> {
+    let mut data = [0u8; 1];
+    write_read(addr, &[reg], &mut data)?;
+    Ok(data[0])
+}
+
+pub fn read16_checked(addr: i16, reg: u8) -> Result<u16, I2cError> {
     let mut data = [0u8; 2];
-    receive(addr, &mut data);
+    write_read(addr, &[reg], &mut data)?;
+    Ok(u16::from_be_bytes(data))
+}
+
+/// Reads an unsigned big-endian word from a register in an I2C device.
+///
+/// Register-oriented sensors conventionally transmit the high byte first;
+/// `read16_le` is intentionally separate for devices such as LIS2DW output
+/// registers that document little-endian samples.
+pub fn read16(addr: i16, reg: u8) -> u16 {
+    let mut data = [0u8; 2];
+    if write_read(addr, &[reg], &mut data).is_err() {
+        return 0;
+    }
+    u16::from_be_bytes(data)
+}
+
+/// Reads a little-endian word from a register.
+pub fn read16_le(addr: i16, reg: u8) -> u16 {
+    let mut data = [0u8; 2];
+    if write_read(addr, &[reg], &mut data).is_err() {
+        return 0;
+    }
     u16::from_le_bytes(data)
+}
+
+/// Performs a register-select followed by a read without a STOP between them.
+/// This is the repeated-start transaction required by register I2C sensors.
+pub fn write_read(addr: i16, write: &[u8], read: &mut [u8]) -> Result<(), I2cError> {
+    if !crate::watch::safety::valid_i2c_address(addr) {
+        disable_i2c();
+        return Err(I2cError::InvalidAddress);
+    }
+    if write.is_empty() || read.is_empty() {
+        return Err(I2cError::Bus);
+    }
+    unsafe { i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1)) };
+    if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+        return Err(I2cError::Timeout);
+    }
+    for &byte in write {
+        unsafe { i2cm().data().write(|w| w.bits(byte)) };
+        if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+            return Err(I2cError::Timeout);
+        }
+    }
+    // Writing ADDR while the bus is active creates a repeated START.
+    unsafe {
+        i2cm()
+            .addr()
+            .write(|w| w.bits((((addr as u32) & 0x7F) << 1) | 1))
+    };
+    if wait_until(|| i2cm().intflag().read().sb().bit_is_set()).is_err() {
+        return Err(I2cError::Timeout);
+    }
+    let read_len = read.len();
+    for (index, byte) in read.iter_mut().enumerate() {
+        *byte = i2cm().data().read().bits();
+        if index + 1 < read_len {
+            unsafe { i2cm().ctrlb().modify(|r, w| w.bits(r.bits() & !(1 << 18))) };
+        } else {
+            unsafe { i2cm().ctrlb().modify(|r, w| w.bits(r.bits() | (1 << 18))) };
+        }
+        if index + 1 < read_len && wait_until(|| i2cm().intflag().read().sb().bit_is_set()).is_err()
+        {
+            return Err(I2cError::Timeout);
+        }
+    }
+    unsafe {
+        i2cm()
+            .ctrlb()
+            .modify(|r, w| w.bits((r.bits() & !(0x3 << 16)) | (0x3 << 16)))
+    };
+    Ok(())
 }
 
 /// Reads three bytes as an unsigned little-endian int from a register.
