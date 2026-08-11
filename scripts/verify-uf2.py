@@ -9,9 +9,10 @@ checking the manifest/signature from a trusted release channel.
 
 import argparse
 import hashlib
+import hmac
 import json
 import os
-import shutil
+import stat
 import struct
 import sys
 import time
@@ -37,22 +38,36 @@ def fail(message) -> NoReturn:
     raise SystemExit(1)
 
 
-def inspect(path):
+def read_regular_file(path, maximum):
+    """Read one regular file through a single descriptor, not a pathname twice."""
     if path.is_symlink():
-        fail(f"refusing symlinked UF2 path: {path}")
+        fail(f"refusing symlinked file path: {path}")
+    flags = os.O_RDONLY
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
     try:
-        file_size = path.stat().st_size
-        if file_size > MAX_UF2_BYTES:
-            fail(f"UF2 is {file_size} bytes; maximum is {MAX_UF2_BYTES}")
-        with path.open("rb") as source:
-            data = source.read(MAX_UF2_BYTES + 1)
-        final_size = path.stat().st_size
+        fd = os.open(path, flags | nofollow)
+        try:
+            before = os.fstat(fd)
+            if not stat.S_ISREG(before.st_mode):
+                fail(f"refusing non-regular file: {path}")
+            if before.st_size > maximum:
+                fail(f"file is {before.st_size} bytes; maximum is {maximum}")
+            with os.fdopen(fd, "rb", closefd=True) as source:
+                data = source.read(maximum + 1)
+                after = os.fstat(source.fileno())
+                if len(data) != before.st_size or after.st_size != before.st_size:
+                    fail(f"file changed while it was being read: {path}")
+                return data
+
     except OSError as exc:
         fail(f"cannot read {path}: {exc}")
-    if len(data) > MAX_UF2_BYTES or file_size > MAX_UF2_BYTES:
+
+
+def inspect(path):
+    data = read_regular_file(path, MAX_UF2_BYTES)
+    file_size = len(data)
+    if file_size > MAX_UF2_BYTES:
         fail(f"UF2 exceeds maximum size of {MAX_UF2_BYTES} bytes")
-    if len(data) != file_size or final_size != file_size:
-        fail("UF2 changed while it was being read")
     if not file_size or file_size % BLOCK:
         fail(f"UF2 is {file_size} bytes; expected a non-empty multiple of {BLOCK}")
     count = len(data) // BLOCK
@@ -126,7 +141,7 @@ def write_manifest(path, manifest):
         fail(f"cannot create recovery metadata: {exc}")
 
 
-def verify_manifest(path, manifest_path):
+def verify_manifest(path, manifest_path, trusted_sha256=None):
     try:
         if manifest_path.is_symlink() or manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
             fail("manifest is symlinked or too large")
@@ -136,6 +151,12 @@ def verify_manifest(path, manifest_path):
     if manifest.get("format") != FORMAT or manifest.get("signature") != sign_manifest(manifest):
         fail("manifest signature is invalid")
     actual = record(path, generation=manifest.get("generation_id"))
+    if trusted_sha256 is not None:
+        trusted = trusted_sha256.strip().lower()
+        if len(trusted) != 64 or any(character not in "0123456789abcdef" for character in trusted):
+            fail("trusted SHA-256 must be exactly 64 hexadecimal characters")
+        if not hmac.compare_digest(actual["sha256"], trusted):
+            fail("UF2 does not match the trusted release SHA-256")
     for field in ("format", "generation_id", "board", "family_id", "application_start",
                   "maximum_application_bytes", "uf2_bytes", "uf2_blocks", "payload_bytes",
                   "crc32_ieee", "sha256", "payload_sha256"):
@@ -151,6 +172,8 @@ def main():
     verify = sub.add_parser("verify", help="validate a UF2 and print or create its manifest")
     verify.add_argument("uf2", type=Path)
     verify.add_argument("--manifest", type=Path)
+    verify.add_argument("--trusted-sha256", required=False,
+                        help="trusted release digest obtained out-of-band")
 
     backup = sub.add_parser("backup", help="validate and preserve a known-good UF2")
     backup.add_argument("uf2", type=Path)
@@ -161,16 +184,20 @@ def main():
     rollback.add_argument("backup", type=Path)
     rollback.add_argument("output", type=Path)
     rollback.add_argument("--manifest", type=Path)
+    rollback.add_argument("--trusted-sha256", required=False,
+                          help="trusted release digest obtained out-of-band")
 
     report = sub.add_parser("report", help="write a host-side recovery report")
     report.add_argument("uf2", type=Path)
     report.add_argument("--manifest", type=Path)
     report.add_argument("--output", type=Path)
+    report.add_argument("--trusted-sha256", required=False,
+                        help="trusted release digest obtained out-of-band")
 
     args = parser.parse_args()
     if args.command == "verify":
         if args.manifest and args.manifest.exists():
-            manifest = verify_manifest(args.uf2, args.manifest)
+            manifest = verify_manifest(args.uf2, args.manifest, args.trusted_sha256)
         else:
             manifest = record(args.uf2)
             if args.manifest:
@@ -193,9 +220,13 @@ def main():
         if temp.exists() or temp.is_symlink():
             fail(f"refusing to use existing backup temporary path: {temp}")
         try:
-            shutil.copy2(args.uf2, temp)
+            source_data, _, _ = inspect(args.uf2)
+            with temp.open("xb") as destination:
+                destination.write(source_data)
+                destination.flush()
+                os.fsync(destination.fileno())
             copied_data, _, _ = inspect(temp)
-            if copied_data != args.uf2.read_bytes():
+            if copied_data != source_data:
                 fail("backup copy content verification failed")
             # Link creation is atomic and fails if another backup appeared.
             os.link(temp, args.backup)
@@ -217,7 +248,9 @@ def main():
         manifest_path = args.manifest or args.uf2.with_suffix(args.uf2.suffix + ".json")
         if not manifest_path.exists():
             fail("recovery report requires an adjacent or explicit manifest")
-        manifest = verify_manifest(args.uf2, manifest_path)
+        if not args.trusted_sha256:
+            fail("report requires an out-of-band trusted SHA-256")
+        manifest = verify_manifest(args.uf2, manifest_path, args.trusted_sha256)
         report = {
             "format": "sensor-watch-recovery-report-v1",
             "artifact": str(args.uf2),
@@ -245,7 +278,9 @@ def main():
     manifest_path = args.manifest or args.backup.with_suffix(args.backup.suffix + ".json")
     if not manifest_path.exists():
         fail("rollback requires a trusted adjacent or explicit manifest")
-    manifest = verify_manifest(args.backup, manifest_path)
+    if not args.trusted_sha256:
+        fail("rollback requires an out-of-band trusted SHA-256")
+    manifest = verify_manifest(args.backup, manifest_path, args.trusted_sha256)
     try:
         same_path = args.output.resolve() == args.backup.resolve()
     except OSError as exc:
@@ -259,9 +294,13 @@ def main():
     if temp.exists() or temp.is_symlink():
         fail(f"refusing to use existing rollback temporary path: {temp}")
     try:
-        shutil.copy2(args.backup, temp)
+        source_data, _, _ = inspect(args.backup)
+        with temp.open("xb") as destination:
+            destination.write(source_data)
+            destination.flush()
+            os.fsync(destination.fileno())
         copied_data, _, _ = inspect(temp)
-        if copied_data != args.backup.read_bytes():
+        if copied_data != source_data:
             fail("rollback copy content verification failed")
         os.link(temp, args.output)
     except FileExistsError:

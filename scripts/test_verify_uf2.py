@@ -94,7 +94,8 @@ class RecoveryTests(unittest.TestCase):
             VERIFY.write_manifest(manifest_path, VERIFY.record(artifact))
             result = subprocess.run(
                 [sys.executable, str(Path(__file__).with_name("verify-uf2.py")),
-                 "report", str(artifact), "--output", str(report_path)],
+                 "report", str(artifact), "--trusted-sha256", VERIFY.record(artifact)["sha256"],
+                 "--output", str(report_path)],
                 capture_output=True, text=True, check=True,
             )
             self.assertIn('"true_dual_boot": false', result.stdout)
@@ -111,7 +112,8 @@ class RecoveryTests(unittest.TestCase):
             output.write_bytes(b"do not replace")
             result = subprocess.run(
                 [sys.executable, str(Path(__file__).with_name("verify-uf2.py")),
-                 "rollback", str(backup), str(output)],
+                 "rollback", str(backup), str(output), "--trusted-sha256",
+                 VERIFY.record(backup)["sha256"]],
                 capture_output=True, text=True, check=False,
             )
             self.assertNotEqual(result.returncode, 0)
