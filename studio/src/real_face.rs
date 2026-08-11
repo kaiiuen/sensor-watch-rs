@@ -406,13 +406,11 @@ impl RealFace {
             month: month as u8,
             year: (year - reference_year) as u8,
         };
-        let changed = self.mock.now != next;
         self.mock.now = next;
-        // A time edit must redraw an already-active face immediately, but must
-        // not re-activate it (which would reset face-specific state). The Tick
-        // also advances state exactly once for each changed simulated second;
-        // draw_watch therefore does not issue a second real-face tick.
-        if changed && self.activated {
+        // Refresh an already-active face without re-running activate. This keeps
+        // the display's AM/PM and date fields synchronized after a time edit
+        // while preserving stateful face navigation.
+        if self.activated {
             self.face.loop_(types::Event::Tick, &mut self.settings);
             self.snapshot_from_mock();
         }
@@ -438,8 +436,10 @@ impl RealFace {
         self.snapshot_from_mock();
     }
 
-    /// Advances the face by one second (a `Tick`), refreshing the display.
-    #[allow(dead_code)]
+    /// Delivers one firmware RTC tick and refreshes the captured display.
+    ///
+    /// Callers must only invoke this at a simulated-second boundary; ordinary
+    /// frame redraws and RTC edits belong in [`set_time`].
     pub fn tick(&mut self) {
         self.face.loop_(types::Event::Tick, &mut self.settings);
         self.snapshot_from_mock();
@@ -462,6 +462,11 @@ impl RealFace {
             );
         }
         self.snapshot_from_mock();
+    }
+
+    /// Whether the firmware face has received its initial activation.
+    pub fn is_activated(&self) -> bool {
+        self.activated
     }
 
     /// The current display snapshot (LCD chars + indicators).
@@ -934,6 +939,41 @@ mod tests {
     }
 
     #[test]
+    fn repeated_switch_and_drop_does_not_deadlock_the_seam() {
+        for i in 0..64 {
+            let name = if i % 2 == 0 { "SIMPLE_CLOCK" } else { "ALARM" };
+            let mut face = RealFace::new(name).expect("migrated face");
+            assert!(face.set_time(2023, 1, 6, i % 24, 4, i % 60));
+            face.activate(i % 3 == 0);
+            drop(face);
+        }
+    }
+
+    #[test]
+    fn concurrent_switch_and_drop_is_serialized() {
+        let workers = (0..4)
+            .map(|worker| {
+                std::thread::spawn(move || {
+                    for iteration in 0..16 {
+                        let name = if (worker + iteration) % 2 == 0 {
+                            "SIMPLE_CLOCK"
+                        } else {
+                            "ALARM"
+                        };
+                        let mut face = RealFace::new(name).expect("migrated face");
+                        assert!(face.set_time(2023, 1, 6, 12, iteration, 0));
+                        face.activate(iteration % 2 == 0);
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            worker.join().expect("seam worker panicked");
+        }
+        assert!(RealFace::new("SIMPLE_CLOCK").is_some());
+    }
+
+    #[test]
     fn repeated_ticks_keep_the_face_alive() {
         let mut face = RealFace::new("SIMPLE_CLOCK").expect("face");
         assert!(face.set_time(2023, 1, 6, 15, 4, 0));
@@ -956,6 +996,8 @@ mod tests {
         assert!(!face.set_time(2023, 2, 29, 0, 0, 0));
         assert!(!face.set_time(2023, 1, 32, 0, 0, 0));
         assert!(!face.set_time(2023, 1, 1, 24, 0, 0));
+        assert!(!face.set_time(2023, 1, 1, 0, 60, 0));
+        assert!(!face.set_time(2023, 1, 1, 0, 0, 60));
         assert!(face.set_time(2024, 2, 29, 23, 59, 59));
     }
 

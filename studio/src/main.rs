@@ -664,15 +664,7 @@ impl eframe::App for StudioApp {
                 && !self.building
                 && self.pending_build.is_none()
             {
-                self.snapshot_before("Before build");
-                self.building = true;
-                self.last_uf2 = None;
-                self.build_message = tr(self.language, Key::Building).to_string();
-                self.log.log("Starting firmware build");
-                self.push_terminal("Output write: starting firmware build");
-                let out = std::path::PathBuf::from(self.output_dir.clone());
-                let handle = std::thread::spawn(move || build::build_firmware(&out));
-                self.pending_build = Some(handle);
+                self.start_build();
             }
             if ctx.input(|i| i.key_pressed(egui::Key::F7)) {
                 self.current_panel = Panel::Simulator;
@@ -794,7 +786,7 @@ impl eframe::App for StudioApp {
                             self.push_terminal("Integrity check failed: invalid checksum format");
                             return;
                         }
-                        let short: String = sha.chars().take(12).collect();
+                        let short = sha.get(..12).unwrap_or(&sha).to_string();
                         self.release_sha256 = Some(sha);
                         self.status = "Release checksum fetched".to_string();
                         self.log.log("Integrity check: release checksum fetched");
@@ -824,15 +816,25 @@ impl eframe::App for StudioApp {
         if let Some(handle) = self.pending_update.take() {
             if handle.is_finished() {
                 self.update_checking = false;
-                if let Ok(Ok(msg)) = handle.join() {
-                    self.latest_commit = Some(msg.clone());
-                    self.update_time = Some(
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or(0),
-                    );
-                    self.log.log(format!("Latest commit: {msg}"));
+                match handle.join() {
+                    Ok(Ok(msg)) => {
+                        self.latest_commit = Some(msg.clone());
+                        self.update_time = Some(
+                            std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or(0),
+                        );
+                        self.log.log(format!("Latest commit: {msg}"));
+                    }
+                    Ok(Err(error)) => {
+                        self.status = format!("Update check failed: {error}");
+                        self.log_error(&format!("Update check failed: {error}"));
+                    }
+                    Err(_) => {
+                        self.status = "Update check thread panicked".to_string();
+                        self.log_error("Update check thread panicked");
+                    }
                 }
             } else {
                 self.pending_update = Some(handle);
@@ -1615,6 +1617,22 @@ impl StudioApp {
                     }
                 });
             });
+    }
+
+    /// Starts exactly one background firmware build.
+    fn start_build(&mut self) {
+        if self.shutting_down || self.building || self.pending_build.is_some() {
+            self.push_terminal("Build already running");
+            return;
+        }
+        self.snapshot_before("Before build");
+        self.building = true;
+        self.last_uf2 = None;
+        self.build_message = tr(self.language, Key::Building).to_string();
+        self.log.log("Starting firmware build");
+        self.push_terminal("Output write: starting firmware build");
+        let out = std::path::PathBuf::from(self.output_dir.clone());
+        self.pending_build = Some(std::thread::spawn(move || build::build_firmware(&out)));
     }
 
     /// Fetches the current time from the selected NTP server on a background thread.
@@ -2848,15 +2866,7 @@ impl StudioApp {
                         .on_hover_text("Compile the firmware into a .uf2 file for the watch")
                         .clicked()
                 {
-                    self.snapshot_before("Before build");
-                    self.building = true;
-                    self.last_uf2 = None;
-                    self.build_message = tr(self.language, Key::Building).to_string();
-                    self.log.log("Starting firmware build");
-                    self.push_terminal("Output write: starting firmware build");
-                    let out = std::path::PathBuf::from(self.output_dir.clone());
-                    let handle = std::thread::spawn(move || build::build_firmware(&out));
-                    self.pending_build = Some(handle);
+                    self.start_build();
                 }
                 if !self.build_message.is_empty() {
                     ui.label(&self.build_message);
@@ -2886,7 +2896,7 @@ impl StudioApp {
                         );
                     }
                 }
-                if self.building {
+                if self.building || self.pending_build.is_some() {
                     ui.weak("Build in progress; flashing is disabled until it finishes.");
                 } else if let Some(uf2) = &self.last_uf2 {
                     let uf2 = uf2.clone();
@@ -3794,6 +3804,7 @@ impl StudioApp {
                             "RTC_clock <- write {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
                         ));
                         self.watch.set_datetime(year, month, day, hour, minute);
+                        self.sync_sim_controller_from_watch();
                         self.shell_hw_log
                             .log("freqcorr/settings: persist settings reg".to_string());
                         "OK".to_string()
@@ -4496,10 +4507,10 @@ impl StudioApp {
                     ui.separator();
                     // Show which render engine produced the current frame: the REAL
                     // firmware seam when available, else the face_sim fallback.
-                    ui.label(if self.real_face.is_some() {
-                        "Render: real face (firmware seam)".to_string()
+                    ui.label(if self.last_render_used_real {
+                        "Render: real face (firmware seam)"
                     } else {
-                        "Render: face_sim fallback".to_string()
+                        "Render: face_sim fallback"
                     });
                     ui.separator();
                     // Fuzz the current face.
@@ -4580,6 +4591,7 @@ impl StudioApp {
                                 self.sim_hour,
                                 self.sim_minute,
                             );
+                            self.sync_sim_controller_from_watch();
                             self.sim_log.log(format!(
                                 "Set date/time to {}-{:02}-{:02} {:02}:{:02}",
                                 self.sim_year,
@@ -4718,8 +4730,14 @@ impl StudioApp {
         while self.face_tick_accum >= 1.0 {
             self.face_tick_accum -= 1.0;
             self.face_engine.tick();
-            // Real faces redraw from RealFace::set_time when the simulated RTC
-            // changes, so they do not receive a duplicate tick here.
+            // The real firmware face receives the same one-Hz event, but only
+            // after activation. `set_time` updates RTC state without creating
+            // synthetic ticks for arbitrary edits or frame redraws.
+            if let Some(real) = self.real_face.as_mut() {
+                if real.is_activated() {
+                    real.tick();
+                }
+            }
             // Log the tick into the shell sim, debug output, and terminal so the
             // three live views stay in sync with the simulated watch.
             let (_, _, _, h, m, s, _) = self.watch.get_time();
@@ -4846,6 +4864,9 @@ impl StudioApp {
         let Some(texture) = texture else {
             return;
         };
+        // This is the last path that actually produced a rendered frame, rather
+        // than merely the path that was selected before rasterization.
+        self.last_render_used_real = used_real;
 
         // Allocate the image rect so we can map clicks to SVG button hotspots.
         let (rect, _response) = ui.allocate_exact_size(egui::Vec2::new(w, h), egui::Sense::click());
@@ -5070,6 +5091,16 @@ impl StudioApp {
         }
     }
 
+    fn sync_sim_controller_from_watch(&mut self) {
+        let (year, month, day, hour, minute, _, weekday) = self.watch.get_time();
+        self.sim_year = year;
+        self.sim_month = month;
+        self.sim_day = day;
+        self.sim_hour = hour;
+        self.sim_minute = minute;
+        self.sim_weekday = (weekday as usize).min(6);
+    }
+
     fn run_terminal_command(&mut self, cmd: &str) {
         if self.shutting_down {
             return;
@@ -5108,17 +5139,11 @@ impl StudioApp {
                 if self.building || self.pending_build.is_some() {
                     self.push_terminal("Build already running");
                 } else {
-                    self.push_terminal("Starting build...");
-                    self.building = true;
-                    self.last_uf2 = None;
-                    self.build_message = "Building...".to_string();
-                    let out = std::path::PathBuf::from(self.output_dir.clone());
-                    let handle = std::thread::spawn(move || build::build_firmware(&out));
-                    self.pending_build = Some(handle);
+                    self.start_build();
                 }
             }
             "flash" => {
-                if self.building {
+                if self.building || self.pending_build.is_some() {
                     self.push_terminal("Build in progress; flash unavailable");
                 } else if let Some(uf2) = self.last_uf2.clone() {
                     self.copy_to_watch(&uf2);
@@ -5158,6 +5183,7 @@ impl StudioApp {
                 match parse_settime(payload) {
                     Some((year, month, day, hour, minute)) => {
                         self.watch.set_datetime(year, month, day, hour, minute);
+                        self.sync_sim_controller_from_watch();
                         self.push_terminal(format!(
                             "Sim time set to {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
                         ));
@@ -5274,9 +5300,7 @@ impl StudioApp {
                     self.push_terminal(format!("Language: {}", self.language.name()));
                 }
             }
-            _ => self
-                .terminal_history
-                .push(format!("Unknown command: {cmd} (try 'help')")),
+            _ => self.push_terminal(format!("Unknown command: {cmd} (try 'help')")),
         }
     }
 
@@ -5830,8 +5854,7 @@ impl StudioApp {
     /// Saves the current settings to a JSON file in the app data directory.
     fn save_settings_to_file(&mut self) {
         self.log.log("Settings export: saving settings to file");
-        self.terminal_history
-            .push("Settings export: saving settings to file".to_string());
+        self.push_terminal("Settings export: saving settings to file");
         let settings = settings::AppSettings::capture(
             self.language,
             self.theme,
@@ -5872,8 +5895,7 @@ impl StudioApp {
                     Err(e) => {
                         self.status = format!("Failed to save settings: {e}");
                         self.log.log(format!("Settings export failed: {e}"));
-                        self.terminal_history
-                            .push(format!("Settings export failed: {e}"));
+                        self.push_terminal(format!("Settings export failed: {e}"));
                     }
                 }
             }
@@ -5959,15 +5981,18 @@ impl StudioApp {
         );
         match persist::save(&settings) {
             Ok(_) => {}
-            Err(e) => self.log.log(format!("Failed to persist settings: {e}")),
+            Err(e) => {
+                self.status = format!("Failed to persist settings: {e}");
+                self.log_error(&format!("Failed to persist settings: {e}"));
+                self.push_terminal(format!("Settings persistence failed: {e}"));
+            }
         }
     }
 
     /// Exports the settings JSON to the clipboard.
     fn export_settings(&mut self) {
         self.log.log("Settings export: exporting settings JSON");
-        self.terminal_history
-            .push("Settings export: exporting settings JSON".to_string());
+        self.push_terminal("Settings export: exporting settings JSON");
         let settings = settings::AppSettings::capture(
             self.language,
             self.theme,
@@ -5990,42 +6015,46 @@ impl StudioApp {
         );
         match settings.to_json() {
             Ok(json) => {
-                self.status = "Settings JSON copied to clipboard".to_string();
                 self.log
                     .log("Settings export succeeded: JSON copied to clipboard");
-                self.terminal_history
-                    .push("Settings export succeeded: JSON copied to clipboard".to_string());
-                let _ = ui_copy_to_clipboard(&json);
+                match ui_copy_to_clipboard(&json) {
+                    Ok(()) => {
+                        self.status = "Settings JSON copied to clipboard".to_string();
+                        self.push_terminal("Settings export succeeded: JSON copied to clipboard");
+                    }
+                    Err(error) => {
+                        self.status = format!("Settings export clipboard failed: {error}");
+                        self.log_error(&format!("Settings export clipboard failed: {error}"));
+                        self.push_terminal(format!("Settings export clipboard failed: {error}"));
+                    }
+                }
             }
             Err(e) => {
                 self.status = format!("Failed to serialize settings: {e}");
                 self.log
                     .log(format!("Settings export failed to serialize: {e}"));
-                self.terminal_history
-                    .push(format!("Settings export failed to serialize: {e}"));
+                self.push_terminal(format!("Settings export failed to serialize: {e}"));
             }
         }
     }
 
-    /// Imports settings from the settings file next to the executable.
+    /// Imports settings JSON from the clipboard, reciprocal to export_settings.
     fn import_settings(&mut self) {
-        let path = persist::settings_path();
-        match std::fs::read_to_string(&path) {
+        match ui_paste_from_clipboard() {
             Ok(json) => match settings::AppSettings::from_json(&json) {
                 Ok(s) => {
                     self.apply_settings(s);
-                    self.status = format!("Settings imported from {}", path.display());
-                    self.log
-                        .log(format!("Settings imported from {}", path.display()));
+                    self.status = "Settings imported from clipboard".to_string();
+                    self.log.log("Settings imported from clipboard");
                 }
                 Err(e) => {
                     self.status = format!("Failed to parse settings: {e}");
-                    self.log.log(format!("Failed to parse settings: {e}"));
+                    self.log_error(&format!("Failed to parse settings: {e}"));
                 }
             },
             Err(e) => {
-                self.status = format!("Failed to read settings: {e}");
-                self.log.log(format!("Failed to read settings: {e}"));
+                self.status = format!("Failed to read settings from clipboard: {e}");
+                self.log_error(&format!("Failed to read settings from clipboard: {e}"));
             }
         }
     }
@@ -6110,6 +6139,11 @@ impl StudioApp {
 
     /// Copies the built .uf2 to the watch's USB drive (if mounted).
     fn copy_to_watch(&mut self, uf2: &std::path::Path) {
+        if self.building || self.pending_build.is_some() {
+            self.status = "Build in progress; flashing is disabled until it finishes.".to_string();
+            self.log_error("Flash blocked while a build is in progress");
+            return;
+        }
         self.log
             .log(format!("Attempting to flash {}", uf2.display()));
         self.flash_log
@@ -6359,6 +6393,9 @@ fn main() -> eframe::Result<()> {
 
 /// Recursively copies a directory, skipping `target` and `.git`.
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    if src == dst {
+        return Ok(());
+    }
     if !dst.exists() {
         std::fs::create_dir_all(dst)?;
     }
@@ -6366,7 +6403,7 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()>
         let entry = entry?;
         let path = entry.path();
         let name = entry.file_name();
-        if name == "target" || name == ".git" {
+        if name == "target" || name == ".git" || name == "export" || path == dst {
             continue;
         }
         let dest = dst.join(&name);
@@ -6593,7 +6630,9 @@ fn verify_artifact_manifest(
         .ok_or_else(|| "manifest has no CRC-32".to_string())?;
     let actual_crc = format!("0x{:08X}", sensor_watch_core::uf2::crc32(&parsed.image));
     if expected_crc != actual_crc {
-        return Err(format!("payload CRC-32 mismatch (expected {expected_crc}, got {actual_crc})"));
+        return Err(format!(
+            "payload CRC-32 mismatch (expected {expected_crc}, got {actual_crc})"
+        ));
     }
     let actual = Sha256::digest(&bytes)
         .iter()
@@ -6625,5 +6664,5 @@ fn verify_artifact_manifest(
 }
 
 fn is_valid_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64 && value.is_ascii() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
