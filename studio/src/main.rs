@@ -4011,7 +4011,7 @@ impl StudioApp {
         });
         ui.separator();
         ui.strong("Firmware panic fingerprint");
-        ui.label("Resolve the Pxxxxxx value printed by the watch's `panic` shell command against the firmware source tree.");
+        ui.label("Resolve the Pxxxxxx value printed by the watch's `panic` shell command against the exact ELF/source build.");
         let mut resolve_fingerprint = false;
         ui.horizontal(|ui| {
             ui.label("Fingerprint:");
@@ -4021,7 +4021,14 @@ impl StudioApp {
         });
         if resolve_fingerprint {
             let root = build::firmware_dir();
-            self.panic_resolution = match panic_map::resolve(&self.panic_fingerprint_input, &root) {
+            let elf = root.join(format!(
+                "target/{}/release/sensor-watch",
+                build::TARGET
+            ));
+            self.panic_resolution = match panic_map::resolve_against_elf(
+                &self.panic_fingerprint_input,
+                &elf,
+            ) {
                 Ok(matches) if matches.is_empty() => format!(
                     "No source location matched {} under {}. Check that the source tree matches the ELF build.",
                     self.panic_fingerprint_input.trim(), root.display()

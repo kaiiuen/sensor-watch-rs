@@ -126,6 +126,10 @@ the 24-bit fingerprint of the panic `file:line`.
 
 Firmware Studio's **Bugs** panel accepts the `Pxxxxxx` value from the shell and
 scans the firmware Rust source tree for matching `file:line:column` candidates.
+A successful Studio build writes `sensor-watch.panic-map.json` beside the ELF.
+That manifest records the SHA-256 of the ELF and of every `src/**/*.rs` and
+`core/src/**/*.rs` path/content pair, so the resolver refuses a missing,
+replaced, or source-mismatched build rather than producing a misleading match.
 The resolver uses the exact firmware algorithm: FNV-1a with offset basis
 `0x811c9dc5` and prime `0x01000193`, XOR with `line.reverse_bits()`, XOR with
 `column * 2654435761`, then the stored low 24 bits. It scans the source tree
@@ -136,8 +140,9 @@ target/thumbv6m-none-eabi/release/sensor-watch
 ```
 
 Run Studio from the workspace or next to its build output so it can discover the
-same firmware directory. A no-match result means the source tree may not match
-the ELF that was flashed, or the fingerprint may not have been produced by this
+same firmware directory, then resolve after building that ELF in Studio. A
+missing manifest or build/source mismatch is reported explicitly. A validated
+no-match result means the fingerprint may not have been produced by this
 firmware version. Multiple matches are shown when the 24-bit truncation is
 ambiguous. The resolver is host-side only and does not require hardware.
 

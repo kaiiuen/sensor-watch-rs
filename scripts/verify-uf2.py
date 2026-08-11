@@ -10,6 +10,7 @@ checking the manifest/signature from a trusted release channel.
 import argparse
 import hashlib
 import json
+import os
 import shutil
 import struct
 import sys
@@ -53,7 +54,7 @@ def inspect(path):
     if len(data) != file_size or final_size != file_size:
         fail("UF2 changed while it was being read")
     if not file_size or file_size % BLOCK:
-        fail(f"UF2 is {file_size} bytes; maximum is {max_uf2_bytes}")
+        fail(f"UF2 is {file_size} bytes; expected a non-empty multiple of {BLOCK}")
     count = len(data) // BLOCK
     image = bytearray()
     for index in range(count):
@@ -108,11 +109,21 @@ def sign_manifest(manifest):
 
 
 def write_manifest(path, manifest):
+    """Create a manifest and detached signature without replacing either file."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="ascii")
-    path.with_suffix(path.suffix + ".sig").write_text(
-        manifest["signature"] + "\n", encoding="ascii"
-    )
+    signature_path = path.with_suffix(path.suffix + ".sig")
+    if path.exists() or signature_path.exists():
+        fail(f"refusing to overwrite existing recovery metadata: {path}")
+    manifest_text = json.dumps(manifest, indent=2) + "\n"
+    try:
+        with path.open("x", encoding="ascii") as destination:
+            destination.write(manifest_text)
+        with signature_path.open("x", encoding="ascii") as destination:
+            destination.write(manifest["signature"] + "\n")
+    except OSError as exc:
+        path.unlink(missing_ok=True)
+        signature_path.unlink(missing_ok=True)
+        fail(f"cannot create recovery metadata: {exc}")
 
 
 def verify_manifest(path, manifest_path):
@@ -125,7 +136,9 @@ def verify_manifest(path, manifest_path):
     if manifest.get("format") != FORMAT or manifest.get("signature") != sign_manifest(manifest):
         fail("manifest signature is invalid")
     actual = record(path, generation=manifest.get("generation_id"))
-    for field in ("board", "family_id", "uf2_bytes", "uf2_blocks", "crc32_ieee", "sha256", "payload_sha256"):
+    for field in ("format", "generation_id", "board", "family_id", "application_start",
+                  "maximum_application_bytes", "uf2_bytes", "uf2_blocks", "payload_bytes",
+                  "crc32_ieee", "sha256", "payload_sha256"):
         if actual.get(field) != manifest.get(field):
             fail(f"manifest mismatch for {field}")
     return manifest
@@ -135,7 +148,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
-    verify = sub.add_parser("verify", help="validate a UF2 and print its manifest")
+    verify = sub.add_parser("verify", help="validate a UF2 and print or create its manifest")
     verify.add_argument("uf2", type=Path)
     verify.add_argument("--manifest", type=Path)
 
@@ -149,11 +162,19 @@ def main():
     rollback.add_argument("output", type=Path)
     rollback.add_argument("--manifest", type=Path)
 
+    report = sub.add_parser("report", help="write a host-side recovery report")
+    report.add_argument("uf2", type=Path)
+    report.add_argument("--manifest", type=Path)
+    report.add_argument("--output", type=Path)
+
     args = parser.parse_args()
     if args.command == "verify":
-        manifest = record(args.uf2)
-        if args.manifest:
-            write_manifest(args.manifest, manifest)
+        if args.manifest and args.manifest.exists():
+            manifest = verify_manifest(args.uf2, args.manifest)
+        else:
+            manifest = record(args.uf2)
+            if args.manifest:
+                write_manifest(args.manifest, manifest)
         print(json.dumps(manifest, indent=2))
         return
 
@@ -161,21 +182,70 @@ def main():
         manifest = record(args.uf2)
         if args.backup.is_symlink():
             fail(f"refusing symlinked backup path: {args.backup}")
+        manifest_path = args.manifest or args.backup.with_suffix(args.backup.suffix + ".json")
+        signature_path = manifest_path.with_suffix(manifest_path.suffix + ".sig")
         if args.backup.exists():
             fail(f"refusing to overwrite existing known-good backup: {args.backup}")
+        if manifest_path.exists() or signature_path.exists():
+            fail(f"refusing to overwrite existing recovery metadata: {manifest_path}")
         args.backup.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(args.uf2, args.backup)
+        temp = args.backup.with_suffix(args.backup.suffix + ".tmp")
+        if temp.exists() or temp.is_symlink():
+            fail(f"refusing to use existing backup temporary path: {temp}")
+        try:
+            shutil.copy2(args.uf2, temp)
+            copied_data, _, _ = inspect(temp)
+            if copied_data != args.uf2.read_bytes():
+                fail("backup copy content verification failed")
+            # Link creation is atomic and fails if another backup appeared.
+            os.link(temp, args.backup)
+        except FileExistsError:
+            fail(f"refusing to overwrite existing known-good backup: {args.backup}")
+        finally:
+            temp.unlink(missing_ok=True)
+        # The preserved artifact is now the manifest's recorded artifact. Re-sign
+        # after changing this informational path; payload identity is unchanged.
+        manifest["artifact"] = str(args.backup)
+        manifest["signature"] = sign_manifest(manifest)
         write_manifest(args.manifest or args.backup.with_suffix(args.backup.suffix + ".json"), manifest)
         print(f"preserved known-good UF2 at {args.backup}")
         print(f"generation {manifest['generation_id']}")
         print(f"sha256 {manifest['sha256']}")
         return
 
+    if args.command == "report":
+        manifest_path = args.manifest or args.uf2.with_suffix(args.uf2.suffix + ".json")
+        if not manifest_path.exists():
+            fail("recovery report requires an adjacent or explicit manifest")
+        manifest = verify_manifest(args.uf2, manifest_path)
+        report = {
+            "format": "sensor-watch-recovery-report-v1",
+            "artifact": str(args.uf2),
+            "manifest": str(manifest_path),
+            "generation_id": manifest["generation_id"],
+            "validated": True,
+            "crc_fault_recording": "device-side CRC failure records Fault::CorruptImage only",
+            "host_recovery": "backup and explicit rollback staging are available",
+            "device_side_rollback": False,
+            "true_dual_boot": False,
+            "rom_bootloader_modified": False,
+            "hardware_tested": False,
+        }
+        output = args.output
+        if output:
+            if output.exists() or output.is_symlink():
+                fail(f"refusing to overwrite existing recovery report: {output}")
+            output.parent.mkdir(parents=True, exist_ok=True)
+            with output.open("x", encoding="ascii") as destination:
+                json.dump(report, destination, indent=2)
+                destination.write("\n")
+        print(json.dumps(report, indent=2))
+        return
+
     manifest_path = args.manifest or args.backup.with_suffix(args.backup.suffix + ".json")
-    if manifest_path.exists():
-        manifest = verify_manifest(args.backup, manifest_path)
-    else:
-        manifest = record(args.backup)
+    if not manifest_path.exists():
+        fail("rollback requires a trusted adjacent or explicit manifest")
+    manifest = verify_manifest(args.backup, manifest_path)
     try:
         same_path = args.output.resolve() == args.backup.resolve()
     except OSError as exc:
@@ -183,17 +253,21 @@ def main():
     if same_path or args.output.is_symlink() or args.backup.is_symlink():
         fail("rollback paths must be distinct regular files")
     args.output.parent.mkdir(parents=True, exist_ok=True)
+    if args.output.exists() or args.output.is_symlink():
+        fail(f"refusing to overwrite existing rollback staging path: {args.output}")
     temp = args.output.with_suffix(args.output.suffix + ".tmp")
-    if temp.is_symlink():
-        fail(f"refusing symlinked rollback temporary path: {temp}")
-    temp.unlink(missing_ok=True)
-    shutil.copy2(args.backup, temp)
-    copied_data, _, _ = inspect(temp)
-    if copied_data != args.backup.read_bytes():
+    if temp.exists() or temp.is_symlink():
+        fail(f"refusing to use existing rollback temporary path: {temp}")
+    try:
+        shutil.copy2(args.backup, temp)
+        copied_data, _, _ = inspect(temp)
+        if copied_data != args.backup.read_bytes():
+            fail("rollback copy content verification failed")
+        os.link(temp, args.output)
+    except FileExistsError:
+        fail(f"refusing to overwrite existing rollback staging path: {args.output}")
+    finally:
         temp.unlink(missing_ok=True)
-        fail("rollback copy content verification failed")
-    # os.replace is atomic and overwrites an existing file on Windows as well.
-    temp.replace(args.output)
     inspect(args.output)
     print(f"staged rollback UF2 at {args.output}")
     print(f"generation {manifest['generation_id']}")

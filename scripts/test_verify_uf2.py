@@ -2,6 +2,8 @@
 """Host regression tests for the software recovery workflow."""
 
 import importlib.util
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -81,6 +83,40 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(checked["generation_id"], manifest["generation_id"])
             staged.write_bytes(backup.read_bytes())
             self.assertEqual(staged.read_bytes(), backup.read_bytes())
+
+    def test_report_is_explicit_about_recovery_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifact = root / "good.uf2"
+            manifest_path = root / "good.uf2.json"
+            report_path = root / "recovery-report.json"
+            artifact.write_bytes(make_uf2())
+            VERIFY.write_manifest(manifest_path, VERIFY.record(artifact))
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("verify-uf2.py")),
+                 "report", str(artifact), "--output", str(report_path)],
+                capture_output=True, text=True, check=True,
+            )
+            self.assertIn('"true_dual_boot": false', result.stdout)
+            self.assertIn('"device_side_rollback": false', report_path.read_text())
+
+    def test_rollback_refuses_existing_destination(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            backup = root / "known-good.uf2"
+            manifest_path = root / "known-good.uf2.json"
+            output = root / "staged.uf2"
+            backup.write_bytes(make_uf2())
+            VERIFY.write_manifest(manifest_path, VERIFY.record(backup))
+            output.write_bytes(b"do not replace")
+            result = subprocess.run(
+                [sys.executable, str(Path(__file__).with_name("verify-uf2.py")),
+                 "rollback", str(backup), str(output)],
+                capture_output=True, text=True, check=False,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("refusing to overwrite", result.stderr)
+            self.assertEqual(output.read_bytes(), b"do not replace")
 
 
 if __name__ == "__main__":

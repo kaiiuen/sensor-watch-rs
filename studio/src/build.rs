@@ -115,6 +115,16 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
     let bin = fw_dir.join(format!("target/{TARGET}/release/sensor-watch.bin"));
     let uf2 = output_dir.join("sensor-watch.uf2");
 
+    // Keep the ELF, source tree, and panic resolver tied to this exact build.
+    // The manifest is host-side only and does not change firmware behavior.
+    if let Err(error) = crate::panic_map::write_manifest(&elf, &fw_dir) {
+        return BuildResult {
+            success: false,
+            message: format!("failed to write panic map manifest: {error}"),
+            uf2_path: None,
+        };
+    }
+
     // 3. Extract the raw binary with rust-objcopy.
     let objcopy = find_objcopy();
     let objcopy = match objcopy {

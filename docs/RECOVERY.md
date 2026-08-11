@@ -18,7 +18,8 @@ The ROM/UF2 bootloader remains the device-side recovery mechanism.
    size, block count, payload CRC-32, UF2 SHA-256, payload SHA-256, and a
    generation ID. The adjacent `.sig` is a tamper-evident SHA-256 signature of
    the manifest fields. It is not a public-key signature; obtain release
-   manifests through a trusted channel.
+   manifests through a trusted channel. Existing manifest or signature files
+   are never overwritten.
 3. Preserve a known-good copy before distributing or replacing it:
 
    ```sh
@@ -41,8 +42,10 @@ python scripts/verify-uf2.py rollback \
   recovery/staged/sensor-watch.uf2
 ```
 
-Rollback revalidates the manifest and artifact, copies through a temporary file,
-and checks the final size. It only stages a file; it does not flash hardware.
+Rollback requires the adjacent or explicitly supplied manifest, revalidates the
+artifact, copies through a temporary file, and verifies the destination. It
+refuses an existing destination rather than replacing it. It only stages a
+file; it does not flash hardware.
 Drag the staged file to the watch's USB bootloader drive. Never rename an
 unvalidated file to `CURRENT.UF2` manually.
 
@@ -53,7 +56,23 @@ checksum fetched from the network is optional; when offline, Studio reports
 that release checksum status is **unverified**, while local manifest and UF2
 checks remain available.
 
-After copying, eject the USB drive normally and wait for the bootloader to
+## Recovery report
+
+Create an auditable host-side report without touching the artifact:
+
+```sh
+python scripts/verify-uf2.py report \
+  recovery/known-good/<generation>.uf2 \
+  --output recovery/known-good/<generation>.report.json
+```
+
+The report records the generation and explicitly states that CRC failure is
+recorded on-device as `Fault::CorruptImage`, while backup and rollback are
+host-side only. It also records that no true dual boot, device-side rollback,
+or ROM bootloader modification is provided. Report paths are no-overwrite.
+
+After staging, eject the USB drive normally and wait for the bootloader to
 finish. If the watch does not boot, re-enter bootloader mode and stage a
 previous known-good generation. This is host-side rollback only: it cannot
-recover a board whose bootloader itself is damaged.
+recover a board whose bootloader itself is damaged. No hardware test is implied
+by artifact validation or report generation.
