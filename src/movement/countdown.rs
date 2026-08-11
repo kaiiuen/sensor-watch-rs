@@ -2,7 +2,7 @@
 //!
 //! Port of the C `countdown_face.c`, adapted to the event-driven model. The
 //! countdown is scheduled via the RTC alarm (a background task), so the CPU
-//! stays asleep between updates — it never polls.
+//! stays asleep between updates - it never polls.
 
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::movement::{self, TIMEZONE_OFFSETS};

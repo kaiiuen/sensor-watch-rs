@@ -3,7 +3,7 @@
 //! The WDT is a hardware counter that runs independently of the CPU. If the
 //! main loop stops kicking it (because the software hangs), it resets the
 //! whole chip. This is the "authoritarian backstop" that guarantees the watch
-//! always recovers from a hang — it can never freeze forever.
+//! always recovers from a hang - it can never freeze forever.
 
 use atsaml22j::wdt::RegisterBlock as Wdt;
 use atsaml22j::wdt::config::Perselect;

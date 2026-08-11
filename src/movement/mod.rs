@@ -132,7 +132,7 @@ use crate::watch::utility;
 /// The global movement state.
 pub static mut MOVEMENT_STATE: MovementState = MovementState::new_static();
 
-/// The list of watch faces. Faces are static instances — there is no heap, so
+/// The list of watch faces. Faces are static instances - there is no heap, so
 /// nothing can be allocated and nothing can grow.
 pub static mut WATCH_FACES: [Option<&'static mut dyn WatchFace>; MOVEMENT_NUM_FACES] =
     [const { None }; MOVEMENT_NUM_FACES];
@@ -1808,7 +1808,7 @@ pub fn app_loop() {
 /// Disables peripherals that should not remain on while the CPU sleeps.
 ///
 /// The LCD, RTC, and buttons must stay on (they retain the display and wake
-/// the CPU). Everything else — ADC, I2C, SPI, UART — is released so it cannot
+/// the CPU). Everything else - ADC, I2C, SPI, UART - is released so it cannot
 /// drain the battery.
 fn release_peripherals() {
     watch::adc::disable_adc();

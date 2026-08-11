@@ -862,7 +862,7 @@ mod tests {
         let (y, mo, d, h, mi, s) = friday();
         let snap = render_real_face("SIMPLE_CLOCK", y, mo, d, h, mi, s, 5, true, false, false)
             .expect("SIMPLE_CLOCK is migrated");
-        // The REAL write path: FR + day 06 + HH:MM (no seconds — show_seconds
+        // The REAL write path: FR + day 06 + HH:MM (no seconds - show_seconds
         // defaults to false). Colon on, 24h indicator set.
         let text: String = snap.chars.iter().collect();
         assert_eq!(text.trim_end_matches([' ', '\0']), "FR061504");

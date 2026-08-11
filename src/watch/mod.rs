@@ -24,10 +24,10 @@
 //!
 //! Meanwhile, the *mechanism* is proven and documented in two places:
 //!
-//! - `core/src/hostsim.rs` — a standalone, dependency-free **host POC** that
+//! - `core/src/hostsim.rs` - a standalone, dependency-free **host POC** that
 //!   copies the `simple_clock` face logic verbatim and compiles/runs it against a
 //!   mock `Hw` backend (the exact code a real host seam would drive).
-//! - `core/src/mock_hw.rs` — the reusable `Hw` trait + reference mock.
+//! - `core/src/mock_hw.rs` - the reusable `Hw` trait + reference mock.
 //!
 //! When the firmware later gains a lib target, the pattern is: re-export a
 //! `Hw`-typed dispatch, route the handful of HAL frees through it (defaulting to

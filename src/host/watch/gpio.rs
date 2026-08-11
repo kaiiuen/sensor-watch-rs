@@ -9,7 +9,7 @@
 use super::seam;
 use sensor_watch_core::mock_hw::Button;
 
-/// A pin, encoded as (port, pin number) — same layout as the real HAL.
+/// A pin, encoded as (port, pin number) - same layout as the real HAL.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pin(pub u8, pub u8);
 

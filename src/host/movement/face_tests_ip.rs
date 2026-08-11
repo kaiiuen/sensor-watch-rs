@@ -35,7 +35,7 @@ fn real_interval_activate_enters_intro_and_runs_timer() {
     seam::install_hw(&mut mock);
     // interval uses `movement::TIMEZONE_OFFSETS`? No; but its `loop_` Mode LongPress
     // calls `movement::move_to_face(0)`, and Light Up in Waiting calls
-    // `movement::illuminate_led()` — both host no-ops.
+    // `movement::illuminate_led()` - both host no-ops.
     let mut settings = h24_settings();
     let mut face = interval::IntervalFace::new();
     // `setup` populates the default timers.

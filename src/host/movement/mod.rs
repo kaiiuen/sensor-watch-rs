@@ -5,14 +5,14 @@
 //! `watch` calls, so it cannot (yet) compile on host. Step 1 provides the exact
 //! subset the seam needs:
 //!
-//! - [`types`] — the REAL `src/movement/types.rs`, verbatim (via `#[path]`): the
+//! - [`types`] - the REAL `src/movement/types.rs`, verbatim (via `#[path]`): the
 //!   `WatchFace` trait, `Event`, `Settings`, `Button`, `ButtonEvent`, `ClockMode`,
 //!   `BuzzerNote`/`BuzzerPriority`, `MovementState`. This is the contract faces
 //!   implement, untouched.
-//! - [`simple_clock`] — the REAL `src/movement/simple_clock.rs`, verbatim. This
+//! - [`simple_clock`] - the REAL `src/movement/simple_clock.rs`, verbatim. This
 //!   is the proof that a face's `impl WatchFace` compiles and runs against the
 //!   mock.
-//! - `set_tick_rate` / `play_signal` / `default_loop_handler` — host versions of
+//! - `set_tick_rate` / `play_signal` / `default_loop_handler` - host versions of
 //!   the three framework free functions the face calls, forwarded to the `Hw`
 //!   seam.
 //!

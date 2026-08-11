@@ -2,7 +2,7 @@
 name = "sensor-watch-studio"
 version = "0.1.0"
 edition = "2021"
-description = "Firmware Studio — a GUI companion app for the Sensor-Watch firmware"
+description = "Firmware Studio - a GUI companion app for the Sensor-Watch firmware"
 license = "MIT OR Apache-2.0"
 
 [features]
@@ -22,7 +22,7 @@ egui = "0.27"
 resvg = "0.42"
 usvg = "0.42"
 
-# Firmware logic (UF2 encoding, date math, settings) — reused from the firmware
+# Firmware logic (UF2 encoding, date math, settings) - reused from the firmware
 sensor-watch-core = { path = "../core" }
 # The firmware crate's host [lib] (`sensor_watch`, feature `hostmock`), used to
 # render faces through the real `Hw` seam (see `src/real_face.rs`), falling back

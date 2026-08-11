@@ -3,7 +3,7 @@
 //! Provides a small command interpreter over the debug UART. This is the
 //! foundation for the companion app and for real-time clock calibration: a PC
 //! can send commands (e.g. set the time) and the watch responds. It is
-//! event-driven — it only processes a command when a full line has been
+//! event-driven - it only processes a command when a full line has been
 //! received, so it never keeps the CPU awake polling.
 
 use crate::watch::event_log;

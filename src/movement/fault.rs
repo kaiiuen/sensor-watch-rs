@@ -2,7 +2,7 @@
 //!
 //! A central "authoritarian watchdog" that tracks the health of every
 //! subsystem. Faults are recorded in the RTC backup registers (fixed, no
-//! growth) and surfaced to the user as LED flash codes — shown only when the
+//! growth) and surfaced to the user as LED flash codes - shown only when the
 //! user actually interacts with the watch, never via a polling loop.
 
 use crate::watch::deepsleep;
@@ -169,7 +169,7 @@ pub fn check_reset_reason() {
 /// When a CR2016 battery drops below ~2.0 V its internal resistance spikes,
 /// so a high-load peripheral (buzzer, LED) can pull the rail below the CPU
 /// threshold, resetting the chip. The load then drops, the battery bounces
-/// back, and the watch reboots into the same load — an infinite loop. We count
+/// back, and the watch reboots into the same load - an infinite loop. We count
 /// boots in a short window; if we exceed the limit, we enter a safe state that
 /// disables the buzzer and LED until the battery is replaced.
 pub fn check_boot_throttle() {

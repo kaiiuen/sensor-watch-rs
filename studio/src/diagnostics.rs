@@ -99,7 +99,7 @@ impl DiagnosticsState {
         for row in &self.rows {
             report.push_str(&format!("{}: {}", row.name, row.status.label()));
             if !row.detail.is_empty() {
-                report.push_str(&format!(" — {}", row.detail));
+                report.push_str(&format!(" - {}", row.detail));
             }
             report.push('\n');
         }

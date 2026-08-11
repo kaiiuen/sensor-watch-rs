@@ -5,7 +5,7 @@
 //!
 //! The firmware's `simple_clock` face (`sensor-watch/src/movement/simple_clock.rs`)
 //! was the test subject. Because the firmware crate is binary-only and arm-only,
-//! we cannot link it into a host test *yet* — so this module is a line-for-line
+//! we cannot link it into a host test *yet* - so this module is a line-for-line
 //! copy of that face's `WatchFace` implementation, with only its `crate::watch::*`
 //! and `crate::movement::*` calls replaced by equivalent [`crate::mock_hw::Hw`]
 //! methods. The **logic is identical** (same `draw_clock`, `write_*`, weekday,
@@ -19,10 +19,10 @@
 //!
 //! # How a dev extends this to all 111 faces
 //!
-//! **Phase 1 — POC (this module):** a verbatim copy of one face runs on host
+//! **Phase 1 - POC (this module):** a verbatim copy of one face runs on host
 //! tests. No firmware risk; nothing on the target changes.
 //!
-//! **Phase 2 — real-firmware host compile:** convert `sensor-watch` to also emit
+//! **Phase 2 - real-firmware host compile:** convert `sensor-watch` to also emit
 //! a host-compatible `lib` target (`src/lib.rs` re-exporting `watch` + `movement`,
 //! keeping `main.rs` as the entry). cfg-gate the ARM startup (`cortex-m-rt`,
 //! `#![no_main]`) and the MMIO register loads behind `target_arch = "arm"`, and
@@ -30,7 +30,7 @@
 //! the host build replaces with a mock. This is intentionally its own staged
 //! refactor; doing it here risks the firmware build.
 //!
-//! **Phase 3 — migrate all faces:** once the lib target links on the host, import
+//! **Phase 3 - migrate all faces:** once the lib target links on the host, import
 //! each face (`use sensor_watch::movement::simple_clock::SimpleClockFace`), drive
 //! its `loop_()`/`activate()` through the mock `Hw`, and assert output. Add
 //! `Hw` methods as faces need them (keep the trait minimal). Then Studio can
@@ -42,7 +42,7 @@ use crate::mock_hw::{Button, ButtonEvent, Event, Hw, Indicator, MockHw};
 use crate::settings::Settings;
 use crate::utility;
 
-/// State for the simple clock face — identical field-for-field to the firmware's
+/// State for the simple clock face - identical field-for-field to the firmware's
 /// `SimpleClockFace` in `src/movement/simple_clock.rs`.
 pub struct SimpleClockFace {
     signal_enabled: bool,
