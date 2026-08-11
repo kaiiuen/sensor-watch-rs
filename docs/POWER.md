@@ -25,14 +25,14 @@ The SAM L22 has these states. This firmware uses **STANDBY** as its primary mode
 
 | State | CPU | Main clock | RAM | RTC | Peripherals | Wake |
 |-------|-----|-----------|-----|-----|-------------|------|
-| **ACTIVE** | ✅ | ✅ 4 MHz | ✅ | ✅ | ✅ all | - |
-| **IDLE** | ⏸ | ✅ | ✅ | ✅ | ✅ all | any interrupt |
-| **STANDBY** | ⏸ | ❌ off | ✅ retained | ✅ | ⚠️ selective | any interrupt |
-| **BACKUP** | ❌ | ❌ off | ❌ **lost** | ✅ | ❌ none | RTC alarm, A2/A4 |
+| **ACTIVE** | yes | yes, 4 MHz | yes | yes | all | - |
+| **IDLE** | paused | yes, 4 MHz | yes | yes | all | any interrupt |
+| **STANDBY** | paused | off | retained | yes | selective | any interrupt |
+| **BACKUP** | no | off | **lost** | yes | none | RTC alarm, A2/A4 |
 
 ### Why STANDBY and not BACKUP?
 
-- **STANDBY** retains RAM and the LCD, wakes in µs. Correct for a running watch.
+- **STANDBY** retains RAM and the LCD, wakes in microseconds. Correct for a running watch.
 - **BACKUP** powers off RAM and CPU. It's a "power off" state, not a running
   state. It can't display the time or run faces.
 
@@ -46,12 +46,12 @@ The main loop is a thin dispatcher:
 
 ```
 Interrupt fires
-  └─► sets PENDING_EVENT
-  └─► CPU wakes
-  └─► app_loop() reacts to ONE event
-  └─► release_peripherals()
-  └─► kick watchdog
-  └─► enter_standby()  (SysTick-safe STANDBY)
+  |-- sets PENDING_EVENT
+  |-- CPU wakes
+  |-- app_loop() reacts to ONE event
+  |-- release_peripherals()
+  |-- kick watchdog
+  `-- enter_standby()  (SysTick-safe STANDBY)
 ```
 
 The CPU is active for **microseconds to a couple milliseconds** per event -
@@ -86,8 +86,8 @@ A **closed enum** means every event is known and handled. No ambiguity.
 The single biggest power saver. When **seconds are hidden**, the watch wakes
 **once per minute** instead of once per second.
 
-- Seconds shown → 1 Hz tick (wake 86,400×/day)
-- Seconds hidden → 1/minute (wake 1,440×/day)
+- Seconds shown -> 1 Hz tick (wake 86,400 times/day)
+- Seconds hidden -> 1/minute (wake 1,440 times/day)
 
 This is controlled by the `show_seconds` setting and `set_tick_rate()`.
 
@@ -141,17 +141,17 @@ a safe state (buzzer/LED disabled) until the battery is replaced.
 
 | State | Current | Runtime (90 mAh) |
 |-------|---------|------------------|
-| Seconds hidden (LE) | ~6.5 µA | ~1.6 years |
-| Normal (seconds on) | ~10 µA | ~1.05 years |
-| High active | ~30 µA | ~3-4 months |
+| Seconds hidden (LE) | ~6.5 uA | ~1.6 years |
+| Normal (seconds on) | ~10 uA | ~1.05 years |
+| High active | ~30 uA | ~3-4 months |
 
 ### The math
 
-Energy = power × time. The load (current) is roughly fixed per operation, so the
+Energy = power x time. The load (current) is roughly fixed per operation, so the
 only lever is **active time per event**.
 
-- At **1 ms per wake**, 86,400 daily ticks cost ~0.17 mAh/day → ~1.2 years.
-- At **500 ms per wake**, 86,400 daily ticks cost ~86 mAh/day → ~1 week.
+- At **1 ms per wake**, 86,400 daily ticks cost ~0.17 mAh/day -> ~1.2 years.
+- At **500 ms per wake**, 86,400 daily ticks cost ~86 mAh/day -> ~1 week.
 
 So the goal is: **keep every wake under ~1 ms.** The event-driven model does
 this - a reaction is a handful of register writes.
@@ -197,4 +197,4 @@ Every mechanism is designed so nothing goes rogue:
 | Settings lost | Persisted to flash, loaded on boot |
 | Silent failure | Fault system with LED codes |
 | Brown-out reboot loop | BOD33 + boot-count throttle |
-| Battery drain | Dynamic tick rate (hide seconds → wake 1/min) |
+| Battery drain | Dynamic tick rate (hide seconds -> wake 1/min) |

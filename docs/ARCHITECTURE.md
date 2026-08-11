@@ -27,19 +27,19 @@ is structured as a **Cargo workspace** with two crates:
 
 ```
 sensor-watch-rs/
-├── Cargo.toml          # workspace manifest + firmware package
-├── core/               # sensor-watch-core: pure logic, host-testable
-│   └── src/
-│       ├── lib.rs      # crate root
-│       ├── datetime.rs # packed date/time type
-│       ├── settings.rs # settings bit-packing
-│       ├── utility.rs  # date/time math
-│       └── uf2.rs      # UF2 encoding (used by the build tool)
-└── src/                # the firmware binary
-    ├── main.rs         # reset handler / entry point
-    ├── panic.rs        # panic handler (self-recovery)
-    ├── watch/          # hardware abstraction layer (HAL)
-    └── movement/       # watchface framework + faces
+|-- Cargo.toml          # workspace manifest + firmware package
+|-- core/               # sensor-watch-core: pure logic, host-testable
+|   `-- src/
+|       |-- lib.rs      # crate root
+|       |-- datetime.rs # packed date/time type
+|       |-- settings.rs # settings bit-packing
+|       |-- utility.rs  # date/time math
+|       `-- uf2.rs      # UF2 encoding (used by the build tool)
+`-- src/                # the firmware binary
+    |-- main.rs         # reset handler / entry point
+    |-- panic.rs        # panic handler (self-recovery)
+    |-- watch/          # hardware abstraction layer (HAL)
+    `-- movement/       # watchface framework + faces
 ```
 
 ### Why two crates?
@@ -99,10 +99,10 @@ The SAM L22 has several power states. This firmware primarily uses **STANDBY**.
 
 | State | CPU | Main clock | RAM | RTC | Peripherals | Wake |
 |-------|-----|-----------|-----|-----|-------------|------|
-| **ACTIVE** | ✅ | ✅ 4 MHz | ✅ | ✅ | ✅ all | - |
-| **IDLE** | ⏸ | ✅ | ✅ | ✅ | ✅ all | any interrupt |
-| **STANDBY** | ⏸ | ❌ off | ✅ retained | ✅ | ⚠️ selective | any interrupt |
-| **BACKUP** | ❌ | ❌ off | ❌ **lost** | ✅ | ❌ none | RTC alarm, A2/A4 |
+| **ACTIVE** | yes | yes, 4 MHz | yes | yes | all | - |
+| **IDLE** | paused | yes, 4 MHz | yes | yes | all | any interrupt |
+| **STANDBY** | paused | off | retained | yes | selective | any interrupt |
+| **BACKUP** | no | off | **lost** | yes | none | RTC alarm, A2/A4 |
 
 ### Why STANDBY and not BACKUP?
 
@@ -133,9 +133,9 @@ Several mechanisms work together to minimize power:
 
 | State | Current | Runtime (90 mAh) |
 |-------|---------|------------------|
-| Seconds hidden (LE) | ~6.5 µA | ~1.6 years |
-| Normal (seconds on) | ~10 µA | ~1.05 years |
-| High active | ~30 µA | ~3-4 months |
+| Seconds hidden (LE) | ~6.5 uA | ~1.6 years |
+| Normal (seconds on) | ~10 uA | ~1.05 years |
+| High active | ~30 uA | ~3-4 months |
 
 The key lever is **active time per event**, not load. At ~1 ms per wake, the
 86,400 daily tick wakes barely dent the battery.
@@ -148,10 +148,11 @@ The key lever is **active time per event**, not load. At ~1 ms per wake, the
 
 The firmware region is `0x3A000` (~232 KB) starting after the bootloader.
 With all 111 faces registered (via the `#[used]` face-retain array), a release
-build is roughly **210-230 KB**, i.e. most of the region is used. Each watch
-face adds roughly 1-3 KB, so there is **modest headroom for a few more faces**,
-not dozens. Adding faces beyond the current count should be validated against
-the linker region on every build.
+build is roughly **210-230 KB**, so most of the region is used. Each watch face
+adds roughly 1-3 KB, leaving modest headroom for a few more faces, not dozens.
+Adding faces beyond the current count should be validated against the linker
+region on every build. Studio currently wires 72 of those faces into the opt-in
+`real-faces` host seam; the other faces use the simulated engine in Studio.
 
 ### RAM (32 KB)
 
@@ -180,8 +181,9 @@ The reset handler in `src/main.rs` runs in this exact order:
 1. copy_ramfunc()                        - copy .ramfunc routines from flash to RAM
 2. movement::fault::check_reset_reason() - record why we reset (watchdog/panic/power-on)
 3. movement::fault::check_boot_throttle()- detect a brown-out reboot loop
-4. watch::crc::check_firmware_integrity() - CRC-32 integrity check; on failure record
-                                            CorruptImage fault and recovery_halt()
+4. watch::crc::check_firmware_integrity() - CRC-32 integrity check; on failure
+                                            record a CorruptImage fault and keep
+                                            booting best-effort (non-bricking)
 5. watch::init()                         - hardware init in dependency order:
      a. irq::init()                      - interrupt priorities
      b. clock::init()                    - 32 kHz crystal + GCLK routing
@@ -393,8 +395,9 @@ flash bit-rot is corrected on read rather than silently corrupting data.
 ### 6.20 `watch/shell.rs` - Serial command shell
 
 A minimal command interpreter over the debug UART. Provides `time`,
-`settime YYMMDDHHMMSS`, `drift N`, and `help` commands. This is the foundation
-for clock calibration and the companion app.
+`settime YYMMDDHHMMSS`, `drift N`, `optical`, `panic`, `events`, `events clear`,
+and `help` commands. This supports clock calibration and fault/event inspection;
+Studio uses the UART-jig transport when hardware is connected.
 
 ### 6.21 `watch/memory.rs` - Memory usage
 

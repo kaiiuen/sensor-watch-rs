@@ -39,9 +39,12 @@ cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 
 (On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin`.)
 
-This runs the unit tests for date math, settings bit-packing, DateTime
-pack/unpack, and UF2 encoding. These tests give *proof* the logic is correct
-without needing the physical watch.
+The source tree currently contains 189 `#[test]` attributes across core,
+firmware host seams, and Studio. The host test command exercises date math,
+settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging, and
+other host seams, but the current checkout is blocked by the existing `vec!`
+macro import error in `core/src/uf2.rs`. Passing host tests provide confidence
+in pure logic; they do not validate physical hardware.
 
 ## Building a UF2
 
@@ -62,9 +65,11 @@ cargo clippy --target thumbv6m-none-eabi
 cargo clippy -p sensor-watch-core -- -D warnings
 ```
 
-The firmware exposes the full C-reference HAL API and many ported faces, which
-carry intentional dead-code and pedantic style lints, so firmware clippy is
-informational. The `core` crate is the strict gate (`-D warnings`).
+The firmware clippy job is informational because the full C-reference HAL API
+and many ported faces carry intentional dead-code and pedantic style lints. The
+`core` clippy job is the strict gate (`-D warnings`). This checkout's host test
+attempt is currently blocked by the existing `vec!` macro import error in
+`core/src/uf2.rs`, before a complete warning report is produced.
 
 ## Formatting
 
@@ -87,15 +92,15 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
 
 ```
 sensor-watch-rs/
-├── Cargo.toml          # workspace + firmware package
-├── core/               # pure logic, host-testable
-├── src/
-│   ├── main.rs         # entry point
-│   ├── panic.rs        # panic handler
-│   ├── watch/          # hardware abstraction layer
-│   └── movement/       # watchface framework + faces
-├── docs/               # this documentation
-└── .github/workflows/  # CI
+|-- Cargo.toml          # workspace + firmware package
+|-- core/               # pure logic, host-testable
+|-- src/
+|   |-- main.rs         # entry point
+|   |-- panic.rs        # panic handler
+|   |-- watch/          # hardware abstraction layer
+|   `-- movement/       # watchface framework + faces
+|-- docs/               # this documentation
+`-- .github/workflows/  # CI
 ```
 
 ---

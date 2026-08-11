@@ -35,18 +35,19 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   firmware's real 7-segment character set. Shows both the sim's face counter
   and the engine's actual loaded face for catching face-switching bugs. These
   diagnostics are simulated unless a UART jig is connected. With the opt-in
-  `real-faces` feature, the simulator runs the **real firmware faces** through
+  `real-faces` feature, the simulator runs **72 real firmware faces** through
   the `real_face.rs` host seam (see below) instead of the hand-written engine;
-  the host seam and real-face coverage do not constitute physical hardware
-  testing.
+  the remaining faces use `face_sim`. Host seam coverage does not constitute
+  physical hardware testing.
 - **Build & Flash** - combined panel: select the target board, build the
   firmware into a `.uf2` (with estimated compile/flash times), then flash it to
   the watch. The app **auto-detects** the watch's USB drive and auto-selects
   the board from its `INFO_UF2.TXT`, copies the `.uf2`, and auto-fetches NTP
   time for sync. Has a combined build & flash log.
-- **Calibration** - clock calibration (generates a `settime` command for the
-  next minute boundary), a **beep-on-minute-rollover** helper, and drift
-  calibration (parts-per-million).
+- **Calibration** - guided clock calibration (generates a `settime` command for
+  the next minute boundary), a **beep-on-minute-rollover** helper, and guided
+  drift calibration (parts-per-million). The hardware path requires UART Jig
+  mode; the default simulated path does not change a watch.
 - **Shell Access** - explicit **Simulated** mode (the default, using the existing
   in-app watch model) or **UART Jig** mode. UART mode discovers host serial
   ports, opens a selected port at **9600 8-N-1**, and exchanges CR/LF-framed
@@ -55,7 +56,9 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Modules** - register custom hardware modules for modded boards (e.g. a BLE
   board instead of the accelerometer). Each module targets a HAL file in
   `src/watch/`; modules are persisted and can be enabled/disabled/removed.
-  Component profiles remain planning-only and are not implemented.
+  Component profiles remain planning-only and are not implemented. Thermistor
+  and OPT3001 readings still require matching hardware; simulator diagnostics
+  do not create sensor measurements.
 - **Debug** - background activity log with Copy All / Export / Clear. Logs
   auto-scroll to the bottom and honor a configurable line limit.
 - **Bugs** - dedicated error/warning log, plus a **Generate bug report** button
@@ -80,6 +83,10 @@ It accepts commands for power users and for testing the app:
 ```
 help, status, faces, board, build, flash, fuzz, time, clear,
 modules, errors, bugreport, sim <a|b|c>, theme, lang
+
+The firmware UART shell is separate from this terminal. Its current commands
+are `time`, `settime YYMMDDHHMMSS`, `drift N`, `optical`, `panic`, `events`,
+`events clear`, and `help`.
 ```
 
 ## Footer

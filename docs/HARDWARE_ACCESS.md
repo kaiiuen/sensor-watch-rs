@@ -20,8 +20,10 @@ The reason is how this SAM L22 board is booted:
   implements file transfer. It does not expose a USB CDC (virtual serial) port.
 
 So there is no way to get a "USB serial console" out of the existing bootloader.
-Serial-over-USB (CDC) is **not possible without replacing the ROM bootloader**,
-which we do not want to do.
+The current firmware does not implement CDC. A future application-mode CDC
+implementation is technically feasible, but requires the missing SAM L22 USB
+transfer-SRAM HAL/PAC coverage and a reviewed device stack; see
+[USB_CDC.md](USB_CDC.md). The UF2 bootloader remains file-transfer-only.
 
 ## What this means in practice
 
@@ -55,7 +57,11 @@ Once connected, type a command and press Enter. The supported commands are:
 - `time` - report the current RTC time as `TIME YYMMDDHHMMSS`.
 - `settime YYMMDDHHMMSS` - set the clock; replies `OK` on success.
 - `drift N` - apply a frequency-correction step for drift calibration.
-- `help` - list the commands (`CMDS: time, settime YYMMDDHHMMSS, drift N`).
+- `optical` - report OPT3001/optical-sensor status.
+- `panic` - report the stored panic fingerprint.
+- `events` - dump the retained RAM event ring.
+- `events clear` - clear the RAM event ring.
+- `help` - list the commands.
 
 This is how clock setting and drift correction can be driven from a PC, for
 example by the companion app during calibration. Studio's **Shell Access**
@@ -94,8 +100,9 @@ talking to the running shell.
 
 ## Summary
 
-- Serial-over-USB (CDC) is not available without replacing the ROM bootloader;
-  Studio does not pretend that the UF2 drive is a serial port.
+- The UF2 USB path is file-transfer-only today. Native application CDC is not
+  implemented; its feasibility and missing HAL/stack work are tracked in
+  `docs/USB_CDC.md`. Studio does not pretend that the UF2 drive is a serial port.
 - Two real access paths exist: a UART jig (3 debug pads, 9600 baud, the shell
   with `time` / `settime` / `drift N` / `help`) and an SWD probe.
 - Both require hardware and soldering, so this stays a backburner / hardware

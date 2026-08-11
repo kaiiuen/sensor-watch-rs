@@ -96,8 +96,9 @@ crystal stops, the RTC switches to the internal oscillator.
 A shell command so the watch can receive commands from a PC.
 
 **Status:** Done. `shell.rs` provides a minimal command interpreter over UART
-(`time`, `settime YYMMDDHHMMSS`, `drift N`, `help`). Note the shell is only
-reachable over the UART jig, not over USB. See `docs/HARDWARE_ACCESS.md`.
+(`time`, `settime YYMMDDHHMMSS`, `drift N`, `optical`, `panic`, `events`,
+`events clear`, `help`). The shell is reachable over the UART jig; native USB
+CDC is not implemented. See `docs/HARDWARE_ACCESS.md`.
 
 ### UF2 integrity and recovery staging
 
@@ -122,10 +123,11 @@ rollback, or any replacement of the ROM bootloader.
 - `defmt`/RTT structured logging for debugging without breaking real-time
   behavior.
 
-**Status:** Partially done. A benchmark/self-test (ECC + CRC) is available in
-the diagnostics face, and the fixed-size RAM event log is implemented. Fuzzing
-and `defmt`/RTT transport are not yet implemented; the event log is not
-persistent. A hardware test plan lives in `docs/TESTING.md`.
+**Status:** Partially done. A benchmark/self-test (ECC + CRC) is available in the
+diagnostics face, and the fixed-size 16-entry RAM event log is implemented.
+The opt-in `defmt-log` feature mirrors events to RTT over SWD; it is not enabled
+by default and the event log is not persistent. Face fuzzing and on-silicon
+validation remain open. A hardware test plan lives in `docs/TESTING.md`.
 
 ### 2. Dual-boot / self-healing partitioning
 
@@ -143,11 +145,12 @@ remains unavailable.
 Expose a virtual serial port over USB so the shell is reachable over the cable
 rather than a UART jig.
 
-**Status:** Blocked. The watch's USB is file-transfer-only: the UF2 bootloader
-lives in the SAM L22's ROM boot region (`0x0000_0000`-`0x0000_2000`), separate
-from the firmware (which starts at `0x0000_2000`). Serial-over-USB (CDC) is not
-possible without replacing that ROM bootloader, which is out of scope. The real
-access paths are a UART jig and an SWD probe; see `docs/HARDWARE_ACCESS.md`.
+**Status:** Not implemented; scaffolding exists. The UF2 bootloader remains
+file-transfer-only, but application-mode CDC is technically feasible without
+replacing it. The current PAC lacks the USB transfer-SRAM definitions and the
+workspace lacks a reviewed device stack, so the opt-in `usb-cdc` feature stops
+with `UsbError::Unsupported`. The real access paths today are a UART jig and an
+SWD probe; see `docs/USB_CDC.md` and `docs/HARDWARE_ACCESS.md`.
 
 ### 4. Configurable boot / OTA deployment tools
 

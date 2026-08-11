@@ -19,9 +19,9 @@ in a sealed, air-gapped system and must manage itself.
 
 ```
 sensor-watch-rs/                <- THIS project (firmware + companion app)
-├── src/                        <- the firmware (Rust rewrite)
-├── core/                       <- pure logic (UF2, date math, settings)
-└── studio/                     <- Firmware Studio GUI companion app
+|-- src/                        <- the firmware (Rust rewrite)
+|-- core/                       <- pure logic (UF2, date math, settings)
+`-- studio/                     <- Firmware Studio GUI companion app
 ```
 
 The original C sources (`Sensor-Watch` and `Second Movement`) are kept as
@@ -37,7 +37,7 @@ graph TD
     subgraph Firmware[Firmware - src/]
         HAL[watch/ - hardware abstraction]
         MV[movement/ - watchface framework]
-        FACES[111 watch faces]
+        FACES[111 firmware watch faces]
         MAIN[main.rs - boot & event loop]
         PANIC[panic.rs - fault recovery]
         MAIN --> MV
@@ -103,6 +103,9 @@ See [`studio/README.md`](studio/README.md) for details.
 | EEPROM    | 0x0003C000     | 0x2000    |
 | RAM       | 0x20000000     | 0x8000    |
 
+The linker places the application in the firmware region. The EEPROM row is
+emulation/storage space and is not part of the executable firmware image.
+
 ## Building
 
 Prerequisites:
@@ -160,13 +163,20 @@ The `core` crate holds pure logic that is host-testable:
 
 ```
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
+# Current checkout note: this command is blocked by an existing test compile
+# error in core/src/uf2.rs: the vec! macro is not imported in the test module.
 ```
 
 Lint and format:
 
 ```
-cargo clippy --target thumbv6m-none-eabi -- -D warnings
+cargo clippy --target thumbv6m-none-eabi -p sensor-watch
+cargo clippy -p sensor-watch-core --target x86_64-pc-windows-msvc -- -D warnings
 cargo fmt --check
+
+The firmware clippy job is informational in CI; the core clippy job is the
+warnings-as-errors gate. The current host test command stops before producing a
+complete warning count because of the existing vec! macro error.
 ```
 
 ## Status
@@ -176,9 +186,10 @@ cargo fmt --check
       CRC, ECC, memory, LIS2DW, serial shell, utility
 - [x] Watchface framework (`src/movement/`): event-driven dispatcher,
       zero-heap, fault system, debouncing, persistence, board config
-- [x] **111 watch faces**, covering all faces from the original reference repo
-      and the Second Movement repo (advanced alarm, hydration, SOS, lander,
-      ping, blackjack, tide, days-since, settings, ISH, solar time, beats, and more)
+- [x] **111 firmware watch faces**, covering the registered face set from the
+      reference projects and Second Movement (advanced alarm, hydration, SOS,
+      lander, ping, blackjack, tide, days-since, settings, ISH, solar time,
+      beats, and more).
 - [x] Hardware hardening: SysTick-safe standby, I2C pin floating, inverted
       battery ADC, BOD33, boot-count throttle, `.ramfunc` flash writes,
       `#[repr(C, align(4))]`, windowed watchdog, CRC-32 integrity check,
@@ -188,11 +199,35 @@ cargo fmt --check
 - [x] Accelerometer framework: LIS2DW driver, tap detection, motion wake
 - [x] RTC compare-callback queue (software, indexed timeout slots)
 - [x] UF2 artifact generation
-- [x] Diagnostics hardware test submenu (buttons, LED, buzzer, accelerometer,
-      CPU states, RAM usage, storage usage, benchmark self-test)
+- [x] Diagnostics menu and simulated hardware-test views (buttons, LED, buzzer,
+      accelerometer, CPU states, RAM usage, storage usage, benchmark self-test).
+      Physical hardware validation is still pending.
 - [x] Backburner features: clock failure detector, SECDED ECC, log-structured
       wear leveling, serial shell, raise-to-wake, drift correction, heartbeat
-      monitor, dual-boot recovery halt
+      monitor, and non-bricking CRC fault recording. True dual-boot recovery is
+      not implemented.
+- [x] Guided clock and drift calibration in Studio. A real watch still needs the
+      UART jig path for command execution.
+- [x] 72 real firmware faces are wired into the opt-in Studio host seam. The
+      remaining firmware faces use the simulated engine; this is not hardware
+      coverage.
+- [ ] Component profiles for board-wide hardware presets (planning only).
+- [ ] Native USB CDC transfers (compile-safe scaffolding only; see
+      docs/USB_CDC.md).
+
+## Status and validation snapshot
+
+- The source tree currently contains 189 `#[test]` attributes across core,
+  firmware host seams, and Studio. This is a source count, not a passing test
+  result.
+- The last host core test attempt is currently blocked before execution by the
+  existing `vec!` macro import error in `core/src/uf2.rs`.
+- Current validation also reports a Studio compile failure in pre-existing
+  `studio/src/persist.rs` / `studio/src/restore.rs` errors, plus 3 warnings
+  (including one `unused_mut`). `cargo fmt --check` is likewise blocked by the
+  same parse errors and reports an unrelated pre-existing module-order diff.
+- No complete repository warning total is claimed here: the failing commands do
+  not reach a clean full build.
 
 ## Documentation
 

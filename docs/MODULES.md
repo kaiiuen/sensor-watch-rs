@@ -16,9 +16,9 @@ it's used. It complements `ARCHITECTURE.md` (the high-level overview).
 | `#![no_main]` | attr | No `main` symbol from std; we define our own entry. |
 | `#![allow(static_mut_refs)]` | attr | Allows access to `static mut` (used for global state). |
 
-**Boot sequence rationale:** each step depends on the previous. RAM-copy →
-reset-reason → boot-throttle → interrupt priorities → clocks → RTC → watchdog →
-BOD33 → framework → faces → tick → loop.
+**Boot sequence rationale:** each step depends on the previous. RAM-copy ->
+reset-reason -> boot-throttle -> interrupt priorities -> clocks -> RTC -> watchdog ->
+BOD33 -> framework -> faces -> tick -> loop.
 
 ---
 
@@ -39,7 +39,7 @@ uses `panic = "abort"` to keep the binary small.
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `init()` | fn | Dependency-ordered hardware init (irq → clock → rtc → wdt). |
+| `init()` | fn | Dependency-ordered hardware init (irq -> clock -> rtc -> wdt). |
 
 ---
 
@@ -107,8 +107,8 @@ sleep while the RTC tracks elapsed time. All register writes wait for `SYNCBUSY`
 | `set_indicator()` / `clear_indicator()` | fn | Indicator segments. |
 | `start_character_blink()` | fn | Autonomous blink in position 7. |
 | `start_tick_animation()` | fn | Autonomous tick-tock animation. |
-| `CHARACTER_SET` | const | ASCII → 7-segment bit patterns. |
-| `SEGMENT_MAP` | const | Position → (common, segment) pins. |
+| `CHARACTER_SET` | const | ASCII -> 7-segment bit patterns. |
+| `SEGMENT_MAP` | const | Position -> (common, segment) pins. |
 
 **Why:** the LCD retains its display in STANDBY with no CPU, so the time stays
 visible while the CPU sleeps.
@@ -205,6 +205,17 @@ reference, so the raw value *rises* as the battery weakens. The formula
 | `send()` / `receive()` | fn | Raw transfers. |
 | `write8()` / `read8()` / `read16()` / `read24()` / `read32()` | fn | Register helpers. |
 | `pins_to_floating_before_sleep()` | fn | Float SDA/SCL to stop sensor leakage. |
+
+---
+
+## Sensor drivers and hardware status
+
+The thermistor and OPT3001 drivers and their watch faces are present in source,
+and the host seam can exercise their fail-closed paths. They are not hardware
+validated in this checkout: host mocks do not provide a thermistor fixture or an
+OPT3001 fixture, so the real-face tests expect `NO TE` and `NO LS` rather than a
+measured value. Treat temperature and optical readings as hardware-dependent
+until bench tests in `docs/TESTING.md` pass.
 
 ---
 
@@ -327,9 +338,9 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 | `get_weeknumber()` | fn | Week number (1-53). |
 | `is_leap()` | fn | Leap year check. |
 | `days_since_new_year()` | fn | Day of year. |
-| `convert_to_unix_time()` | fn | Date → UNIX time. |
-| `date_time_from_unix_time()` | fn | UNIX time → date. |
-| `seconds_to_duration()` | fn | Seconds → days/hours/min/sec. |
+| `convert_to_unix_time()` | fn | Date -> UNIX time. |
+| `date_time_from_unix_time()` | fn | UNIX time -> date. |
+| `seconds_to_duration()` | fn | Seconds -> days/hours/min/sec. |
 | `convert_to_12_hour()` | fn | 12-hour conversion. |
 
 ---
@@ -508,7 +519,7 @@ There are **111 registered faces**. Highlights:
 | Settings | `settings_face.rs` | Unified settings screens. |
 | ISH | `ish.rs` | Vague time. |
 | Solar time | `solar_time.rs` | Solar time. |
-| Kè decimal | `ke_decimal_time.rs` | Decimal time. |
+| Ke decimal | `ke_decimal_time.rs` | Decimal time. |
 | Beats | `beats.rs` | Swatch Internet Time. |
 | Stopwatch | `stopwatch.rs` | Stopwatch. |
 | Timer | `timer.rs` | Multi-slot countdown timer. |
