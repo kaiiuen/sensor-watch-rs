@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::components::BuildProfile;
 use super::i18n::Language;
 use super::modules::ModuleManager;
 use super::presets::PresetManager;
@@ -60,6 +61,12 @@ pub struct AppSettings {
     /// Oldest lines are dropped past this so the logs never grow without bound.
     #[serde(default = "default_line_limit")]
     pub line_limit: usize,
+    /// Named hardware component/build profiles used for configuration review.
+    #[serde(default)]
+    pub component_profiles: Vec<BuildProfile>,
+    /// Active named component profile index.
+    #[serde(default)]
+    pub active_component_profile: usize,
 }
 
 impl AppSettings {
@@ -81,6 +88,8 @@ impl AppSettings {
         first_run: bool,
         drift_ppm: f64,
         line_limit: usize,
+        component_profiles: &[BuildProfile],
+        active_component_profile: usize,
     ) -> Self {
         AppSettings {
             schema_version: 1,
@@ -99,6 +108,8 @@ impl AppSettings {
             first_run,
             drift_ppm,
             line_limit,
+            component_profiles: component_profiles.to_vec(),
+            active_component_profile,
         }
     }
 
@@ -135,6 +146,8 @@ impl Default for AppSettings {
             first_run: false,
             drift_ppm: 0.0,
             line_limit: default_line_limit(),
+            component_profiles: Vec::new(),
+            active_component_profile: 0,
         }
     }
 }
