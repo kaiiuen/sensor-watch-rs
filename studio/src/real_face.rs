@@ -35,15 +35,15 @@ use sensor_watch::movement::{
     alarm, astronomy, close_enough, countdown, counter, day_night_percentage, day_one, deadline,
     decimal_time, flashlight, french_revolutionary, frequency_correction, hello_there, interval,
     invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter, lis2dw_logging,
-    mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
-    minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
-    planetary_hours, planetary_time, preferences, probability, pulsometer, randonaut, ratemeter,
-    repetition_minute, rpn_calculator, rpn_calculator_alt, sailing, save_load, set_time,
-    set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock, simple_clock_bin_led,
-    simple_coin_flip, solar_time, solstice, sos, squash, stopwatch, sunrise_sunset, tachymeter,
-    tally, tarot, tempchart, thermistor_logging, thermistor_readout, thermistor_testing, tide,
-    time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki,
-    weeknumber, wordle, world_clock, world_clock2, wyoscan,
+    mars_time, menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal,
+    moon_phase, morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time,
+    preferences, probability, pulsometer, randonaut, ratemeter, repetition_minute, rpn_calculator,
+    rpn_calculator_alt, sailing, save_load, set_time, set_time_hackwatch, ships_bell, simon,
+    simple_calculator, simple_clock, simple_clock_bin_led, simple_coin_flip, solar_time, solstice,
+    sos, squash, stopwatch, sunrise_sunset, tachymeter, tally, tarot, tempchart,
+    thermistor_logging, thermistor_readout, thermistor_testing, tide, time_left, timer, tomato,
+    toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki, weeknumber, wordle,
+    world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -547,12 +547,18 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "FLASHLIGHT" => Some(Box::new(flashlight::FlashlightFace::new_static())),
         "ASTRONOMY" => Some(Box::new(astronomy::AstronomyFace::new_static())),
         "CLOSE_ENOUGH" => Some(Box::new(close_enough::CloseEnoughClockFace::new_static())),
-        "DAY_NIGHT_PERCENTAGE" => Some(Box::new(day_night_percentage::DayNightPercentageFace::new_static())),
+        "DAY_NIGHT_PERCENTAGE" => Some(Box::new(
+            day_night_percentage::DayNightPercentageFace::new_static(),
+        )),
         "DAY_ONE" => Some(Box::new(day_one::DayOneFace::new_static())),
         "DEADLINE" => Some(Box::new(deadline::DeadlineFace::new_static())),
         "DECIMAL_TIME" => Some(Box::new(decimal_time::DecimalTimeFace::new_static())),
-        "FRENCH_REVOLUTIONARY" => Some(Box::new(french_revolutionary::FrenchRevolutionaryFace::new_static())),
-        "FREQUENCY_CORRECTION" => Some(Box::new(frequency_correction::FrequencyCorrectionFace::new_static())),
+        "FRENCH_REVOLUTIONARY" => Some(Box::new(
+            french_revolutionary::FrenchRevolutionaryFace::new_static(),
+        )),
+        "FREQUENCY_CORRECTION" => Some(Box::new(
+            frequency_correction::FrequencyCorrectionFace::new_static(),
+        )),
         "HELLO_THERE" => Some(Box::new(hello_there::HelloThereFace::new_static())),
         "KE_DECIMAL_TIME" => Some(Box::new(ke_decimal_time::KeDecimalTimeFace::new_static())),
         "INTERVAL" => Some(Box::new(interval::IntervalFace::new_static())),
@@ -758,6 +764,9 @@ impl RealFace {
     }
     pub fn activate(&mut self, _time_mode_24: bool) {}
     pub fn tick(&mut self) {}
+    pub fn is_activated(&self) -> bool {
+        false
+    }
     pub fn press(&mut self, _light: bool, _alarm: bool) {}
     pub fn snapshot(&self) -> RealFaceSnapshot {
         RealFaceSnapshot::default()

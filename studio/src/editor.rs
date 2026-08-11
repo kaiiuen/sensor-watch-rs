@@ -59,7 +59,40 @@ pub fn generate_face(name: &str, template: &Template, description: &str) -> Stri
     out
 }
 
-/// The path to a face's source file.
+/// Validates the user-controlled face name used to construct a source path.
+pub fn validate_face_name(name: &str) -> Result<(), String> {
+    if name.is_empty()
+        || name.len() > 64
+        || !name.is_ascii()
+        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        || name.starts_with(|c: char| c.is_ascii_digit())
+    {
+        return Err(format!("invalid face name {name:?}; use ASCII snake_case"));
+    }
+    Ok(())
+}
+
+/// Returns a validated face path under the firmware movement directory.
+fn checked_face_path(name: &str) -> Result<std::path::PathBuf, String> {
+    validate_face_name(name)?;
+    let movement = crate::build::firmware_dir().join("src/movement");
+    let root = movement
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve face directory: {e}"))?;
+    let path = root.join(format!("{name}.rs"));
+    if !path.starts_with(&root) {
+        return Err("face path escapes the movement directory".into());
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(&path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("face path must be a regular file, not a symlink or directory".into());
+        }
+    }
+    Ok(path)
+}
+
+/// The path to a face's source file. Callers performing I/O must use the
+/// checked helpers below; this function is retained for display purposes.
 pub fn face_path(name: &str) -> std::path::PathBuf {
     crate::build::firmware_dir()
         .join("src/movement")
@@ -68,21 +101,21 @@ pub fn face_path(name: &str) -> std::path::PathBuf {
 
 /// Writes a face source file.
 pub fn write_face(name: &str, source: &str) -> Result<(), String> {
-    let path = face_path(name);
-    std::fs::write(&path, source).map_err(|e| e.to_string())
+    let path = checked_face_path(name)?;
+    std::fs::write(&path, source).map_err(|e| format!("cannot write face: {e}"))
 }
 
 /// Reads a face source file.
 pub fn read_face(name: &str) -> Result<String, String> {
-    let path = face_path(name);
-    std::fs::read_to_string(&path).map_err(|e| e.to_string())
+    let path = checked_face_path(name)?;
+    std::fs::read_to_string(&path).map_err(|e| format!("cannot read face: {e}"))
 }
 
 /// Deletes a face source file.
 pub fn delete_face(name: &str) -> Result<(), String> {
-    let path = face_path(name);
+    let path = checked_face_path(name)?;
     if path.exists() {
-        std::fs::remove_file(&path).map_err(|e| e.to_string())
+        std::fs::remove_file(&path).map_err(|e| format!("cannot delete face: {e}"))
     } else {
         Ok(())
     }

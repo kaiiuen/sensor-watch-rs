@@ -786,8 +786,8 @@ impl eframe::App for StudioApp {
                             self.push_terminal("Integrity check failed: invalid checksum format");
                             return;
                         }
-                        let short = sha.get(..12).unwrap_or(&sha).to_string();
-                        self.release_sha256 = Some(sha);
+                        let short = sha.chars().take(12).collect::<String>();
+                        self.release_sha256 = Some(sha.to_ascii_lowercase());
                         self.status = "Release checksum fetched".to_string();
                         self.log.log("Integrity check: release checksum fetched");
                         self.push_terminal(format!(
@@ -1053,7 +1053,7 @@ impl eframe::App for StudioApp {
                         let resp = ui.text_edit_singleline(&mut self.terminal_input);
                         let submit =
                             resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if submit {
+                        if ui.button("Run").clicked() || submit {
                             let cmd = self.terminal_input.trim().to_string();
                             self.terminal_input.clear();
                             self.run_terminal_command(&cmd);
@@ -2821,6 +2821,7 @@ impl StudioApp {
                         if ui.selectable_label(self.board == b, b.label()).clicked() {
                             self.board = b;
                             self.log.log(format!("Target board set to {}", b.label()));
+                            self.save_settings_internal();
                         }
                     }
                     ui.separator();
@@ -4021,10 +4022,7 @@ impl StudioApp {
         });
         if resolve_fingerprint {
             let root = build::firmware_dir();
-            let elf = root.join(format!(
-                "target/{}/release/sensor-watch",
-                build::TARGET
-            ));
+            let elf = root.join(format!("target/{}/release/sensor-watch", build::TARGET));
             self.panic_resolution = match panic_map::resolve_against_elf(
                 &self.panic_fingerprint_input,
                 &elf,
@@ -4512,12 +4510,12 @@ impl StudioApp {
                     ui.separator();
                     ui.label(format!("Engine face: {}", self.face_engine.face_name));
                     ui.separator();
-                    // Show which render engine produced the current frame: the REAL
-                    // firmware seam when available, else the face_sim fallback.
+                    // This is the result of the most recently completed render;
+                    // draw_watch updates it only after texture creation succeeds.
                     ui.label(if self.last_render_used_real {
-                        "Render: real face (firmware seam)"
+                        "Last render: real face (firmware seam)"
                     } else {
-                        "Render: face_sim fallback"
+                        "Last render: face_sim fallback"
                     });
                     ui.separator();
                     // Fuzz the current face.
@@ -5109,7 +5107,7 @@ impl StudioApp {
     }
 
     fn run_terminal_command(&mut self, cmd: &str) {
-        if self.shutting_down {
+        if self.shutting_down || cmd.trim().is_empty() {
             return;
         }
         if cmd.len() > 128 || !cmd.is_ascii() || cmd.bytes().any(|b| b < 0x20 && b != b'\t') {
@@ -5209,6 +5207,7 @@ impl StudioApp {
                     };
                     if let Some(nb) = next {
                         self.board = nb;
+                        self.save_settings_internal();
                         self.push_terminal(format!("Board set to {}", nb.label()));
                     } else {
                         self.push_terminal("Unknown board (green/red/blue/pro)");
@@ -5616,13 +5615,23 @@ impl StudioApp {
             };
             self.restore_store.rename(index, name);
             self.restore_name.clear();
-            let _ = self.restore_store.save();
-            self.status = "Restore point renamed".to_string();
+            match self.restore_store.save() {
+                Ok(()) => self.status = "Restore point renamed".to_string(),
+                Err(e) => {
+                    self.status = format!("Restore point save failed: {e}");
+                    self.log_error(&format!("Restore point save failed: {e}"));
+                }
+            }
         }
         if let Some(index) = delete_index {
             self.restore_store.delete(index);
-            let _ = self.restore_store.save();
-            self.status = "Restore point deleted".to_string();
+            match self.restore_store.save() {
+                Ok(()) => self.status = "Restore point deleted".to_string(),
+                Err(e) => {
+                    self.status = format!("Restore point save failed: {e}");
+                    self.log_error(&format!("Restore point save failed: {e}"));
+                }
+            }
         }
         if let Some(index) = restore_index {
             self.restore_selected(index);
@@ -5805,10 +5814,11 @@ impl StudioApp {
         let mut line = line.into();
         if line.chars().count() > MAX_ENTRY_CHARS {
             line = line.chars().take(MAX_ENTRY_CHARS).collect();
-            line.push_str("…");
+            line.push('…');
         }
         self.terminal_history.push(line);
-        let limit = self.line_limit.max(1);
+        const MAX_TERMINAL_ENTRIES: usize = 500;
+        let limit = self.line_limit.clamp(1, MAX_TERMINAL_ENTRIES);
         if self.terminal_history.len() > limit {
             let excess = self.terminal_history.len() - limit;
             self.terminal_history.drain(..excess);
@@ -5881,37 +5891,26 @@ impl StudioApp {
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
-        );
-        match settings.to_json() {
-            Ok(json) => {
-                // Write next to the executable so it matches where internal
-                // settings are persisted, avoiding split/inconsistent files.
-                let path = persist::settings_path();
-                match std::fs::write(&path, json) {
-                    Ok(_) => {
-                        self.status = format!("Settings saved to {}", path.display());
-                        self.log.log(format!(
-                            "Settings export succeeded: saved to {}",
-                            path.display()
-                        ));
-                        self.push_terminal(format!(
-                            "Settings export succeeded: saved to {}",
-                            path.display()
-                        ));
-                    }
-                    Err(e) => {
-                        self.status = format!("Failed to save settings: {e}");
-                        self.log.log(format!("Settings export failed: {e}"));
-                        self.push_terminal(format!("Settings export failed: {e}"));
-                    }
-                }
+        )
+        .with_board(self.board.label());
+        // Use the same atomic, validated writer as automatic persistence.
+        let path = persist::settings_path();
+        match persist::save(&settings) {
+            Ok(()) => {
+                self.status = format!("Settings saved to {}", path.display());
+                self.log.log(format!(
+                    "Settings export succeeded: saved to {}",
+                    path.display()
+                ));
+                self.push_terminal(format!(
+                    "Settings export succeeded: saved to {}",
+                    path.display()
+                ));
             }
             Err(e) => {
-                self.status = format!("Failed to serialize settings: {e}");
-                self.log
-                    .log(format!("Settings export failed to serialize: {e}"));
-                self.terminal_history
-                    .push(format!("Settings export failed to serialize: {e}"));
+                self.status = format!("Failed to save settings: {e}");
+                self.log.log(format!("Settings export failed: {e}"));
+                self.push_terminal(format!("Settings export failed: {e}"));
             }
         }
     }
@@ -5937,11 +5936,15 @@ impl StudioApp {
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
-        );
+        )
+        .with_board(self.board.label());
         self.restore_store
             .create(name, settings, self.board.label(), self.presets.active);
         if let Err(e) = self.restore_store.save() {
-            self.log.log(format!("Restore point failed: {e}"));
+            let message = format!("Restore point failed: {e}");
+            self.status = message.clone();
+            self.log_error(&message);
+            self.push_terminal(message);
         }
     }
 
@@ -5985,7 +5988,8 @@ impl StudioApp {
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
-        );
+        )
+        .with_board(self.board.label());
         match persist::save(&settings) {
             Ok(_) => {}
             Err(e) => {
@@ -6019,7 +6023,8 @@ impl StudioApp {
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
-        );
+        )
+        .with_board(self.board.label());
         match settings.to_json() {
             Ok(json) => {
                 self.log
@@ -6102,6 +6107,12 @@ impl StudioApp {
         } else {
             s.output_dir
         };
+        self.board = match s.board.as_str() {
+            "Red / Lite" | "Red" | "Lite" => Board::RedLite,
+            "Blue" => Board::Blue,
+            "Pro" => Board::Pro,
+            _ => Board::Green,
+        };
         self.line_limit = s.line_limit.max(1);
         self.apply_line_limit();
         self.save_settings_internal();
@@ -6110,7 +6121,9 @@ impl StudioApp {
     /// Applies the configured line limit to every output log so the bound is
     /// enforced uniformly across all panes.
     fn apply_line_limit(&mut self) {
+        const MAX_TERMINAL_ENTRIES: usize = 500;
         let limit = self.line_limit.max(1);
+        let terminal_limit = limit.min(MAX_TERMINAL_ENTRIES);
         self.log.set_limit(limit);
         self.shell_log.set_limit(limit);
         self.shell_hw_log.set_limit(limit);
@@ -6119,8 +6132,8 @@ impl StudioApp {
         self.error_log.set_limit(limit);
         self.faces_log.set_limit(limit);
         self.sim_log.set_limit(limit);
-        if self.terminal_history.len() > limit {
-            let excess = self.terminal_history.len() - limit;
+        if self.terminal_history.len() > terminal_limit {
+            let excess = self.terminal_history.len() - terminal_limit;
             self.terminal_history.drain(..excess);
         }
     }
@@ -6128,9 +6141,9 @@ impl StudioApp {
     /// Exports the source code to a folder.
     fn export_source(&mut self) {
         // Export the firmware + studio source to an "export" folder.
-        let export_dir = std::path::Path::new("export");
-        let _ = std::fs::create_dir_all(export_dir);
-        let result = copy_dir(std::path::Path::new("."), export_dir);
+        let source_dir = build::firmware_dir();
+        let export_dir = source_dir.join("export");
+        let result = copy_dir(&source_dir, &export_dir);
         match result {
             Ok(_) => {
                 self.status = format!("Exported source to {}", export_dir.display());
@@ -6398,25 +6411,41 @@ fn main() -> eframe::Result<()> {
     )
 }
 
-/// Recursively copies a directory, skipping `target` and `.git`.
+/// Recursively copies a directory, skipping links and generated trees.
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
-    if src == dst {
-        return Ok(());
+    let src = src.canonicalize()?;
+    if let Ok(dst_real) = dst.canonicalize() {
+        if dst_real == src || dst_real.starts_with(&src) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "export destination is inside the source tree",
+            ));
+        }
     }
-    if !dst.exists() {
-        std::fs::create_dir_all(dst)?;
-    }
-    for entry in std::fs::read_dir(src)? {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(&src)? {
         let entry = entry?;
         let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)?;
         let name = entry.file_name();
-        if name == "target" || name == ".git" || name == "export" || path == dst {
+        if name == "target" || name == ".git" || name == "export" {
+            continue;
+        }
+        if metadata.file_type().is_symlink() {
             continue;
         }
         let dest = dst.join(&name);
-        if path.is_dir() {
+        if let Ok(dest_metadata) = std::fs::symlink_metadata(&dest) {
+            if dest_metadata.file_type().is_symlink() {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "refusing to overwrite symlink in export destination",
+                ));
+            }
+        }
+        if metadata.is_dir() {
             copy_dir(&path, &dest)?;
-        } else {
+        } else if metadata.is_file() {
             std::fs::copy(&path, &dest)?;
         }
     }
@@ -6448,7 +6477,7 @@ fn fetch_release_sha256() -> Result<String, String> {
         .call()
         .map_err(|e| e.to_string())?;
     let body = resp.into_string().map_err(|e| e.to_string())?;
-    let sha = body.trim().to_string();
+    let sha = body.trim().to_ascii_lowercase();
     if is_valid_sha256(&sha) {
         Ok(sha)
     } else {

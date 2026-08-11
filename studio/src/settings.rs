@@ -107,9 +107,12 @@ pub struct AppSettings {
     /// Named hardware component/build profiles used for configuration review.
     #[serde(default)]
     pub component_profiles: Vec<BuildProfile>,
-    /// Active named component profile index.
+    /// The active named component profile index.
     #[serde(default)]
     pub active_component_profile: usize,
+    /// The selected target board revision.
+    #[serde(default = "default_board")]
+    pub board: String,
 }
 
 impl AppSettings {
@@ -155,7 +158,13 @@ impl AppSettings {
             line_limit,
             component_profiles: component_profiles.to_vec(),
             active_component_profile,
+            board: default_board(),
         }
+    }
+
+    pub fn with_board(mut self, board: impl Into<String>) -> Self {
+        self.board = board.into();
+        self
     }
 
     /// Serializes the settings to a JSON string.
@@ -185,6 +194,9 @@ impl AppSettings {
         }
         if self.line_limit == 0 || self.line_limit > 10_000 {
             return Err("line limit must be between 1 and 10000".into());
+        }
+        if !matches!(self.board.as_str(), "Green" | "Red / Lite" | "Blue" | "Pro") {
+            return Err("board is not a supported revision".into());
         }
         if self.active_component_profile >= self.component_profiles.len()
             && !self.component_profiles.is_empty()
@@ -230,6 +242,7 @@ impl Default for AppSettings {
             line_limit: default_line_limit(),
             component_profiles: Vec::new(),
             active_component_profile: 0,
+            board: default_board(),
         }
     }
 }
@@ -247,6 +260,10 @@ pub fn default_schema_version() -> u32 {
 /// The default output directory for built artifacts: `<User Documents>/FirmwareStudio`.
 /// This is writable even when the app runs as a standalone exe from a read-only
 /// location.
+pub fn default_board() -> String {
+    "Green".to_string()
+}
+
 pub fn default_output_dir() -> String {
     std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
