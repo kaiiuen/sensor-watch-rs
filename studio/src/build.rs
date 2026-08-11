@@ -38,6 +38,18 @@ pub fn firmware_dir() -> PathBuf {
 /// The embedded target triple.
 pub const TARGET: &str = "thumbv6m-none-eabi";
 
+/// Rejects output paths that could accidentally target a file instead of a
+/// directory. The build worker still reports every filesystem/tool failure.
+pub fn validate_output_dir(path: &Path) -> Result<(), String> {
+    if path.as_os_str().is_empty() || path.to_string_lossy().len() > 240 {
+        return Err("output directory is empty or excessively long".into());
+    }
+    if path.exists() && !path.is_dir() {
+        return Err("output path is not a directory".into());
+    }
+    Ok(())
+}
+
 /// A build result.
 pub struct BuildResult {
     pub success: bool,
@@ -48,6 +60,13 @@ pub struct BuildResult {
 /// Runs the full firmware build: cargo build, extract the raw binary, and
 /// convert it to a `.uf2` file in the given output directory.
 pub fn build_firmware(output_dir: &Path) -> BuildResult {
+    if let Err(error) = validate_output_dir(output_dir) {
+        return BuildResult {
+            success: false,
+            message: error,
+            uf2_path: None,
+        };
+    }
     let fw_dir = firmware_dir();
 
     // Ensure the output directory exists (it may not on a fresh standalone exe).

@@ -35,6 +35,44 @@ pub struct SysStats {
     pub run_time_secs: u64,
 }
 
+/// Formats a system CPU frequency for display.
+///
+/// A zero frequency means that the platform did not report a value.
+pub fn format_system_cpu_frequency(freq_mhz: u64) -> String {
+    if freq_mhz == 0 {
+        "Unknown".to_owned()
+    } else {
+        format!("{freq_mhz} MHz")
+    }
+}
+
+/// Formats the process thread count for display.
+///
+/// `None` means that the platform/sysinfo backend could not expose the
+/// process task list; it must not be replaced with a guessed value.
+pub fn format_process_threads(threads: Option<usize>) -> String {
+    threads
+        .map(|count| count.to_string())
+        .unwrap_or_else(|| "Unavailable on this platform".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_process_threads, format_system_cpu_frequency};
+
+    #[test]
+    fn formats_unknown_system_frequency() {
+        assert_eq!(format_system_cpu_frequency(0), "Unknown");
+        assert_eq!(format_system_cpu_frequency(1300), "1300 MHz");
+    }
+
+    #[test]
+    fn formats_unavailable_process_threads() {
+        assert_eq!(format_process_threads(None), "Unavailable on this platform");
+        assert_eq!(format_process_threads(Some(12)), "12");
+    }
+}
+
 /// Starts a background thread that periodically samples resource usage and
 /// sends snapshots over the returned channel. The sampling rate (in ms) is read
 /// from the shared atomic so it can be changed live.

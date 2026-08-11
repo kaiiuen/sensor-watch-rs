@@ -64,6 +64,17 @@ pub struct BuildProfile {
 }
 
 impl BuildProfile {
+    pub fn validate(&self) -> Result<(), String> {
+        let name = self.name.trim();
+        if name.is_empty() || name.len() > 64 {
+            return Err("profile name must be 1-64 characters".to_string());
+        }
+        if self.config.lcd == LcdVariant::Custom && !(self.config.spi || self.config.i2c) {
+            return Err("custom LCD requires SPI or I2C to be enabled".to_string());
+        }
+        Ok(())
+    }
+
     pub fn new(name: impl Into<String>, config: ComponentsConfig) -> Self {
         Self {
             name: name.into(),
@@ -179,7 +190,12 @@ pub fn show_configurator(
             .clicked()
         {
             if let Some(profile) = profiles.get_mut(*selected) {
-                profile.config = draft.clone();
+                let candidate = BuildProfile::new(profile.name.clone(), draft.clone());
+                if let Err(error) = candidate.validate() {
+                    ui.colored_label(egui::Color32::RED, format!("Error: {error}"));
+                } else {
+                    profile.config = draft.clone();
+                }
             }
         }
         if ui.button("Duplicate").clicked() {
@@ -229,6 +245,10 @@ pub fn show_configurator(
         }
     });
     let (flash, ram) = estimate(draft);
+    let draft_profile = BuildProfile::new("draft", draft.clone());
+    if let Err(error) = draft_profile.validate() {
+        ui.colored_label(egui::Color32::RED, format!("Error: {error}"));
+    }
     ui.monospace(format!(
         "Estimated component impact: +{flash} KiB flash, +{ram} KiB RAM (planning estimate)"
     ));

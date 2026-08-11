@@ -12,6 +12,7 @@ mod debug;
 mod diagnostics;
 mod drift;
 mod editor;
+mod error_catalog;
 mod face_sim;
 mod faces;
 mod file_browser;
@@ -237,6 +238,10 @@ struct StudioApp {
     error_log: debug::DebugLog,
     /// Fingerprint entered in the Bugs/Diagnostics resolver.
     panic_fingerprint_input: String,
+    /// Search text for the in-app error/fault encyclopedia.
+    catalog_error_search: String,
+    /// Area filter for the in-app error/fault encyclopedia.
+    catalog_error_area: String,
     /// Last panic fingerprint resolution result.
     panic_resolution: String,
     /// Dedicated log for the Watch Faces tab.
@@ -499,6 +504,8 @@ impl Default for StudioApp {
             flash_log: debug::DebugLog::new(),
             error_log: debug::DebugLog::new(),
             panic_fingerprint_input: String::new(),
+            catalog_error_search: String::new(),
+            catalog_error_area: String::from("All"),
             panic_resolution: String::new(),
             faces_log: debug::DebugLog::new(),
             sim_log: debug::DebugLog::new(),
@@ -3210,6 +3217,9 @@ impl StudioApp {
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
         ui.heading("Diagnostics");
         ui.label("Offline checks for the watch shell and simulator. Physical hardware is never implied by simulated results.");
+        if ui.button("Open error encyclopedia").clicked() {
+            self.current_panel = Panel::Bugs;
+        }
         ui.horizontal(|ui| {
             ui.label("Connection mode:");
             ui.colored_label(egui::Color32::from_rgb(120, 210, 150), "Simulated");
@@ -3698,10 +3708,90 @@ impl StudioApp {
             });
     }
 
+    /// Searchable reference table for known errors, faults, and safe recovery.
+    fn error_catalog(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Error and fault encyclopedia");
+        ui.label(
+            "Reference only. Recovery is descriptive; no automatic hardware action is performed.",
+        );
+        ui.horizontal(|ui| {
+            ui.label("Search:");
+            ui.add(
+                egui::TextEdit::singleline(&mut self.catalog_error_search)
+                    .hint_text("code, area, or symptom")
+                    .desired_width(220.0),
+            );
+            ui.label("Area:");
+            egui::ComboBox::from_id_source("error_catalog_area")
+                .selected_text(&self.catalog_error_area)
+                .show_ui(ui, |ui| {
+                    for area in error_catalog::areas() {
+                        ui.selectable_value(&mut self.catalog_error_area, area.to_string(), area);
+                    }
+                });
+        });
+        let visible = error_catalog::ENTRIES
+            .iter()
+            .filter(|entry| {
+                error_catalog::matches(entry, &self.catalog_error_search, &self.catalog_error_area)
+            })
+            .count();
+        ui.weak(format!(
+            "{visible} of {} entries shown. Expand a row for recovery detail.",
+            error_catalog::ENTRIES.len()
+        ));
+        egui::ScrollArea::both()
+            .id_source("error_catalog_table")
+            .max_height(430.0)
+            .show(ui, |ui| {
+                egui::Grid::new("error_catalog_grid")
+                    .striped(true)
+                    .min_col_width(90.0)
+                    .show(ui, |ui| {
+                        ui.strong("Code");
+                        ui.strong("Area");
+                        ui.strong("Meaning");
+                        ui.strong("Likely cause");
+                        ui.strong("Safe action");
+                        ui.strong("Do not do");
+                        ui.end_row();
+                        for (index, entry) in error_catalog::ENTRIES.iter().enumerate() {
+                            if !error_catalog::matches(
+                                entry,
+                                &self.catalog_error_search,
+                                &self.catalog_error_area,
+                            ) {
+                                continue;
+                            }
+                            ui.monospace(entry.code);
+                            ui.label(entry.area);
+                            ui.label(entry.meaning);
+                            ui.label(entry.likely_cause);
+                            ui.label(entry.safe_action);
+                            ui.label(entry.do_not_do);
+                            ui.end_row();
+                            egui::CollapsingHeader::new(format!("Details for {}", entry.code))
+                                .id_source(("error_catalog_detail", index))
+                                .show(ui, |ui| {
+                                    ui.label(format!("Meaning: {}", entry.meaning));
+                                    ui.label(format!("Likely cause: {}", entry.likely_cause));
+                                    ui.label(format!("Safe action: {}", entry.safe_action));
+                                    ui.label(format!("Do not do: {}", entry.do_not_do));
+                                });
+                            ui.end_row();
+                        }
+                    });
+            });
+    }
+
     /// The bugs panel: show errors/warnings and app state for troubleshooting.
     fn bugs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Bugs & Diagnostics");
+            if ui.button("Error encyclopedia").clicked() {
+                self.catalog_error_search.clear();
+                self.catalog_error_area = String::from("All");
+            }
             if ui.button("Clear").clicked() {
                 self.error_log.clear();
             }
@@ -3751,6 +3841,9 @@ impl StudioApp {
             ui.monospace(&self.panic_resolution);
         }
         ui.add_space(8.0);
+        ui.separator();
+        self.error_catalog(ui);
+        ui.separator();
         ui.label(
             "Errors and warnings encountered by the app. Use this to report bugs or\n\
              troubleshoot issues. The full activity log is in the Debug tab.",
@@ -3977,6 +4070,9 @@ impl StudioApp {
     fn wiki(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Wiki");
+            if ui.button("Error encyclopedia").clicked() {
+                self.current_panel = Panel::Bugs;
+            }
             if ui.button("Back").clicked() {
                 self.wiki.back();
                 self.log.log("Wiki: back".to_string());
@@ -4793,6 +4889,10 @@ impl StudioApp {
         if self.shutting_down {
             return;
         }
+        if cmd.len() > 128 || !cmd.is_ascii() || cmd.bytes().any(|b| b < 0x20 && b != b'\t') {
+            self.push_terminal("ERR malformed command (ASCII, <=128 bytes required)");
+            return;
+        }
         self.push_terminal(format!("> {cmd}"));
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
@@ -4862,6 +4962,10 @@ impl StudioApp {
                 self.push_terminal(format!("Sim time: {h:02}:{m:02}:{s:02}"));
             }
             "settime" => {
+                if parts.len() != 2 {
+                    self.push_terminal("Usage: settime YYMMDDHHMMSS");
+                    return;
+                }
                 // Drive the simulated watch from the terminal, mirroring the
                 // shell sim's settime so both surfaces stay in sync with the
                 // Simulator.
@@ -5124,18 +5228,12 @@ impl StudioApp {
                 ui.monospace(format!("{:.1}%", self.sys_stats.cpu_percent));
                 ui.end_row();
                 ui.label("System CPU frequency");
-                if self.sys_stats.system_cpu_freq_mhz > 0 {
-                    ui.monospace(format!("{} MHz", self.sys_stats.system_cpu_freq_mhz));
-                } else {
-                    ui.monospace("Unknown");
-                }
+                ui.monospace(sysstats::format_system_cpu_frequency(
+                    self.sys_stats.system_cpu_freq_mhz,
+                ));
                 ui.end_row();
                 ui.label("Process threads");
-                if let Some(threads) = self.sys_stats.threads {
-                    ui.monospace(format!("{}", threads));
-                } else {
-                    ui.monospace("Unavailable");
-                }
+                ui.monospace(sysstats::format_process_threads(self.sys_stats.threads));
                 ui.end_row();
                 ui.label("Memory");
                 ui.monospace(fmt_bytes(self.sys_stats.mem_bytes));
@@ -6224,8 +6322,12 @@ fn parse_settime(payload: &str) -> Option<(i32, u32, u32, u32, u32)> {
     let day = part(4..6);
     let hour = part(6..8);
     let minute = part(8..10);
+    let second = part(10..12);
     let year = 2000 + yy as i32;
-    if month == 0
+    // The firmware RTC stores 2020..2083 in its 6-bit year field.
+    if !(20..=83).contains(&yy)
+        || second > 59
+        || month == 0
         || month > 12
         || day == 0
         || day > days_in_month(year, month)

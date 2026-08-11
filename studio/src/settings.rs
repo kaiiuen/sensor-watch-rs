@@ -118,9 +118,33 @@ impl AppSettings {
         serde_json::to_string_pretty(self).map_err(|e| e.to_string())
     }
 
-    /// Deserializes settings from a JSON string.
+    /// Validates values loaded from disk before they can affect the app/build.
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.sim_scale.is_finite() || !(0.5..=2.0).contains(&self.sim_scale) {
+            return Err("simulator scale must be finite and between 0.5 and 2.0".into());
+        }
+        if !self.drift_ppm.is_finite() || self.drift_ppm.abs() > 1000.0 {
+            return Err("drift correction must be finite and within +/-1000 ppm".into());
+        }
+        if self.line_limit == 0 || self.line_limit > 10_000 {
+            return Err("line limit must be between 1 and 10000".into());
+        }
+        if self.active_component_profile >= self.component_profiles.len()
+            && !self.component_profiles.is_empty()
+        {
+            return Err("active component profile is out of range".into());
+        }
+        for profile in &self.component_profiles {
+            profile.validate()?;
+        }
+        Ok(())
+    }
+
+    /// Deserializes and validates settings from a JSON string.
     pub fn from_json(json: &str) -> Result<Self, String> {
-        serde_json::from_str(json).map_err(|e| e.to_string())
+        let settings: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        settings.validate()?;
+        Ok(settings)
     }
 }
 
