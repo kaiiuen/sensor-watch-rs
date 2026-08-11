@@ -29,7 +29,7 @@
 //! binary `src/main.rs`; nothing here installs a main/entry, so this lib can link
 //! into a host test harness.
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 // Host + ARM both keep this lib target warning-free; the HAL exposes a broad API
 // surface not all of which is reachable from the lib.
 #![allow(dead_code)]
@@ -71,15 +71,23 @@ pub mod watch;
 // ---------------------------------------------------------------------------
 // Host `no_std` runtime essentials.
 //
-// The lib is `#![no_std]`, so a host (non-arm) build needs a `#[panic_handler]`
-// and a global allocator (the core crate uses `alloc`, e.g. `BTreeMap`/`String`
-// in the mock). On the ARM firmware target these are provided by the binary
-// (`src/panic.rs` + cortex-m) and this lib artifact is never linked; on host
-// `cargo test`, the `#[test]` harness drives the crate under `std` (the
-// `profile.test` target, which keeps panic=unwind), so this `no_std` runtime is
-// excluded under `cfg(test)` to avoid conflicting with `std`'s own panic/alloc.
+// The lib is `#![no_std]` unless built as a dependency of a `std` crate (the
+// `std` feature, e.g. when Studio links it in). A host (non-arm) `no_std` build
+// needs a `#[panic_handler]` and a global allocator (the core crate uses `alloc`,
+// e.g. `BTreeMap`/`String` in the mock). On the ARM firmware target these are
+// provided by the binary (`src/panic.rs` + cortex-m) and this lib artifact is
+// never linked; on host `cargo test`, the `#[test]` harness drives the crate
+// under `std` (the `profile.test` target, which keeps panic=unwind), so this
+// `no_std` runtime is excluded under `cfg(test)` to avoid conflicting with
+// `std`'s own panic/alloc. When the `std` feature is on, `std` provides these
+// lang items, so they are excluded here too.
 // ---------------------------------------------------------------------------
-#[cfg(all(not(target_arch = "arm"), feature = "hostmock", not(test)))]
+#[cfg(all(
+    not(target_arch = "arm"),
+    feature = "hostmock",
+    not(test),
+    not(feature = "std")
+))]
 pub mod panic {
     use core::panic::PanicInfo;
 
@@ -90,7 +98,12 @@ pub mod panic {
     }
 }
 
-#[cfg(all(not(target_arch = "arm"), feature = "hostmock", not(test)))]
+#[cfg(all(
+    not(target_arch = "arm"),
+    feature = "hostmock",
+    not(test),
+    not(feature = "std")
+))]
 mod host_alloc {
     use core::alloc::{GlobalAlloc, Layout};
 

@@ -53,6 +53,11 @@ sensor-watch-core = { path = "./core" }
 # Only available to the host (`cargo test` / `cargo build` / `cargo run`, NOT the
 # `thumbv6m-none-eabi` firmware target). Gates the mock HW dispatch in `watch`.
 hostmock = []
+# Host builds that link this lib into a `std` binary (e.g. the Studio app) enable
+# this so the lib compiles as `std` and lets `std` provide the `#[panic_handler]`
+# and `#[global_allocator]` lang items. Without it (ARM firmware, host `cargo
+# test`), the lib stays `no_std` and provides its own minimal lang items.
+std = []
 
 [dev-dependencies]
 
