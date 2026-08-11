@@ -11,8 +11,9 @@ on the SWD/probe-rs path and on debugging the firmware itself.
 ## Why this exists
 
 The watch's USB port only exposes a mass-storage bootloader (you drag a `.uf2`
-across). It cannot host a CPU debugger. To set breakpoints, single-step, read
-registers, or get a real backtrace on a fault, you need the **SWD** interface
+across and can inspect UF2/file-transfer information). It cannot host a CPU
+debugger or UART shell. To set breakpoints, single-step, read registers, or get
+a real backtrace on a fault, you need the **SWD** interface
 (debug pads on the board) and a debug probe.
 
 ## Prerequisites
@@ -153,7 +154,24 @@ fingerprint reported by the UART shell.
 ## Quick feedback loop with the UART shell
 
 For fast iteration you usually do **not** need a debugger at all. The firmware
-has a minimal command shell over the UART (9600 baud, SERCOM3, pads A4/A2/GND):
+has a minimal command shell over the UART (9600 baud, 8-N-1, SERCOM3, pads
+A4/A2/GND). The USB bootloader drive is not an alternate serial path.
+
+A host that shows no serial port does not prove that UART is absent. The UART
+jig may be disconnected, powered off, miswired, using an incompatible adapter,
+or hidden by the host or a device-passthrough setup. Record this condition as
+**NOT AVAILABLE** until the physical and host path has been checked.
+
+The shell commands fall into two safety groups:
+
+- Read-only: `help`, `time`, `drift`, `panic`, `events`, and `optical` when the
+  optional command is available.
+- Mutating: `settime YYMMDDHHMMSS`, `drift N`, and `events clear`.
+
+Use read-only commands for initial connection checks. Confirm the target and
+values before sending a mutating command. Power down before changing wiring,
+use a 3.3 V-compatible USB-serial adapter, cross TX and RX, and connect GND.
+Never apply 5 V UART signaling to the watch.
 
 - `time` - report RTC time
 - `settime YYMMDDHHMMSS` - set the clock
@@ -199,6 +217,21 @@ The fields are sequence, timestamp, event code, and payload, all hexadecimal.
 This is deliberately a local breadcrumb buffer rather than a persistent log;
 reset clears it. RTT/defmt is a separate live stream and is not a replacement
 for the fallback ring or the reset-surviving fault/fingerprint registers.
+
+## Probe/Test result reporting
+
+Studio's current Diagnostics panel is an offline simulator. Its report must not
+be treated as a physical probe result, even when a UART jig is connected. For
+any Probe/Test or hardware validation report, use these labels exactly:
+
+- **PASS** - the check ran and the acceptance condition was observed.
+- **FAIL** - the check ran and the acceptance condition was not observed.
+- **NOT AVAILABLE** - the required transport, probe, or hardware is unavailable.
+- **NOT TESTED** - the check was not run, so its state is unknown.
+
+A simulated software PASS is not a physical hardware PASS. A missing serial port
+or disconnected UART jig is **NOT AVAILABLE**, not FAIL. Use **NOT TESTED** when
+no attempt was made.
 
 ## Summary
 

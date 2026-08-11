@@ -27,9 +27,17 @@ transfer-SRAM HAL/PAC coverage and a reviewed device stack; see
 
 ## What this means in practice
 
-If you plug the watch in via USB, you can only push firmware files. To get a
-real two-way link to the running firmware, you need one of the two paths below,
-both of which use pads on the board rather than the USB connector.
+If you plug the watch in via USB, you can only push firmware files and inspect
+bootloader file-transfer information such as `INFO_UF2.TXT`. The USB drive does
+not provide a UART shell, probe connection, or general application data channel.
+To get a real two-way link to the running firmware, you need one of the two
+paths below, both of which use pads on the board rather than the USB connector.
+
+A missing serial port in the operating system or in Studio does not prove that
+the board has no UART. The jig may be disconnected, unpowered, wired to the
+wrong pins, using a charge-only or non-serial adapter, or not passed through to
+the host. Check the physical connection and adapter before treating the result
+as a hardware finding.
 
 ## Path A: UART jig (serial shell)
 
@@ -45,7 +53,13 @@ The shell runs on SERCOM3. The pads you need:
 - **GND** - common ground
 
 Wire them cross-over to the dongle (A4 to its RX, A2 to its TX, and GND to
-GND), then open a terminal at **9600 baud**, 8-N-1.
+GND), then open a terminal at **9600 baud**, 8-N-1. Use a 3.3 V-compatible
+USB-serial adapter. Do not connect a 5 V UART signal to the watch.
+
+Power down before changing wires. Verify TX/RX direction, common ground, and
+that the adapter is not supplying unintended power. Keep the USB cable path
+separate from the UART signal path: the USB connector remains a UF2
+file-transfer drive, not the shell connection.
 
 The console is a small event-driven interpreter; RX is nonblocking and buffered
 in a bounded ring. An overrun returns `ERR rx-overflow`, and lines longer than 32
@@ -55,6 +69,30 @@ the code and `src/watch/uart.rs` for the driver.
 ### Shell commands
 
 Once connected, type a command and press Enter. The supported commands are:
+
+#### Read-only commands
+
+These query the running firmware and should not change watch state:
+
+- `help`
+- `time`
+- `drift` without a value
+- `optical` when the optional command is built in
+- `panic`
+- `events`
+
+#### Mutating commands
+
+These change state and require extra care:
+
+- `settime YYMMDDHHMMSS` changes the RTC time.
+- `drift N` changes the signed RTC frequency correction.
+- `events clear` erases the retained RAM event ring.
+
+Confirm the target and intended values before sending a mutating command. Do
+not use a mutating command as a connectivity test. A shell response of `OK`
+means the command was accepted by the firmware; it is not a complete
+verification of the physical sensor, display, or other hardware.
 
 - `time` - report the current RTC time as `TIME YYMMDDHHMMSS`.
 - `settime YYMMDDHHMMSS` - set the clock; replies `OK` on success.
@@ -79,6 +117,24 @@ panel exposes this as an explicit **UART Jig** mode: refresh host ports, select
 the adapter, connect, and then send commands. The default **Simulated** mode
 continues to operate entirely on the in-app watch model. A port-open, write, or
 read timeout is shown as an error; it is never reported as a watch response.
+
+The Studio **Probe/Test** workflow is represented by the current **Diagnostics**
+panel. Its full diagnostic run is offline and simulated, even when a UART jig
+is connected. It must not be described as physical hardware validation. Use the
+Shell Access panel for explicit UART observations and SWD/probe-rs for silicon
+inspection.
+
+Use these result labels consistently:
+
+- **PASS** - the stated check ran and its acceptance condition was observed.
+- **FAIL** - the check ran and its acceptance condition was not observed.
+- **NOT AVAILABLE** - the check cannot run in the current setup, such as no
+  UART jig, no SWD probe, or missing optional sensor hardware.
+- **NOT TESTED** - no conclusion was attempted, so the result is unknown.
+
+A simulated check may be PASS for software behavior, but it is not PASS for
+physical hardware. A missing port or disconnected jig should be NOT AVAILABLE,
+not FAIL and not proof that UART is absent.
 
 ## Path B: SWD probe (full debug)
 

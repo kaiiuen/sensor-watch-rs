@@ -82,7 +82,16 @@ settings).
 cargo build -p sensor-watch-studio
 ```
 
-See [`studio/README.md`](studio/README.md) for details.
+See [`studio/README.md`](studio/README.md) for details. Studio's normal mode
+is the beginner-safe simulator and UF2 workflow. Its Advanced editor mode and
+Probe/Test (Diagnostics) workflow are for experienced users and do not turn
+simulated checks into physical hardware validation.
+
+For physical access, the USB bootloader drive exposes UF2/file-transfer
+information only. A UART shell requires a 3.3 V UART jig on A4/A2/GND at
+9600 8-N-1; a missing host serial port does not prove that the board lacks UART.
+See [`docs/HARDWARE_ACCESS.md`](docs/HARDWARE_ACCESS.md) for wiring, command
+safety, and PASS/FAIL/NOT AVAILABLE/NOT TESTED reporting.
 
 ## Hardware
 

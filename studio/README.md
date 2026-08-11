@@ -26,7 +26,12 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   are persisted and reset proportionally when the window is resized.
 - **Editor** - a self-IDE for creating, editing, or deleting watch faces from
   templates, with a collapsible "How to make a watch face" guide and a
-  **description** field that shows up in the catalog.
+  **description** field that shows up in the catalog. The beginner-safe
+  **Blocks** mode uses the small visual starter API. **Advanced** mode exposes
+  the full Rust source and is intended for experienced users who understand the
+  firmware API, build constraints, and hardware impact. Normal mode is the
+  recommended path for beginners; Advanced mode does not make source changes
+  safe or physically validated.
 - **Simulator** - 1:1 F-91W replica (SVG) with clickable button hotspots, a
   **date/time controller**, and face cycling through the active preset. Faces
   are **fully interactive** via the `face_sim` engine: the clock ticks live,
@@ -53,6 +58,8 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   ports, opens a selected port at **9600 8-N-1**, and exchanges CR/LF-framed
   shell commands with bounded read/write timeouts. It is for the debug pads
   (A4 TX, A2 RX, GND), not the watch's UF2 USB port; USB CDC is not assumed.
+  A missing port can mean the jig is disconnected, off, miswired, or not passed
+  through to the host. It does not prove that the board lacks UART.
 - **Modules** - register custom hardware modules for modded boards (e.g. a BLE
   board instead of the accelerometer). Each module targets a HAL file in
   `src/watch/`; modules are persisted and can be enabled/disabled/removed.
@@ -60,6 +67,10 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   planning-estimate UI, but they do not yet alter firmware build flags or pin
   mappings. Thermistor and OPT3001 readings still require matching hardware;
   simulator diagnostics do not create sensor measurements.
+- **Diagnostics / Probe-Test** - offline simulator and shell diagnostics. A
+  connected UART is shown separately, but the diagnostic report does not query
+  physical hardware automatically. Use the explicit UART Jig path for shell
+  observations and an SWD probe for silicon-level debugging.
 - **Debug** - background activity log with Copy All / Export / Clear. Logs
   auto-scroll to the bottom and honor a configurable line limit.
 - **Bugs** - dedicated error/warning log, plus a **Generate bug report** button
@@ -75,6 +86,41 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   (app-only, adjustable update rate), settings save/export/import, source
   export, integrity (SHA-256 + release checksum verification), credits with
   code statistics, and license.
+
+## Advanced and Probe/Test safety
+
+Studio's normal mode is beginner-safe in the sense that it uses the simulator,
+Blocks editor, and normal UF2 workflow. It does not claim that simulated output
+is a physical test. Advanced mode is for experienced users and includes direct
+Rust editing and access to hardware-oriented workflows; review every command
+and target before using it.
+
+The watch USB bootloader drive exposes UF2/file-transfer information only. It
+can be used to copy a `.uf2` and inspect bootloader files, but it is not a
+serial console and does not replace the UART jig on A4/A2/GND.
+
+The UART shell separates commands into:
+
+- Read-only: `help`, `time`, `drift` without a value, `panic`, `events`, and
+  `optical` when available.
+- Mutating: `settime YYMMDDHHMMSS`, `drift N`, and `events clear`.
+
+Check the wiring and target before mutating the RTC, drift correction, or event
+ring. Power down while changing wires, use a 3.3 V-compatible adapter, cross
+TX and RX, and connect GND. Never apply 5 V UART signaling to the watch. Do not
+use a write timeout or missing port as evidence that the watch rejected a
+command or lacks UART.
+
+Probe/Test results must use distinct labels:
+
+- **PASS** - the check ran and passed its acceptance condition.
+- **FAIL** - the check ran and did not pass.
+- **NOT AVAILABLE** - required hardware or transport is unavailable.
+- **NOT TESTED** - no check was run and no conclusion is available.
+
+A simulated PASS is a software result only. It must not be reported as a
+physical hardware PASS. A disconnected or unavailable UART is NOT AVAILABLE,
+not FAIL; an unrun test is NOT TESTED.
 
 ## Terminal
 
