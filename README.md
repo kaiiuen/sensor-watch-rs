@@ -163,8 +163,7 @@ The `core` crate holds pure logic that is host-testable:
 
 ```
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
-# Current checkout note: this command is blocked by an existing test compile
-# error in core/src/uf2.rs: the vec! macro is not imported in the test module.
+# Current checkout: 60 tests pass in the core crate.
 ```
 
 Lint and format:
@@ -175,8 +174,9 @@ cargo clippy -p sensor-watch-core --target x86_64-pc-windows-msvc -- -D warnings
 cargo fmt --check
 
 The firmware clippy job is informational in CI; the core clippy job is the
-warnings-as-errors gate. The current host test command stops before producing a
-complete warning count because of the existing vec! macro error.
+warnings-as-errors gate. The Studio package currently does not complete a host
+test build because core/src/transfer.rs contains an invalid `?. >` token at
+line 104. This is separate from the passing core test command above.
 ```
 
 ## Status
@@ -210,27 +210,32 @@ complete warning count because of the existing vec! macro error.
       UART jig path for command execution.
 - [x] Optical command framing and validation exist as a protocol-only core module;
       no optical receiver integration is claimed.
-- [x] 72 real firmware faces are wired into the Studio host seam, which is
+- [x] 82 real firmware faces are wired into the Studio host seam, which is
       enabled by default by Studio's `real-faces` feature. The remaining firmware
       faces use the simulated engine; this is host coverage, not hardware
       coverage.
-- [ ] Component profiles for board-wide hardware presets (planning only).
+- [ ] Firmware component profiles for board-wide hardware presets. Studio has
+      persisted profile/configuration UI and planning estimates, but profiles do
+      not yet change firmware build flags or pin mappings.
 - [ ] Native USB CDC transfers (compile-safe scaffolding only; enabling it returns
       `UsbError::Unsupported`; see `docs/USB_CDC.md`).
 
 ## Status and validation snapshot
 
-- The source tree currently contains 206 `#[test]` attributes across core,
+- The source tree currently contains 208 `#[test]` attributes across core,
   firmware host seams, and Studio. This is a source count, not a passing test
   result.
-- The last host core test attempt is currently blocked before execution by the
-  existing `vec!` macro import error in `core/src/uf2.rs`.
-- Current validation also reports a Studio compile failure in pre-existing
-  `studio/src/persist.rs` / `studio/src/restore.rs` errors, plus 3 warnings
-  (including one `unused_mut`). `cargo fmt --check` is likewise blocked by the
-  same parse errors and reports an unrelated pre-existing module-order diff.
-- No complete repository warning total is claimed here: the failing commands do
-  not reach a clean full build.
+- The core host suite currently passes 60 tests. The firmware library target
+  runs 0 tests.
+- A full Studio package test currently stops at the syntax error in
+  `core/src/transfer.rs:104` (`?. >`); no Studio test result is claimed.
+- No complete repository warning total is claimed here because the full
+  workspace does not reach a clean build.
+
+This snapshot is for commit `e161722` (2026-08-11). Recent work added UART-jig
+transport, protocol-only optical and transfer foundations, panic-map and
+host-side recovery validation, and default-enabled Studio real-face coverage.
+These remain software/host capabilities; no on-silicon validation has been run.
 
 ## Documentation
 

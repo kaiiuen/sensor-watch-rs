@@ -39,12 +39,13 @@ cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 
 (On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin`.)
 
-The source tree currently contains 206 `#[test]` attributes across core,
-firmware host seams, and Studio. The host test command exercises date math,
-settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging, and
-other host seams, but the current checkout is blocked by the existing `vec!`
-macro import error in `core/src/uf2.rs`. Passing host tests provide confidence
-in pure logic; they do not validate physical hardware.
+The source tree currently contains 208 `#[test]` attributes across core,
+firmware host seams, and Studio. The core host command currently passes 60 tests
+covering date math, settings bit-packing, DateTime pack/unpack, UF2 encoding,
+event logging, transfer validation, optical protocol validation, and other pure
+logic. A full Studio package test currently stops at the invalid `?. >` token in
+`core/src/transfer.rs:104`. Passing host tests provide confidence in pure logic;
+they do not validate physical hardware.
 
 ## Building a UF2
 
@@ -67,9 +68,9 @@ cargo clippy -p sensor-watch-core -- -D warnings
 
 The firmware clippy job is informational because the full C-reference HAL API
 and many ported faces carry intentional dead-code and pedantic style lints. The
-`core` clippy job is the strict gate (`-D warnings`). This checkout's host test
-attempt is currently blocked by the existing `vec!` macro import error in
-`core/src/uf2.rs`, before a complete warning report is produced.
+`core` clippy job is the strict gate (`-D warnings`). A full Studio build/test
+attempt is currently blocked by the syntax error at `core/src/transfer.rs:104`;
+the core host test command itself passes.
 
 ## Formatting
 

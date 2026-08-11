@@ -35,7 +35,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   firmware's real 7-segment character set. Shows both the sim's face counter
   and the engine's actual loaded face for catching face-switching bugs. These
   diagnostics are simulated unless a UART jig is connected. With Studio's
-  default `real-faces` feature, the simulator runs **72 real firmware faces**
+  default `real-faces` feature, the simulator runs **82 real firmware faces**
   through the `real_face.rs` host seam (see below) instead of the hand-written
   engine; the remaining faces use `face_sim`. Host seam coverage does not
   constitute physical hardware testing.
@@ -56,9 +56,10 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Modules** - register custom hardware modules for modded boards (e.g. a BLE
   board instead of the accelerometer). Each module targets a HAL file in
   `src/watch/`; modules are persisted and can be enabled/disabled/removed.
-  Component profiles remain planning-only and are not implemented. Thermistor
-  and OPT3001 readings still require matching hardware; simulator diagnostics
-  do not create sensor measurements.
+  Component profiles are implemented in Studio as persisted configuration and
+  planning-estimate UI, but they do not yet alter firmware build flags or pin
+  mappings. Thermistor and OPT3001 readings still require matching hardware;
+  simulator diagnostics do not create sensor measurements.
 - **Debug** - background activity log with Copy All / Export / Clear. Logs
   auto-scroll to the bottom and honor a configurable line limit.
 - **Bugs** - dedicated error/warning log, plus a **Generate bug report** button
@@ -108,11 +109,11 @@ launches at a 480p (640x480) default window size and is resizable.
 
 ## Reusing the firmware logic
 
-The app depends on `sensor-watch-core` (from `../sensor-watch-rs/core`), which
-provides the pure logic (UF2 encoding, date math, settings bit-packing, SECDED
-ECC) that is host-testable and directly reusable by the app. The Build panel
-invokes the firmware's own `cargo build` and uses the core crate's
-`convert_to_uf2` to produce the final file.
+The app depends on `sensor-watch-core` (from `../core`), which provides the
+pure logic (UF2 encoding, date math, settings bit-packing, SECDED ECC, transfer
+validation, and optical protocol validation) that is host-testable and directly
+reusable by the app. The Build panel invokes the firmware's own `cargo build`
+and uses the core crate's `convert_to_uf2` to produce the final file.
 
 The Simulator can also run the **real firmware faces** through a host seam:
 `real_face.rs` drives the firmware's own `WatchFace` code against a mock HAL,
@@ -154,6 +155,7 @@ feature because it requires the firmware host lib to compile as a host
 - `integrity.rs` - SHA-256 hashing and release checksum verification
 - `sysstats.rs` - app resource usage
 - `watch_config.rs` - watch configuration (mirrors the firmware Settings register)
+- `components.rs` - persisted component/build profiles and planning estimates
 - `modules.rs` - custom hardware module registry
 - `drift.rs` - drift calibration
 - `fuzz.rs` - face-engine fuzz testing
