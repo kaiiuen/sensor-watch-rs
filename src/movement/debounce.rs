@@ -51,7 +51,7 @@ static mut ALARM: DebounceState = DebounceState::new();
 ///
 /// Returns `Some(event)` when a debounced state change is accepted, or `None`
 /// while the reading is still bouncing or unchanged.
-pub fn update(button: Button, raw_level: bool) -> Option<Event> {
+pub fn update(button: Button, raw_level: bool, fast_ticks: u16) -> Option<Event> {
     unsafe {
         let state = match button {
             Button::Light => &mut LIGHT,
@@ -83,7 +83,7 @@ pub fn update(button: Button, raw_level: bool) -> Option<Event> {
 
         if state.stable_level {
             // Rising edge: button pressed.
-            state.down_timestamp = 1;
+            state.down_timestamp = fast_ticks;
             state.long_reported = false;
             state.really_long_reported = false;
             Some(Event::Button(button, ButtonEvent::Down))

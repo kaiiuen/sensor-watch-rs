@@ -1836,6 +1836,7 @@ fn cb_light_btn_interrupt() {
     if let Some(ev) = debounce::update(
         Button::Light,
         watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
+        unsafe { FAST_TICKS },
     ) {
         if is_press(&ev) {
             stats::press_light();
@@ -1850,6 +1851,7 @@ fn cb_mode_btn_interrupt() {
     if let Some(ev) = debounce::update(
         Button::Mode,
         watch::gpio::get_pin_level(watch::extint::BTN_MODE),
+        unsafe { FAST_TICKS },
     ) {
         if is_press(&ev) {
             stats::press_mode();
@@ -1863,6 +1865,7 @@ fn cb_alarm_btn_interrupt() {
     if let Some(ev) = debounce::update(
         Button::Alarm,
         watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
+        unsafe { FAST_TICKS },
     ) {
         if is_press(&ev) {
             stats::press_alarm();
@@ -1947,6 +1950,7 @@ fn sample_buttons() {
     if let Some(ev) = debounce::update(
         Button::Light,
         watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
+        unsafe { FAST_TICKS },
     ) {
         if is_press(&ev) {
             stats::press_light();
@@ -1957,6 +1961,7 @@ fn sample_buttons() {
     if let Some(ev) = debounce::update(
         Button::Mode,
         watch::gpio::get_pin_level(watch::extint::BTN_MODE),
+        unsafe { FAST_TICKS },
     ) {
         if is_press(&ev) {
             stats::press_mode();
@@ -1966,6 +1971,7 @@ fn sample_buttons() {
     if let Some(ev) = debounce::update(
         Button::Alarm,
         watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
+        unsafe { FAST_TICKS },
     ) {
         if is_press(&ev) {
             stats::press_alarm();
