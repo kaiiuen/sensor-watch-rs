@@ -37,6 +37,9 @@
 // `src/host/watch/seam.rs`.
 #![allow(static_mut_refs)]
 
+#[cfg(all(feature = "defmt-log", not(target_arch = "arm")))]
+compile_error!("the `defmt-log` feature is only supported for the ARM firmware target");
+
 // ---------------------------------------------------------------------------
 // Firmware target: reuse the real, byte-identical module trees untouched.
 // ---------------------------------------------------------------------------

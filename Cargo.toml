@@ -39,6 +39,11 @@ cortex-m = { version = "0.7", features = ["critical-section-single-core"] }
 cortex-m-rt = { version = "0.7", features = ["device"] }
 atsaml22j = { version = "0.1.0", features = ["rt"] }
 
+# Optional SWD/RTT structured logging. These stay out of the default dependency
+# graph and are only linked for the explicitly enabled ARM firmware feature.
+defmt = { version = "0.3.10", optional = true }
+defmt-rtt = { version = "0.4.0", optional = true }
+
 # Math functions for no_std (used by the thermistor temperature calculation)
 libm = "0.2"
 critical-section = "1.2.0"
@@ -58,6 +63,13 @@ hostmock = ["dep:sensor-watch-core"]
 # and `#[global_allocator]` lang items. Without it (ARM firmware, host `cargo
 # test`), the lib stays `no_std` and provides its own minimal lang items.
 std = []
+# Reserve the native SAM L22 USB CDC application path. It is intentionally
+# disabled by default because USB raises the clock/power floor and the current
+# PAC does not expose the transfer-buffer SRAM needed by a complete stack.
+usb-cdc = []
+# Opt-in structured logs over the SWD probe's RTT channel. This is deliberately
+# not part of any default feature and is valid only for the ARM firmware target.
+defmt-log = ["dep:defmt", "dep:defmt-rtt"]
 
 [dev-dependencies]
 

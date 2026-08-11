@@ -33,20 +33,21 @@ impl<const N: usize> EventLog<N> {
         }
     }
 
-    fn push(&mut self, timestamp: u32, code: u8, data: u16) {
-        let sequence = self.sequence;
-        self.sequence = self.sequence.wrapping_add(1);
-        if N == 0 {
-            return;
-        }
-        self.entries[self.next] = Event {
-            sequence,
+    fn push(&mut self, timestamp: u32, code: u8, data: u16) -> Event {
+        let event = Event {
+            sequence: self.sequence,
             timestamp,
             code,
             data,
         };
+        self.sequence = self.sequence.wrapping_add(1);
+        if N == 0 {
+            return event;
+        }
+        self.entries[self.next] = event;
         self.next = (self.next + 1) % N;
         self.len = (self.len + 1).min(N);
+        event
     }
 
     fn clear(&mut self) {
@@ -81,7 +82,8 @@ pub enum EventCode {
 static mut LOG: EventLog<CAPACITY> = EventLog::new();
 
 pub fn record(timestamp: u32, code: EventCode, data: u16) {
-    critical_section::with(|_| unsafe { LOG.push(timestamp, code as u8, data) });
+    let event = critical_section::with(|_| unsafe { LOG.push(timestamp, code as u8, data) });
+    crate::watch::logging::event(event);
 }
 
 pub fn record_untimed(code: EventCode, data: u16) {
