@@ -3950,12 +3950,38 @@ impl StudioApp {
                 self.wiki.current = String::from("Wiki Home");
                 self.log.log("Wiki: home".to_string());
             }
+            ui.separator();
+            if ui
+                .add_enabled(
+                    self.wiki.current != "Wiki Home",
+                    egui::Button::new("Previous"),
+                )
+                .clicked()
+            {
+                self.wiki.previous_page();
+                self.log.log(format!("Wiki: opened {}", self.wiki.current));
+            }
+            if ui
+                .add_enabled(
+                    self.wiki.current
+                        != self
+                            .wiki
+                            .pages
+                            .last()
+                            .map(|page| page.title.as_str())
+                            .unwrap_or_default(),
+                    egui::Button::new("Next"),
+                )
+                .clicked()
+            {
+                self.wiki.next_page();
+                self.log.log(format!("Wiki: opened {}", self.wiki.current));
+            }
         });
         ui.separator();
 
-        // Browse repos section.
-        ui.label(egui::RichText::new("Browse repos").strong());
         ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Browse repos").strong());
             if ui.button("Sensor-Watch").clicked() {
                 let _ = webbrowser::open("https://github.com/joeycastillo/Sensor-Watch");
             }
@@ -3974,100 +4000,113 @@ impl StudioApp {
         });
         ui.separator();
 
-        egui::ScrollArea::horizontal().show(ui, |ui| {
-            ui.horizontal(|ui| {
-                // Left pane: search box and page list.
-                ui.vertical(|ui| {
-                    ui.set_width(240.0);
-                    ui.add(
-                        egui::TextEdit::singleline(&mut self.wiki.search)
-                            .hint_text("Search pages...")
-                            .desired_width(220.0),
-                    );
-                    ui.add_space(4.0);
-                    let query = self.wiki.search.to_lowercase();
-                    let mut clicked: Option<String> = None;
-                    egui::ScrollArea::vertical()
-                        .max_height(ui.available_height())
-                        .show(ui, |ui| {
-                            for page in &self.wiki.pages {
-                                if !query.is_empty() && !page.title.to_lowercase().contains(&query)
-                                {
-                                    continue;
+        // Allocate the complete remaining central-panel area before creating
+        // the panes, so both scroll areas can use its full height.
+        let available = ui.available_size();
+        ui.allocate_ui_with_layout(
+            available,
+            egui::Layout::left_to_right(egui::Align::TOP),
+            |ui| {
+                egui::SidePanel::left("wiki_pages")
+                    .resizable(true)
+                    .default_width((available.x * 0.28).clamp(200.0, 320.0))
+                    .width_range(180.0..=available.x * 0.6)
+                    .show_inside(ui, |ui| {
+                        ui.set_min_size(ui.available_size());
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.wiki.search)
+                                .hint_text("Search pages...")
+                                .desired_width(f32::INFINITY),
+                        );
+                        ui.add_space(4.0);
+                        let query = self.wiki.search.to_lowercase();
+                        let mut clicked: Option<String> = None;
+                        let mut visible_pages = 0;
+                        egui::ScrollArea::vertical()
+                            .id_source("wiki_page_list")
+                            .auto_shrink([false, false])
+                            .max_height(ui.available_height())
+                            .show(ui, |ui| {
+                                for page in &self.wiki.pages {
+                                    if !query.is_empty()
+                                        && !page.title.to_lowercase().contains(&query)
+                                    {
+                                        continue;
+                                    }
+                                    visible_pages += 1;
+                                    if ui
+                                        .selectable_label(
+                                            self.wiki.current == page.title,
+                                            &page.title,
+                                        )
+                                        .clicked()
+                                    {
+                                        clicked = Some(page.title.clone());
+                                    }
                                 }
-                                if ui
-                                    .selectable_label(self.wiki.current == page.title, &page.title)
-                                    .clicked()
-                                {
-                                    clicked = Some(page.title.clone());
+                                if visible_pages == 0 {
+                                    ui.weak("No wiki pages match your search.");
                                 }
-                            }
-                        });
-                    if let Some(title) = clicked {
-                        self.wiki.navigate(&title);
-                        self.log.log(format!("Wiki: opened {}", title));
-                    }
-                });
-                ui.separator();
+                            });
+                        if let Some(title) = clicked {
+                            self.wiki.navigate(&title);
+                            self.log.log(format!("Wiki: opened {}", title));
+                        }
+                    });
 
-                // Right pane: the selected page.
-                ui.vertical(|ui| {
+                egui::CentralPanel::default().show_inside(ui, |ui| {
+                    ui.set_min_size(ui.available_size());
                     if let Some(page) = self.wiki.current_page().map(|p| p.title.clone()) {
                         let body = self
                             .wiki
                             .current_page()
                             .map(|p| p.body.clone())
                             .unwrap_or_default();
+                        let links = self
+                            .wiki
+                            .current_page()
+                            .map(|p| p.links.clone())
+                            .unwrap_or_default();
                         ui.heading(&page);
                         ui.separator();
                         egui::ScrollArea::vertical()
+                            .id_source("wiki_article")
+                            .auto_shrink([false, false])
                             .max_height(ui.available_height())
                             .show(ui, |ui| {
-                                // Render the body, splitting on `[[Page]]` tokens.
                                 let mut rest = body.as_str();
                                 loop {
                                     let start = rest.find("[[");
                                     let text = match start {
-                                        Some(i) => &rest[..i],
+                                        Some(index) => &rest[..index],
                                         None => rest,
                                     };
                                     for line in text.lines() {
-                                        ui.label(line.trim());
+                                        ui.add(egui::Label::new(line.trim()).wrap(true));
                                     }
                                     match start {
-                                        Some(i) => {
-                                            let rest_after = &rest[i + 2..];
+                                        Some(index) => {
+                                            let rest_after = &rest[index + 2..];
                                             if let Some(end) = rest_after.find("]]") {
                                                 let target = &rest_after[..end];
-                                                let label = target;
-                                                if ui.button(label).clicked() {
+                                                if ui.button(target).clicked() {
                                                     self.wiki.navigate(target);
                                                     self.log
                                                         .log(format!("Wiki: opened {}", target));
                                                 }
                                                 rest = &rest_after[end + 2..];
                                             } else {
-                                                // Unterminated token; show the rest verbatim.
-                                                for line in rest_after.lines() {
-                                                    ui.label(line.trim());
-                                                }
+                                                ui.add(egui::Label::new(rest_after).wrap(true));
                                                 break;
                                             }
                                         }
                                         None => break,
                                     }
                                 }
-                                // Render the explicit cross-links from the page.
-                                let links = self
-                                    .wiki
-                                    .current_page()
-                                    .map(|p| p.links.clone())
-                                    .unwrap_or_default();
                                 if !links.is_empty() {
                                     ui.add_space(8.0);
                                     ui.separator();
                                     ui.strong("Related pages");
-                                    ui.add_space(2.0);
                                     ui.horizontal_wrapped(|ui| {
                                         for link in &links {
                                             if ui.button(link).clicked() {
@@ -4079,11 +4118,15 @@ impl StudioApp {
                                 }
                             });
                     } else {
-                        ui.weak("(no page selected)");
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(ui.available_height() * 0.35);
+                            ui.heading("No wiki page selected");
+                            ui.label("Choose a page from the list or clear the search filter.");
+                        });
                     }
                 });
-            });
-        });
+            },
+        );
     }
 
     /// The simulator panel: render the watch and handle its buttons.

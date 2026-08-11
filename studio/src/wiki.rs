@@ -62,6 +62,36 @@ impl Wiki {
             self.current = prev;
         }
     }
+
+    /// Navigate to the previous page in the curated page order.
+    pub fn previous_page(&mut self) {
+        let Some(index) = self
+            .pages
+            .iter()
+            .position(|page| page.title == self.current)
+        else {
+            return;
+        };
+        if index > 0 {
+            let title = self.pages[index - 1].title.clone();
+            self.navigate(&title);
+        }
+    }
+
+    /// Navigate to the next page in the curated page order.
+    pub fn next_page(&mut self) {
+        let Some(index) = self
+            .pages
+            .iter()
+            .position(|page| page.title == self.current)
+        else {
+            return;
+        };
+        if let Some(page) = self.pages.get(index + 1) {
+            let title = page.title.clone();
+            self.navigate(&title);
+        }
+    }
 }
 
 /// Build the curated reference pages.
