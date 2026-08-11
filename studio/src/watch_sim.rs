@@ -224,8 +224,8 @@ impl Default for CasioF91W {
 
 /// Converts a count of days since the Unix epoch into a civil (year, month, day).
 /// Uses Howard Hinnant's `civil_from_days` algorithm.
-pub fn civil_from_days(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
+pub(crate) fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
     let doe = (z - era * 146_097) as u64; // [0, 146096]
     let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365; // [0, 399]
@@ -245,7 +245,7 @@ fn civil_day_of_month(days: i64) -> u32 {
 
 /// Converts a civil (year, month, day) into a count of days since the Unix
 /// epoch. Inverse of `civil_from_days` (Howard Hinnant's algorithm).
-fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
+pub(crate) fn days_from_civil(y: i32, m: u32, d: u32) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
     let yoe = (y - era * 400) as u64; // [0, 399]

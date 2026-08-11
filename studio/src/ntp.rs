@@ -25,6 +25,25 @@ pub const SERVERS: [(&str, &str); 8] = [
     ("Asia Pool", "asia.pool.ntp.org"),
 ];
 
+/// Formats the exact shell command for setting a UTC Unix timestamp.
+///
+/// The shell accepts `settime YYMMDDHHMMSS`; callers should send it at the
+/// displayed boundary through the UART jig/debug pads.
+pub fn settime_command(unix_seconds: u64) -> String {
+    let days = (unix_seconds / 86_400) as i64;
+    let rem = unix_seconds % 86_400;
+    let (year, month, day) = crate::watch_sim::civil_from_days(days);
+    format!(
+        "settime {:02}{:02}{:02}{:02}{:02}{:02}",
+        (year.rem_euclid(100)) as u32,
+        month,
+        day,
+        rem / 3_600,
+        (rem / 60) % 60,
+        rem % 60
+    )
+}
+
 /// The result of an NTP query.
 pub struct NtpResult {
     /// The server's reported UTC time (seconds since the Unix epoch).
@@ -153,4 +172,19 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
         ping_ms,
         offset_secs,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_settime_command_at_boundary() {
+        assert_eq!(settime_command(1_672_531_200), "settime 230101000000");
+    }
+
+    #[test]
+    fn formats_two_digit_year() {
+        assert_eq!(settime_command(1_704_067_200), "settime 240101000000");
+    }
 }
