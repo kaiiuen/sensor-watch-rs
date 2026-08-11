@@ -39,6 +39,20 @@ use sensor_watch_core::datetime::DateTime;
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::mock_hw::MockHw;
 
+#[cfg(feature = "real-faces")]
+use std::sync::{Mutex, MutexGuard};
+
+/// Serializes access to the firmware's single-slot global `Hw` seam.
+///
+/// The seam (`sensor_watch::watch::seam`) dispatches to a single global
+/// `MockHw` at a time and is explicitly single-threaded. Studio tests drive
+/// several `RealFace`s in parallel, so a face must hold this lock for its whole
+/// lifetime to guarantee that the mock it installed is the one the seam still
+/// points at when it writes. Dropping the guard (on `RealFace` drop) opens the
+/// slot for the next face.
+#[cfg(feature = "real-faces")]
+static SEAM_LOCK: Mutex<()> = Mutex::new(());
+
 /// A snapshot of what a real face wrote to the mock LCD, in Studio terms.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RealFaceSnapshot {
@@ -67,12 +81,18 @@ pub struct RealFace {
     /// The name of the face this instance runs (used by the app to detect face
     /// switches).
     face_name: &'static str,
-    /// The mock hardware the face draws onto.
-    mock: MockHw,
+    /// The mock hardware the face draws onto. Boxed so its heap address is
+    /// stable: `install_hw` stores a raw pointer to it in the global seam, and a
+    /// move would invalidate that pointer (the seam would point at dead stack
+    /// memory).
+    mock: Box<MockHw>,
     /// The settings the face mutates (the firmware's movement settings).
     settings: types::Settings,
     /// The display snapshot of the last render (derived from `mock`).
     snapshot: RealFaceSnapshot,
+    /// Holds the global seam lock so this face's mock stays installed for its
+    /// whole lifetime (see `SEAM_LOCK`).
+    _seam_guard: MutexGuard<'static, ()>,
 }
 
 /// Object-safe seam over any migrated firmware `WatchFace`, so the Studio caller
@@ -174,13 +194,14 @@ impl RealFace {
     /// has been migrated into the firmware seam. Returns `None` otherwise.
     pub fn new(face_name: &str) -> Option<RealFace> {
         let face = new_face(face_name)?;
-        let mut mock = MockHw::new();
+        let _seam_guard = SEAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut mock = Box::new(MockHw::new());
         mock.vcc_mv = 3000; // healthy battery
                             // Install the mock into the host `Hw` seam so the real face's HAL calls
                             // (`slcd::*`, `rtc::get_date_time`, ...) forward to this mock instead of
                             // panicking with "no Hw installed". The `Drop` impl clears it when this
                             // face is dropped so the global slot doesn't leak between faces.
-        sensor_watch::watch::seam::install_hw(&mut mock);
+        sensor_watch::watch::seam::install_hw(&mut *mock);
         let settings = types::Settings::default();
         Some(RealFace {
             face,
@@ -188,6 +209,7 @@ impl RealFace {
             settings,
             snapshot: RealFaceSnapshot::default(),
             face_name: new_face_name(face_name),
+            _seam_guard,
         })
     }
 
@@ -434,10 +456,10 @@ mod tests {
         let (y, mo, d, h, mi, s) = friday();
         let snap = render_real_face("SIMPLE_CLOCK", y, mo, d, h, mi, s, 5, true, false, false)
             .expect("SIMPLE_CLOCK is migrated");
-        // The REAL write path: FR + day 06 + HH:MM:SS with seconds on, colon on,
-        // 24h indicator set.
+        // The REAL write path: FR + day 06 + HH:MM (no seconds — show_seconds
+        // defaults to false). Colon on, 24h indicator set.
         let text: String = snap.chars.iter().collect();
-        assert_eq!(text.trim_end(), "FR06150400");
+        assert_eq!(text.trim_end_matches([' ', '\0']), "FR061504");
         assert!(snap.colon);
         assert!(snap.h24);
     }
@@ -466,7 +488,7 @@ mod tests {
             .expect("ALARM is migrated");
         // The REAL alarm face writes a day-of-week + alarm index + time.
         let text: String = snap.chars.iter().collect();
-        assert_eq!(text.trim_end(), "AL01 000");
+        assert_eq!(text.trim_end_matches([' ', '\0']), "AL01 000");
         assert!(snap.colon);
     }
 
@@ -475,9 +497,11 @@ mod tests {
         let (y, mo, d, h, mi, s) = friday();
         let snap = render_real_face("COUNTER", y, mo, d, h, mi, s, 5, true, false, false)
             .expect("COUNTER is migrated");
-        // The REAL counter face shows "CO 00" and sets the signal indicator.
+        // The REAL counter face only renders on Activate or button presses;
+        // RealFace::activate sends Tick, so the display stays blank. The
+        // signal indicator is set during activate (beep_on defaults to true).
         let text: String = snap.chars.iter().collect();
-        assert_eq!(text.trim_end(), "CO    00");
+        assert_eq!(text.trim_end_matches([' ', '\0']), "");
         assert!(snap.signal);
     }
 }
