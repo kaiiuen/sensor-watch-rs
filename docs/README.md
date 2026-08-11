@@ -14,7 +14,7 @@ rewrite in Rust.
 | [TESTING.md](TESTING.md) | The hardware test plan: power, RTC accuracy, flash wear, faces, faults, and peripherals. |
 | [BACKBURNER.md](BACKBURNER.md) | Ideas captured for later, plus a record of recently implemented items. |
 | [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) | How to talk to the board: the USB-is-file-transfer-only constraint, the ROM UF2 bootloader, the UART jig, and the SWD probe. |
-| [MODULES.md](MODULES.md) | Symbol-by-symbol module reference. |
+| [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) | Optional on-silicon debugging via SWD / probe-rs for developers with bench hardware. |
 
 ## Companion app
 
