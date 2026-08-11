@@ -10,10 +10,15 @@
 
 use alloc::vec::Vec;
 
+/// The number of bytes in one UF2 block.
+pub const UF2_BLOCK_SIZE: usize = 512;
+/// The number of payload bytes in one UF2 block.
+pub const UF2_PAYLOAD_SIZE: usize = 256;
+
 /// UF2 magic numbers.
-const UF2_MAGIC_START0: u32 = 0x0A32_4655; // "UF2\n"
-const UF2_MAGIC_START1: u32 = 0x9E5D_5157;
-const UF2_MAGIC_END: u32 = 0x0AB1_6F30;
+pub const UF2_MAGIC_START0: u32 = 0x0A32_4655; // "UF2\n"
+pub const UF2_MAGIC_START1: u32 = 0x9E5D_5157;
+pub const UF2_MAGIC_END: u32 = 0x0AB1_6F30;
 
 /// The SAM L22 family ID (used by the bootloader to verify the target).
 pub const SAML22_FAMILY_ID: u32 = 0x2C29_472F;
@@ -22,9 +27,67 @@ pub const SAML22_FAMILY_ID: u32 = 0x2C29_472F;
 pub const APP_START_ADDR: u32 = 0x2000;
 
 /// The size of each UF2 data block (256 bytes of payload).
-const BLOCK_SIZE: usize = 256;
+const BLOCK_SIZE: usize = UF2_PAYLOAD_SIZE;
 /// The total size of each UF2 block including header and footer (512 bytes).
-const TOTAL_BLOCK_SIZE: usize = 512;
+const TOTAL_BLOCK_SIZE: usize = UF2_BLOCK_SIZE;
+
+/// A validated UF2 image and its reconstructed, padded payload.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ValidatedUf2 {
+    pub image: Vec<u8>,
+    pub block_count: usize,
+}
+
+/// Validates UF2 framing, block ordering, target addresses, family metadata,
+/// and reconstructs the payload. The final block is returned with its normal
+/// 256-byte UF2 padding because the format does not store the original length.
+pub fn validate(uf2: &[u8]) -> Result<ValidatedUf2, &'static str> {
+    if uf2.is_empty() || !uf2.len().is_multiple_of(UF2_BLOCK_SIZE) {
+        return Err("UF2 size is not a non-empty multiple of 512 bytes");
+    }
+    let block_count = uf2.len() / UF2_BLOCK_SIZE;
+    let mut image = Vec::with_capacity(block_count * UF2_PAYLOAD_SIZE);
+
+    for blockno in 0..block_count {
+        let block = &uf2[blockno * UF2_BLOCK_SIZE..(blockno + 1) * UF2_BLOCK_SIZE];
+        let word = |offset: usize| -> u32 {
+            u32::from_le_bytes(block[offset..offset + 4].try_into().unwrap())
+        };
+        if word(0) != UF2_MAGIC_START0 || word(4) != UF2_MAGIC_START1 {
+            return Err("UF2 start magic is invalid");
+        }
+        if word(8) & 0x2000 == 0 {
+            return Err("UF2 family-ID flag is missing");
+        }
+        if word(12) != APP_START_ADDR + (blockno as u32 * UF2_PAYLOAD_SIZE as u32)
+            || word(16) != UF2_PAYLOAD_SIZE as u32
+            || word(20) != blockno as u32
+            || word(24) != block_count as u32
+            || word(28) != SAML22_FAMILY_ID
+        {
+            return Err("UF2 block metadata does not match the Sensor-Watch board");
+        }
+        if word(508) != UF2_MAGIC_END {
+            return Err("UF2 end magic is invalid");
+        }
+        image.extend_from_slice(&block[32..32 + UF2_PAYLOAD_SIZE]);
+    }
+
+    Ok(ValidatedUf2 { image, block_count })
+}
+
+/// Computes the CRC-32/IEEE used by the firmware integrity check.
+pub fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFF;
+    for &byte in bytes {
+        crc ^= byte as u32;
+        for _ in 0..8 {
+            let mask = (crc & 1).wrapping_neg();
+            crc = (crc >> 1) ^ (0xEDB8_8320 & mask);
+        }
+    }
+    !crc
+}
 
 /// Converts a raw firmware image into a UF2 file.
 ///
@@ -128,5 +191,34 @@ mod tests {
         let uf2 = convert_to_uf2(&image);
         // Payload starts at byte 32.
         assert_eq!(&uf2[32..288], &image[..]);
+    }
+
+    #[test]
+    fn validate_round_trips_and_checks_metadata() {
+        let image = (0..300).map(|n| n as u8).collect::<Vec<_>>();
+        let uf2 = convert_to_uf2(&image);
+        let parsed = validate(&uf2).unwrap();
+        assert_eq!(parsed.block_count, 2);
+        assert_eq!(&parsed.image[..300], &image[..]);
+        assert_eq!(&parsed.image[300..], &[0; 212]);
+    }
+
+    #[test]
+    fn validate_rejects_corruption_and_wrong_board() {
+        let mut uf2 = convert_to_uf2(&[0x5A; 10]);
+        uf2[13] = 0;
+        assert_eq!(
+            validate(&uf2),
+            Err("UF2 block metadata does not match the Sensor-Watch board")
+        );
+
+        let mut uf2 = convert_to_uf2(&[0x5A; 10]);
+        uf2[508] ^= 1;
+        assert_eq!(validate(&uf2), Err("UF2 end magic is invalid"));
+    }
+
+    #[test]
+    fn crc32_matches_ieee_vector() {
+        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }
 }

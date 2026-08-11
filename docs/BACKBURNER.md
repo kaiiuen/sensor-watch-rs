@@ -84,11 +84,23 @@ crystal stops, the RTC switches to the internal oscillator.
 
 ### USB / serial shell
 
-A command shell so the watch can receive commands from a PC.
+A shell command so the watch can receive commands from a PC.
 
 **Status:** Done. `shell.rs` provides a minimal command interpreter over UART
 (`time`, `settime YYMMDDHHMMSS`, `drift N`, `help`). Note the shell is only
 reachable over the UART jig, not over USB. See `docs/HARDWARE_ACCESS.md`.
+
+### UF2 integrity and recovery staging
+
+A host-side safety layer for checking firmware artifacts before USB flashing,
+recording board metadata and CRC/SHA256 values, preserving a known-good UF2,
+and staging an explicit rollback copy.
+
+**Status:** Done for software-only recovery. `scripts/verify-uf2.py` validates
+UF2 framing, SAM L22 metadata, application size, CRC32, and SHA256. Its
+`backup` and `rollback` commands are non-destructive staging helpers. This does
+not provide a golden-image bootloader, true dual boot, automatic device-side
+rollback, or any replacement of the ROM bootloader.
 
 ---
 
@@ -148,7 +160,8 @@ Polish and harden the deployment story around the UF2 bootloader:
 - Let the companion app orchestrate a multi-step flash, verify, and reboot loop.
 - Detect a stuck or failed flash and fall back cleanly to a safe state.
 
-**Status:** Backburner. The Studio app already assembles and flashes `.uf2`
-files, but the orchestrating tooling and fail-safe recovery loops are not built.
-Firmware updates can be driven over the UART shell if a network or OTA path is
-ever desired.
+**Status:** Partially done. `scripts/verify-uf2.py` now provides host-side
+validation, known-good backup preservation, manifest output, and explicit
+rollback staging. Studio orchestration, USB-device detection, reboot
+verification, and automatic fail-safe loops remain unimplemented. There is no
+true golden-image bootloader or device-side rollback support.
