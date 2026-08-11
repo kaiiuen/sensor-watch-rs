@@ -24,15 +24,32 @@ pub struct RtcCalibrationSettings {
 }
 
 impl Default for RtcCalibrationSettings {
-    fn default() -> Self { Self { version: 0, base_ppm: 0.0, temperature_coefficient_ppm_per_c: 0.0, reference_temperature_c: 25.0 } }
+    fn default() -> Self {
+        Self {
+            version: 0,
+            base_ppm: 0.0,
+            temperature_coefficient_ppm_per_c: 0.0,
+            reference_temperature_c: 25.0,
+        }
+    }
 }
 
 impl RtcCalibrationSettings {
-    pub fn enabled(&self) -> bool { self.version == sensor_watch_core::rtc_calibration::CALIBRATION_VERSION }
+    pub fn enabled(&self) -> bool {
+        self.version == sensor_watch_core::rtc_calibration::CALIBRATION_VERSION
+    }
     pub fn clamp_values(&mut self) {
-        let c = sensor_watch_core::rtc_calibration::RtcCalibration::new(self.base_ppm, self.temperature_coefficient_ppm_per_c, self.reference_temperature_c);
-        self.base_ppm = c.base_ppm; self.temperature_coefficient_ppm_per_c = c.temperature_coefficient_ppm_per_c; self.reference_temperature_c = c.reference_temperature_c;
-        if self.enabled() { self.version = sensor_watch_core::rtc_calibration::CALIBRATION_VERSION; }
+        let c = sensor_watch_core::rtc_calibration::RtcCalibration::new(
+            self.base_ppm,
+            self.temperature_coefficient_ppm_per_c,
+            self.reference_temperature_c,
+        );
+        self.base_ppm = c.base_ppm;
+        self.temperature_coefficient_ppm_per_c = c.temperature_coefficient_ppm_per_c;
+        self.reference_temperature_c = c.reference_temperature_c;
+        if self.enabled() {
+            self.version = sensor_watch_core::rtc_calibration::CALIBRATION_VERSION;
+        }
     }
 }
 
@@ -156,10 +173,14 @@ impl AppSettings {
         }
         let mut calibration = self.rtc_calibration.clone();
         calibration.clamp_values();
-        if calibration.enabled() != (self.rtc_calibration.version == sensor_watch_core::rtc_calibration::CALIBRATION_VERSION)
+        if calibration.enabled()
+            != (self.rtc_calibration.version
+                == sensor_watch_core::rtc_calibration::CALIBRATION_VERSION)
             || calibration.base_ppm != self.rtc_calibration.base_ppm
-            || calibration.temperature_coefficient_ppm_per_c != self.rtc_calibration.temperature_coefficient_ppm_per_c
-            || calibration.reference_temperature_c != self.rtc_calibration.reference_temperature_c {
+            || calibration.temperature_coefficient_ppm_per_c
+                != self.rtc_calibration.temperature_coefficient_ppm_per_c
+            || calibration.reference_temperature_c != self.rtc_calibration.reference_temperature_c
+        {
             return Err("RTC calibration contains out-of-range values".into());
         }
         if self.line_limit == 0 || self.line_limit > 10_000 {

@@ -32,8 +32,10 @@
 
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{
-    alarm, countdown, counter, flashlight, interval, invaders, ish, kitchen_conversions, lander,
-    lightmeter, lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
+    alarm, astronomy, close_enough, countdown, counter, day_night_percentage, day_one, deadline,
+    decimal_time, flashlight, french_revolutionary, frequency_correction, hello_there, interval,
+    invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter, lis2dw_logging,
+    mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
     minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
     planetary_hours, planetary_time, preferences, probability, pulsometer, randonaut, ratemeter,
     repetition_minute, rpn_calculator, rpn_calculator_alt, sailing, save_load, set_time,
@@ -145,6 +147,26 @@ macro_rules! impl_real_face_trait {
     };
 }
 
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(astronomy::AstronomyFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(close_enough::CloseEnoughClockFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(day_night_percentage::DayNightPercentageFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(day_one::DayOneFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(deadline::DeadlineFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(decimal_time::DecimalTimeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(french_revolutionary::FrenchRevolutionaryFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(frequency_correction::FrequencyCorrectionFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(hello_there::HelloThereFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(ke_decimal_time::KeDecimalTimeFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(interval::IntervalFace);
 #[cfg(feature = "real-faces")]
@@ -523,6 +545,16 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "TIMER" => Some(Box::new(timer::TimerFace::new())),
         "COUNTDOWN" => Some(Box::new(countdown::CountdownFace::new_static())),
         "FLASHLIGHT" => Some(Box::new(flashlight::FlashlightFace::new_static())),
+        "ASTRONOMY" => Some(Box::new(astronomy::AstronomyFace::new_static())),
+        "CLOSE_ENOUGH" => Some(Box::new(close_enough::CloseEnoughClockFace::new_static())),
+        "DAY_NIGHT_PERCENTAGE" => Some(Box::new(day_night_percentage::DayNightPercentageFace::new_static())),
+        "DAY_ONE" => Some(Box::new(day_one::DayOneFace::new_static())),
+        "DEADLINE" => Some(Box::new(deadline::DeadlineFace::new_static())),
+        "DECIMAL_TIME" => Some(Box::new(decimal_time::DecimalTimeFace::new_static())),
+        "FRENCH_REVOLUTIONARY" => Some(Box::new(french_revolutionary::FrenchRevolutionaryFace::new_static())),
+        "FREQUENCY_CORRECTION" => Some(Box::new(frequency_correction::FrequencyCorrectionFace::new_static())),
+        "HELLO_THERE" => Some(Box::new(hello_there::HelloThereFace::new_static())),
+        "KE_DECIMAL_TIME" => Some(Box::new(ke_decimal_time::KeDecimalTimeFace::new_static())),
         "INTERVAL" => Some(Box::new(interval::IntervalFace::new_static())),
         "INVADERS" => Some(Box::new(invaders::InvadersFace::new_static())),
         "ISH" => Some(Box::new(ish::IshFace::new_static())),
@@ -625,6 +657,16 @@ fn new_face_name(face_name: &str) -> &'static str {
         "TIMER" => "TIMER",
         "COUNTDOWN" => "COUNTDOWN",
         "FLASHLIGHT" => "FLASHLIGHT",
+        "ASTRONOMY" => "ASTRONOMY",
+        "CLOSE_ENOUGH" => "CLOSE_ENOUGH",
+        "DAY_NIGHT_PERCENTAGE" => "DAY_NIGHT_PERCENTAGE",
+        "DAY_ONE" => "DAY_ONE",
+        "DEADLINE" => "DEADLINE",
+        "DECIMAL_TIME" => "DECIMAL_TIME",
+        "FRENCH_REVOLUTIONARY" => "FRENCH_REVOLUTIONARY",
+        "FREQUENCY_CORRECTION" => "FREQUENCY_CORRECTION",
+        "HELLO_THERE" => "HELLO_THERE",
+        "KE_DECIMAL_TIME" => "KE_DECIMAL_TIME",
         "INTERVAL" => "INTERVAL",
         "INVADERS" => "INVADERS",
         "ISH" => "ISH",
@@ -1010,6 +1052,25 @@ mod tests {
         let text: String = snap.chars.iter().collect();
         assert_eq!(text.trim_end_matches([' ', '\0']), "AL01 000");
         assert!(snap.colon);
+    }
+
+    #[test]
+    fn newly_migrated_faces_run_through_host_seam() {
+        for name in [
+            "ASTRONOMY",
+            "CLOSE_ENOUGH",
+            "DAY_NIGHT_PERCENTAGE",
+            "DAY_ONE",
+            "DEADLINE",
+            "DECIMAL_TIME",
+            "FRENCH_REVOLUTIONARY",
+            "FREQUENCY_CORRECTION",
+            "HELLO_THERE",
+            "KE_DECIMAL_TIME",
+        ] {
+            let snapshot = render_real_face(name, 2023, 1, 6, 15, 4, 0, 5, true, false, false);
+            assert!(snapshot.is_some(), "{name} should render through host seam");
+        }
     }
 
     #[test]

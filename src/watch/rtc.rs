@@ -5,8 +5,8 @@
 //! and wake-from-sleep behavior.
 
 use crate::watch::timeout::wait_until;
-use atsaml22j::rtc::mode2::ctrla::{Modeselect, Prescalerselect};
 use atsaml22j::rtc::Mode2;
+use atsaml22j::rtc::mode2::ctrla::{Modeselect, Prescalerselect};
 
 /// Returns a reference to the RTC peripheral's MODE2 register block.
 ///
@@ -473,9 +473,5 @@ pub fn freqcorr_write(value: i16, sign: i16) {
 pub fn freqcorr_read() -> i16 {
     let data = rtc().freqcorr().read().bits() as i16;
     let value = data & 0x7F;
-    if data & 0x80 != 0 {
-        -value
-    } else {
-        value
-    }
+    if data & 0x80 != 0 { -value } else { value }
 }
