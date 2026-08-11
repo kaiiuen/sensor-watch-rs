@@ -17,9 +17,10 @@ pub mod event_log;
 // `Event`/`Button`/`Indicator` types used by face logic.
 pub mod mock_hw;
 pub mod optical;
+pub mod rtc_calibration;
 pub mod safety;
 pub mod settings;
-pub mod rtc_calibration;
+pub mod transfer;
 pub mod uf2;
 pub mod utility;
 

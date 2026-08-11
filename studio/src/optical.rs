@@ -4,7 +4,7 @@
 //! ADC, serial port, or watch hardware.
 
 use sensor_watch_core::optical::{
-    self, AUTH_TAG_LEN, AuthenticationHook, CommandType, Decoder, MAX_FRAME_LEN,
+    self, AuthenticationHook, CommandType, Decoder, AUTH_TAG_LEN, MAX_FRAME_LEN,
 };
 
 const PREVIEW_AUTH_TAG: [u8; AUTH_TAG_LEN] = [0xC3; AUTH_TAG_LEN];
