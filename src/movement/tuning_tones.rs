@@ -92,7 +92,7 @@ impl TuningTonesFace {
     fn update_buzzer(&self) {
         if self.playing {
             watch::buzzer::set_buzzer_off();
-            watch::buzzer::set_buzzer_period(
+            let _ = watch::buzzer::set_buzzer_period(
                 crate::watch::buzzer::NOTE_PERIODS[NOTES[self.note_ind].note as usize] as u32,
             );
             watch::buzzer::set_buzzer_on();

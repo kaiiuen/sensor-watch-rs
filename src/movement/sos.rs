@@ -106,7 +106,7 @@ impl SosFace {
 
 /// Turns the buzzer on at a fixed tone.
 fn buzzer_on() {
-    watch::buzzer::set_buzzer_period(watch::buzzer::NOTE_PERIODS[Note::C6 as usize] as u32);
+    let _ = watch::buzzer::set_buzzer_period(watch::buzzer::NOTE_PERIODS[Note::C6 as usize] as u32);
     watch::buzzer::set_buzzer_on();
 }
 

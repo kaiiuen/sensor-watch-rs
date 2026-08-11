@@ -4,10 +4,10 @@
 //! init from the Sensor-Watch reference. This drives the 10-digit segment LCD
 //! plus the indicator segments and colon.
 
+use atsaml22j::slcd::RegisterBlock as Slcd;
 use atsaml22j::slcd::ctrla::{
     Biasselect, Dutyselect, Prescselect, Prfselect, Rrfselect, Wmodselect,
 };
-use atsaml22j::slcd::RegisterBlock as Slcd;
 
 /// Returns a reference to the SLCD peripheral register block.
 fn slcd() -> &'static Slcd {

@@ -961,7 +961,7 @@ pub fn play_note(note: BuzzerNote, priority: u8) {
             _ => BuzzerPriority::Alarm,
         };
     }
-    buzzer::set_buzzer_period(crate::watch::buzzer::NOTE_PERIODS[note as usize] as u32);
+    let _ = buzzer::set_buzzer_period(crate::watch::buzzer::NOTE_PERIODS[note as usize] as u32);
     buzzer::set_buzzer_on();
 }
 
@@ -1024,19 +1024,19 @@ pub fn get_utc_timestamp() -> u32 {
 
 /// Sets the UTC date/time and reschedules alarms.
 pub fn set_utc_date_time(date_time: DateTime) {
-    rtc::set_date_time(date_time);
+    let _ = rtc::set_date_time(date_time);
 }
 
 /// Sets the local date/time (converts back to UTC using the configured zone).
 pub fn set_local_date_time(date_time: DateTime) {
     let offset = get_current_timezone_offset();
     let utc = utility::date_time_convert_zone(date_time, (offset * 60) as u32, 0);
-    rtc::set_date_time(utc);
+    let _ = rtc::set_date_time(utc);
 }
 
 /// Sets the UTC timestamp (seconds since 1970).
 pub fn set_utc_timestamp(timestamp: u32) {
-    rtc::set_date_time(utility::date_time_from_unix_time(timestamp, 0));
+    let _ = rtc::set_date_time(utility::date_time_from_unix_time(timestamp, 0));
 }
 
 /// Returns the current time zone index.

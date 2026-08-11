@@ -4,8 +4,8 @@
 //! SAM L22's 8 kilobyte EEPROM emulation area (RWW EEPROM).
 
 use crate::watch::timeout::wait_until;
-use atsaml22j::nvmctrl::ctrla::Cmdselect;
 use atsaml22j::nvmctrl::RegisterBlock as Nvmctrl;
+use atsaml22j::nvmctrl::ctrla::Cmdselect;
 
 /// RWW EEPROM area constants.
 const RWWEE_ADDR_START: u32 = 0x0040_0000;

@@ -78,7 +78,7 @@ impl ChirpyDemoFace {
         }
         let freq = 700 + self.seq_pos * 200;
         let period = 1000000u32 / freq as u32;
-        watch::buzzer::set_buzzer_period(period);
+        let _ = watch::buzzer::set_buzzer_period(period);
         watch::buzzer::set_buzzer_on();
         self.seq_pos += 1;
     }
@@ -95,7 +95,7 @@ impl ChirpyDemoFace {
         };
         self.curr_data_ix += 1;
         let _ = byte;
-        watch::buzzer::set_buzzer_period(5000);
+        let _ = watch::buzzer::set_buzzer_period(5000);
         watch::buzzer::set_buzzer_on();
     }
 
@@ -113,7 +113,7 @@ impl ChirpyDemoFace {
             return;
         }
         if self.seq_pos % 8 == 0 {
-            watch::buzzer::set_buzzer_period(
+            let _ = watch::buzzer::set_buzzer_period(
                 crate::watch::buzzer::NOTE_PERIODS[Note::A5 as usize] as u32,
             );
             watch::buzzer::set_buzzer_on();

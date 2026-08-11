@@ -278,7 +278,8 @@ impl HydrationFace {
         if !movement::button_should_sound() {
             return;
         }
-        watch::buzzer::set_buzzer_period(watch::buzzer::NOTE_PERIODS[Note::C7 as usize] as u32);
+        let _ =
+            watch::buzzer::set_buzzer_period(watch::buzzer::NOTE_PERIODS[Note::C7 as usize] as u32);
         watch::buzzer::set_buzzer_on();
     }
 

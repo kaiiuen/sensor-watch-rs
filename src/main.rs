@@ -27,6 +27,11 @@
 #[cfg(all(feature = "defmt-log", not(target_arch = "arm")))]
 compile_error!("the `defmt-log` feature is only supported for the ARM firmware target");
 
+#[cfg(all(feature = "usb-cdc", not(target_arch = "arm"), not(test)))]
+compile_error!(
+    "the `usb-cdc` firmware feature is only supported for the ARM target; use `cargo test --lib --features usb-cdc` for contract tests"
+);
+
 #[cfg(target_arch = "arm")]
 use cortex_m_rt::entry;
 
@@ -52,10 +57,10 @@ fn main() -> ! {
     // Detect a brown-out reboot loop and drop into the safe state if needed.
     movement::fault::check_boot_throttle();
 
-    // Check the firmware image for bit-rot. If it fails, record a fault and
-    // keep booting best-effort rather than bricking: the watch still tries to
-    // run, and the fault code is only revealed (as an LED flash) when the user
-    // presses a button, so a corrupt image never draws attention on its own.
+    // Check the firmware image for bit-rot. If it fails, record the distinct
+    // CorruptImage fault and keep booting best-effort. This is fault recording,
+    // not device-side rollback: no second image or recovery selector exists in
+    // this application, and the host/ROM UF2 path is required for replacement.
     if !watch::crc::check_firmware_integrity() {
         movement::fault::record_fault(movement::fault::Fault::CorruptImage);
     }

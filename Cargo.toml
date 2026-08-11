@@ -63,9 +63,13 @@ hostmock = ["dep:sensor-watch-core"]
 # and `#[global_allocator]` lang items. Without it (ARM firmware, host `cargo
 # test`), the lib stays `no_std` and provides its own minimal lang items.
 std = []
+# Require an explicit physical-presence integration to authorize mutating shell
+# commands. The default remains unlocked to preserve the UART jig workflow.
+shell-auth = []
 # Reserve the native SAM L22 USB CDC application path. It is intentionally
 # disabled by default because USB raises the clock/power floor and the current
-# PAC does not expose the transfer-buffer SRAM needed by a complete stack.
+# PAC/dependency graph cannot implement endpoint transfers. ARM builds with this
+# feature fail explicitly at firmware startup; host feature checks are tests only.
 usb-cdc = []
 # Opt-in structured logs over the SWD probe's RTT channel. This is deliberately
 # not part of any default feature and is valid only for the ARM firmware target.

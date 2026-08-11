@@ -132,7 +132,7 @@ impl FinetuneFace {
                     }
                 }
             }
-            rtc::set_date_time(date_time);
+            let _ = rtc::set_date_time(date_time);
         }
     }
 

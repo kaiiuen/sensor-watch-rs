@@ -57,7 +57,7 @@ impl SetTimeFace {
         {
             date_time.day = 1;
         }
-        rtc::set_date_time(date_time);
+        let _ = rtc::set_date_time(date_time);
     }
 
     fn abort_quick_ticks(&mut self) {

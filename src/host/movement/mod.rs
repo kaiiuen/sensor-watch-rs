@@ -108,6 +108,76 @@ pub mod flashlight {
     pub use real::FlashlightFace;
 }
 
+/// The REAL `astronomy` face.
+pub mod astronomy {
+    #[path = "../../../movement/astronomy.rs"]
+    pub mod real;
+    pub use real::AstronomyFace;
+}
+
+/// The REAL `close_enough` face.
+pub mod close_enough {
+    #[path = "../../../movement/close_enough.rs"]
+    pub mod real;
+    pub use real::CloseEnoughClockFace;
+}
+
+/// The REAL `day_night_percentage` face.
+pub mod day_night_percentage {
+    #[path = "../../../movement/day_night_percentage.rs"]
+    pub mod real;
+    pub use real::DayNightPercentageFace;
+}
+
+/// The REAL `day_one` face.
+pub mod day_one {
+    #[path = "../../../movement/day_one.rs"]
+    pub mod real;
+    pub use real::DayOneFace;
+}
+
+/// The REAL `deadline` face.
+pub mod deadline {
+    #[path = "../../../movement/deadline.rs"]
+    pub mod real;
+    pub use real::DeadlineFace;
+}
+
+/// The REAL `decimal_time` face.
+pub mod decimal_time {
+    #[path = "../../../movement/decimal_time.rs"]
+    pub mod real;
+    pub use real::DecimalTimeFace;
+}
+
+/// The REAL `french_revolutionary` face.
+pub mod french_revolutionary {
+    #[path = "../../../movement/french_revolutionary.rs"]
+    pub mod real;
+    pub use real::FrenchRevolutionaryFace;
+}
+
+/// The REAL `frequency_correction` face.
+pub mod frequency_correction {
+    #[path = "../../../movement/frequency_correction.rs"]
+    pub mod real;
+    pub use real::FrequencyCorrectionFace;
+}
+
+/// The REAL `hello_there` face.
+pub mod hello_there {
+    #[path = "../../../movement/hello_there.rs"]
+    pub mod real;
+    pub use real::HelloThereFace;
+}
+
+/// The REAL `ke_decimal_time` face.
+pub mod ke_decimal_time {
+    #[path = "../../../movement/ke_decimal_time.rs"]
+    pub mod real;
+    pub use real::KeDecimalTimeFace;
+}
+
 // ---- I-P subset (owner of this host-test migration) -----------------------
 // Each real face in the alphabetical I-P group is pulled in verbatim.
 
@@ -1406,7 +1476,7 @@ mod tests {
     fn real_simple_coin_flip_activate_shows_flip_label() {
         let mut mock = steady_state();
         seam::install_hw(&mut mock);
-        let mut settings = h24_settings();
+        let settings = h24_settings();
         let mut face = simple_coin_flip::SimpleCoinFlipFace::new();
         face.activate(&settings);
         // "flip" at pos 5 -> "     flip" (trailing spaces trimmed).
@@ -1583,7 +1653,7 @@ mod tests {
     fn real_tomato_activate_renders_ready_focus() {
         let mut mock = steady_state();
         seam::install_hw(&mut mock);
-        let mut settings = h24_settings();
+        let settings = h24_settings();
         let mut face = tomato::TomatoFace::new();
         face.activate(&settings);
         assert!(mock.colon);
@@ -1672,7 +1742,7 @@ mod tests {
     fn real_wordle_activate_shows_title_screen() {
         let mut mock = steady_state();
         seam::install_hw(&mut mock);
-        let mut settings = h24_settings();
+        let settings = h24_settings();
         let mut face = wordle::WordleFace::new();
         face.activate(&settings);
         // Title + a blank at pos 3.

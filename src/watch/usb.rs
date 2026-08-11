@@ -52,8 +52,8 @@ pub const DEVICE_DESCRIPTOR: [u8; 18] = [
 /// Error returned because the selected PAC/API cannot support transfers yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsbError {
-    /// Endpoint descriptor/data SRAM access is absent from the current PAC and
-    /// no USB device-stack implementation is available in this workspace.
+    /// Endpoint descriptor/data SRAM access is absent from the current PAC, and no
+    /// USB device-stack implementation is available in this workspace.
     Unsupported,
 }
 

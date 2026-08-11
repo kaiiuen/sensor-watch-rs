@@ -7,6 +7,50 @@ use crate::watch::gpio::{self, Direction, Function, Pin};
 use crate::watch::timeout::wait_until;
 use atsaml22j::sercom0::usart::Usart;
 
+const RX_CAPACITY: usize = 64;
+
+struct RxRing {
+    bytes: [u8; RX_CAPACITY],
+    read: usize,
+    write: usize,
+    len: usize,
+    overflowed: bool,
+}
+
+impl RxRing {
+    const fn new() -> Self {
+        Self {
+            bytes: [0; RX_CAPACITY],
+            read: 0,
+            write: 0,
+            len: 0,
+            overflowed: false,
+        }
+    }
+
+    fn push(&mut self, byte: u8) {
+        if self.len == RX_CAPACITY {
+            self.overflowed = true;
+            return;
+        }
+        self.bytes[self.write] = byte;
+        self.write = (self.write + 1) % RX_CAPACITY;
+        self.len += 1;
+    }
+
+    fn pop(&mut self) -> Option<u8> {
+        if self.len == 0 {
+            return None;
+        }
+        let byte = self.bytes[self.read];
+        self.read = (self.read + 1) % RX_CAPACITY;
+        self.len -= 1;
+        Some(byte)
+    }
+}
+
+static mut RX_RING: RxRing = RxRing::new();
+
 /// The UART-capable pins.
 const A1: Pin = Pin(1, 1);
 const A2: Pin = Pin(1, 2);
@@ -92,7 +136,7 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
     if let Some(pin) = tx_pin {
         gpio::set_pin_direction(pin, Direction::Out);
         gpio::set_pin_function(pin, Function::Mux(2)); // function C
-                                                       // SAFETY: writing valid TXPO values.
+        // SAFETY: writing valid TXPO values.
         unsafe {
             if pin == A2 {
                 usart()
@@ -111,7 +155,7 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
     if let Some(pin) = rx_pin {
         gpio::set_pin_direction(pin, Direction::In);
         gpio::set_pin_function(pin, Function::Mux(2)); // function C
-                                                       // SAFETY: writing valid RXPO values.
+        // SAFETY: writing valid RXPO values.
         unsafe {
             let rxpo = match pin {
                 A1 => 3,
@@ -160,13 +204,32 @@ pub fn puts(s: &str) {
     let _ = wait_until(|| usart().intflag().read().txc().bit_is_set());
 }
 
-/// Receives a byte if one is already available.
-pub fn try_getc() -> Option<u8> {
-    if usart().intflag().read().rxc().bit_is_set() {
-        Some(usart().data().read().bits() as u8)
-    } else {
-        None
+/// Moves currently received hardware bytes into the bounded software ring.
+///
+/// This is deliberately nonblocking and bounded so a noisy or disconnected jig
+/// cannot keep the main loop awake indefinitely. Call it from the shell poller.
+pub fn service_rx() {
+    for _ in 0..RX_CAPACITY {
+        if !usart().intflag().read().rxc().bit_is_set() {
+            break;
+        }
+        let byte = usart().data().read().bits() as u8;
+        critical_section::with(|_| unsafe { RX_RING.push(byte) });
     }
+}
+
+/// Returns and clears the receive-overflow indication.
+pub fn take_rx_overflow() -> bool {
+    critical_section::with(|_| unsafe {
+        let overflowed = RX_RING.overflowed;
+        RX_RING.overflowed = false;
+        overflowed
+    })
+}
+
+/// Receives a byte from the software ring without waiting.
+pub fn try_getc() -> Option<u8> {
+    critical_section::with(|_| unsafe { RX_RING.pop() })
 }
 
 /// Receives a single byte from the UART (bounded blocking).

@@ -8,9 +8,18 @@
 
 use crate::watch::event_log;
 use crate::watch::rtc::{self, DateTime};
+#[cfg(not(feature = "usb-cdc"))]
 use crate::watch::uart;
 #[cfg(feature = "usb-cdc")]
 use crate::watch::usb;
+
+#[cfg(not(feature = "usb-cdc"))]
+fn transport_service() {
+    uart::service_rx();
+}
+
+#[cfg(feature = "usb-cdc")]
+fn transport_service() {}
 
 #[cfg(not(feature = "usb-cdc"))]
 fn transport_getc() -> Option<u8> {
@@ -20,6 +29,16 @@ fn transport_getc() -> Option<u8> {
 #[cfg(feature = "usb-cdc")]
 fn transport_getc() -> Option<u8> {
     usb::read().ok().flatten()
+}
+
+#[cfg(not(feature = "usb-cdc"))]
+fn transport_rx_overflowed() -> bool {
+    uart::take_rx_overflow()
+}
+
+#[cfg(feature = "usb-cdc")]
+fn transport_rx_overflowed() -> bool {
+    false
 }
 
 #[cfg(not(feature = "usb-cdc"))]
@@ -39,6 +58,12 @@ const LINE_MAX: usize = 32;
 pub struct Shell {
     line: [u8; LINE_MAX],
     len: usize,
+    discarding_line: bool,
+    invalid_line: bool,
+    last_was_terminator: bool,
+    /// Mutation commands are enabled by default for backwards-compatible jig use.
+    /// Builds with `shell-auth` must explicitly authorize them.
+    mutation_authorized: bool,
 }
 
 impl Shell {
@@ -47,6 +72,10 @@ impl Shell {
         Shell {
             line: [0; LINE_MAX],
             len: 0,
+            discarding_line: false,
+            invalid_line: false,
+            last_was_terminator: false,
+            mutation_authorized: !cfg!(feature = "shell-auth"),
         }
     }
 
@@ -54,18 +83,57 @@ impl Shell {
     ///
     /// Call this from a tick or background task. It reads available bytes,
     /// accumulates a line, and executes the command when a newline arrives.
+    /// Authorizes mutation commands for the current shell session.
+    ///
+    /// A board integration can call this only after its physical-presence check
+    /// (for example, a held service button). In `shell-auth` builds the default
+    /// is locked; normal builds retain the UART-jig behavior.
+    pub fn set_mutation_authorized(&mut self, authorized: bool) {
+        self.mutation_authorized = authorized;
+    }
+
     pub fn poll(&mut self) {
-        // Read as many bytes as are available (bounded).
+        transport_service();
+        if transport_rx_overflowed() {
+            self.reset_line();
+            transport_puts("ERR rx-overflow\r\n");
+        }
+
+        // Consume a bounded amount per wake. The UART ring retains the rest.
         for _ in 0..16 {
             let Some(c) = transport_getc() else { break };
             if c == b'\n' || c == b'\r' {
-                self.execute();
-                self.len = 0;
+                if !self.last_was_terminator {
+                    if self.invalid_line {
+                        transport_puts("ERR invalid\r\n");
+                    } else if self.discarding_line {
+                        transport_puts("ERR line-too-long\r\n");
+                    } else {
+                        self.execute();
+                    }
+                }
+                self.reset_line();
+                self.last_was_terminator = true;
+            } else if c < 0x20 || c == 0x7f {
+                self.invalid_line = true;
+                self.last_was_terminator = false;
+            } else if self.discarding_line {
+                self.last_was_terminator = false;
             } else if self.len < LINE_MAX {
                 self.line[self.len] = c;
                 self.len += 1;
+                self.last_was_terminator = false;
+            } else {
+                self.discarding_line = true;
+                self.last_was_terminator = false;
             }
         }
+    }
+
+    fn reset_line(&mut self) {
+        self.len = 0;
+        self.discarding_line = false;
+        self.invalid_line = false;
     }
 
     /// Executes the current command line.
@@ -83,30 +151,33 @@ impl Shell {
             }
             b"help" => {
                 transport_puts(
-                    "CMDS: time, settime YYMMDDHHMMSS, drift N, optical, panic, events [clear]\\r\\n",
+                    "CMDS: time, settime YYMMDDHHMMSS, drift [N], optical, panic, events [clear], help\r\n",
                 );
             }
             b"optical" => {
                 transport_puts(crate::watch::optical::status_text());
-                transport_puts("\\r\\n");
+                transport_puts("\r\n");
             }
             b"events" => dump_events(),
             b"drift" => {
                 transport_puts("DRIFT ");
                 let value = rtc::freqcorr_read();
-                let mut buf = [b'0'; 5];
+                let mut buf = [b'0'; 4];
                 let magnitude = value.unsigned_abs();
                 buf[0] = if value < 0 { b'-' } else { b'+' };
                 buf[1] = b'0' + ((magnitude / 100) % 10) as u8;
                 buf[2] = b'0' + ((magnitude / 10) % 10) as u8;
                 buf[3] = b'0' + (magnitude % 10) as u8;
-                buf[4] = b'\r';
-                transport_puts(core::str::from_utf8(&buf[..4]).unwrap_or(""));
+                transport_puts(core::str::from_utf8(&buf).unwrap_or(""));
                 transport_puts("\r\n");
             }
             b"events clear" => {
-                event_log::clear();
-                transport_puts("OK\\r\\n");
+                if self.mutation_authorized {
+                    event_log::clear();
+                    transport_puts("OK\r\n");
+                } else {
+                    transport_puts("ERR locked\r\n");
+                }
             }
             b"panic" => {
                 let fp = crate::movement::fault::panic_fingerprint();
@@ -126,18 +197,21 @@ impl Shell {
             _ => {
                 if line.len() >= 7 && &line[..6] == b"drift " {
                     if let Some(value) = parse_signed(&line[6..]) {
-                        rtc::freqcorr_write(
-                            value.unsigned_abs() as i16,
-                            if value < 0 { 1 } else { 0 },
-                        );
-                        transport_puts("OK\r\n");
+                        if !self.mutation_authorized {
+                            transport_puts("ERR locked\r\n");
+                        } else {
+                            crate::movement::apply_drift_correction(value);
+                            transport_puts("OK\r\n");
+                        }
                     } else {
                         transport_puts("ERR drift\r\n");
                     }
                 // settime YYMMDDHHMMSS
-                } else if line.len() == 20 && &line[..7] == b"settime" {
+                } else if line.len() == 20 && &line[..7] == b"settime" && line[7] == b' ' {
                     if let Some(dt) = parse_settime(&line[8..]) {
-                        if rtc::set_date_time(dt).is_ok() {
+                        if !self.mutation_authorized {
+                            transport_puts("ERR locked\r\n");
+                        } else if rtc::set_date_time(dt).is_ok() {
                             transport_puts("OK\r\n");
                         } else {
                             transport_puts("ERR invalid date/time\r\n");
@@ -164,7 +238,7 @@ fn dump_events() {
         put_hex(event.code as u32, 2);
         transport_puts(" ");
         put_hex(event.data as u32, 4);
-        transport_puts("\\r\\n");
+        transport_puts("\r\n");
     });
 }
 

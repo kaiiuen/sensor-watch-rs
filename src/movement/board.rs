@@ -63,5 +63,5 @@ impl BoardConfig {
 pub fn apply() {
     let cfg = BoardConfig::read();
     crate::watch::led::set_invert_polarity(cfg.invert_led_polarity());
-    crate::watch::buzzer::set_voltage(cfg.buzzer_voltage);
+    let _ = crate::watch::buzzer::set_voltage(cfg.buzzer_voltage);
 }

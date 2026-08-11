@@ -40,6 +40,17 @@
 #[cfg(all(feature = "defmt-log", not(target_arch = "arm")))]
 compile_error!("the `defmt-log` feature is only supported for the ARM firmware target");
 
+#[cfg(all(feature = "usb-cdc", not(target_arch = "arm"), not(test)))]
+compile_error!(
+    "the `usb-cdc` feature is only supported for the ARM target; use `cargo test --lib --features usb-cdc` for contract tests"
+);
+
+/// Host-testable USB CDC contract checks. This is metadata only; it does not
+/// provide a USB controller implementation.
+#[cfg(feature = "usb-cdc")]
+#[path = "watch/usb_contract.rs"]
+pub mod usb_contract;
+
 // ---------------------------------------------------------------------------
 // Firmware target: reuse the real, byte-identical module trees untouched.
 // ---------------------------------------------------------------------------

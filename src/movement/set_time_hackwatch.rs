@@ -85,7 +85,7 @@ impl WatchFace for SetTimeHackwatchFace {
                         }
                     }
                     self.date_time_settings.second = 0;
-                    rtc::set_date_time(self.date_time_settings);
+                    let _ = rtc::set_date_time(self.date_time_settings);
                 }
             }
             Event::Button(Button::Alarm, ButtonEvent::Down) => {
@@ -130,7 +130,7 @@ impl WatchFace for SetTimeHackwatchFace {
                     _ => {}
                 }
                 if self.current_page != 2 {
-                    rtc::set_date_time(self.date_time_settings);
+                    let _ = rtc::set_date_time(self.date_time_settings);
                 }
             }
             Event::Button(Button::Alarm, ButtonEvent::LongUp) => {
@@ -165,7 +165,7 @@ impl WatchFace for SetTimeHackwatchFace {
                     self.date_time_settings.day = 1;
                 }
                 if self.current_page != 2 {
-                    rtc::set_date_time(self.date_time_settings);
+                    let _ = rtc::set_date_time(self.date_time_settings);
                 }
             }
             Event::Button(Button::Light, ButtonEvent::Down) => {}
