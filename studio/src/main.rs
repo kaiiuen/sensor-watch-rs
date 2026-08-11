@@ -640,9 +640,10 @@ impl eframe::App for StudioApp {
             ]);
         });
 
-        // Keep the UI animating even when the cursor leaves the window, so the
-        // clock and sim keep running instead of freezing.
-        ctx.request_repaint();
+        // Poll background work without forcing a full-rate repaint when the
+        // simulator is not visible. The simulator requests a faster cadence
+        // while it is active.
+        ctx.request_repaint_after(std::time::Duration::from_millis(250));
 
         // Detect a window resize (or the very first frame) and reset the Watch
         // Faces panel ratios so they re-derive proportionally to the new size
@@ -3374,7 +3375,7 @@ impl StudioApp {
         self.run_shell_command(command);
         self.shell_log
             .entries()
-            .last()
+            .back()
             .map(|entry| entry.message.clone())
             .unwrap_or_default()
     }
@@ -4841,8 +4842,7 @@ impl StudioApp {
             svg_display.second_1 = ' ';
         }
         if let Some(text) = &self.watch.override_text {
-            let chars: Vec<char> = text.chars().collect();
-            let slot = |i: usize| -> char { chars.get(i).copied().unwrap_or(' ') };
+            let slot = |i: usize| -> char { text.chars().nth(i).unwrap_or(' ') };
             svg_display.mode_2 = ' ';
             svg_display.mode_1 = ' ';
             svg_display.day_2 = ' ';
@@ -5062,8 +5062,9 @@ impl StudioApp {
             }
         ));
 
-        // Request a repaint so the clock ticks.
-        ctx.request_repaint();
+        // Keep the simulator responsive for button holds and sub-second faces,
+        // without repainting the rest of the application at display rate.
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
     }
 
     /// Runs a command typed into the terminal.
@@ -6221,11 +6222,32 @@ impl StudioApp {
                     // crash or full-drive mid-write doesn't corrupt the existing
                     // CURRENT.UF2. Then verify the size on disk matches.
                     let tmp = format!("{root}.current.uf2.tmp");
-                    let write_ok = std::fs::write(&tmp, &data).is_ok()
-                        && std::fs::metadata(&tmp)
-                            .map(|m| m.len() == data.len() as u64)
+                    let safe_destination = regular_or_absent(std::path::Path::new(&dest));
+                    let safe_temp = regular_or_absent(std::path::Path::new(&tmp));
+                    let write_ok = safe_destination.is_ok()
+                        && safe_temp.is_ok()
+                        && std::fs::remove_file(&tmp)
+                            .or_else(|e| {
+                                (e.kind() == std::io::ErrorKind::NotFound)
+                                    .then_some(())
+                                    .ok_or(e)
+                            })
+                            .is_ok()
+                        && std::fs::write(&tmp, &data).is_ok()
+                        && std::fs::read(&tmp)
+                            .map(|written| {
+                                written.len() == data.len()
+                                    && written == data
+                                    && sensor_watch_core::uf2::validate(&written).is_ok()
+                            })
                             .unwrap_or(false)
-                        && std::fs::rename(&tmp, &dest).is_ok();
+                        && std::fs::rename(&tmp, &dest).is_ok()
+                        && std::fs::read(&dest)
+                            .map(|published| {
+                                published == data
+                                    && sensor_watch_core::uf2::validate(&published).is_ok()
+                            })
+                            .unwrap_or(false);
                     if write_ok {
                         self.status = format!("Flashed to {dest}");
                         self.log.log(format!("Flashed to {dest}"));
@@ -6324,6 +6346,20 @@ impl StudioApp {
     fn estimate_compiled_kb(&self, selected: usize) -> u32 {
         // UF2 adds ~512-byte headers; estimate flash + 10% overhead.
         self.estimate_flash_kb(selected) + self.estimate_flash_kb(selected) / 10
+    }
+}
+
+fn regular_or_absent(path: &std::path::Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("refusing symlinked path: {}", path.display()))
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            Err(format!("path is not a regular file: {}", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot inspect path: {error}")),
     }
 }
 

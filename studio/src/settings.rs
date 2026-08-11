@@ -9,9 +9,14 @@ use serde::{Deserialize, Serialize};
 use super::components::BuildProfile;
 use super::i18n::Language;
 use super::modules::ModuleManager;
+use super::ntp;
 use super::presets::PresetManager;
 use super::theme::Theme;
 use super::watch_config::WatchConfig;
+
+const MAX_SETTINGS_JSON_BYTES: usize = 256 * 1024;
+const MAX_NTP_SERVERS: usize = 64;
+const MAX_SETTINGS_TEXT_BYTES: usize = 256;
 
 /// Versioned, persistence-safe Studio representation of RTC calibration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -174,8 +179,70 @@ impl AppSettings {
 
     /// Validates values loaded from disk before they can affect the app/build.
     pub fn validate(&self) -> Result<(), String> {
+        if self.schema_version == 0 || self.schema_version > 1 {
+            return Err("unsupported settings schema version".into());
+        }
+        for (field, value) in [
+            ("language", &self.language),
+            ("theme", &self.theme),
+            ("output directory", &self.output_dir),
+            ("board", &self.board),
+        ] {
+            if value.len() > MAX_SETTINGS_TEXT_BYTES || value.chars().any(|c| c.is_control()) {
+                return Err(format!("{field} contains invalid or excessive text"));
+            }
+        }
+        if self.output_dir.trim().is_empty() {
+            return Err("output directory must not be empty".into());
+        }
+        if self.ntp_servers.len() > MAX_NTP_SERVERS {
+            return Err("too many custom NTP servers".into());
+        }
+        for (name, host) in &self.ntp_servers {
+            if name.len() > MAX_SETTINGS_TEXT_BYTES
+                || host.len() > MAX_SETTINGS_TEXT_BYTES
+                || name.chars().any(|c| c.is_control())
+                || host.chars().any(|c| c.is_control())
+                || host.trim().is_empty()
+            {
+                return Err("custom NTP server contains invalid or excessive text".into());
+            }
+        }
         if !self.sim_scale.is_finite() || !(0.5..=2.0).contains(&self.sim_scale) {
             return Err("simulator scale must be finite and between 0.5 and 2.0".into());
+        }
+        if !self.catalog_width.is_finite()
+            || !(0.0..=10_000.0).contains(&self.catalog_width)
+            || !self.preset_height.is_finite()
+            || !(0.0..=10_000.0).contains(&self.preset_height)
+        {
+            return Err("panel dimensions must be finite and between 0 and 10000".into());
+        }
+        if self.text_size > 2 {
+            return Err("text size must be 0, 1, or 2".into());
+        }
+        if self.output_dir.trim().is_empty() || self.output_dir.len() > 4096 {
+            return Err("output directory must be non-empty and at most 4096 bytes".into());
+        }
+        if self.output_dir.chars().any(|c| c.is_control()) {
+            return Err("output directory cannot contain control characters".into());
+        }
+        for (name, host) in &self.ntp_servers {
+            if name.is_empty()
+                || host.is_empty()
+                || name.len() > 256
+                || host.len() > 256
+                || name.chars().any(|c| c.is_control())
+                || host.chars().any(|c| c.is_control())
+            {
+                return Err(
+                    "custom NTP server names and hosts must be non-empty, bounded, and printable"
+                        .into(),
+                );
+            }
+        }
+        if self.ntp_server >= sensor_watch_studio_ntp_server_count(&self.ntp_servers) {
+            return Err("selected NTP server is out of range".into());
         }
         if !self.drift_ppm.is_finite() || self.drift_ppm.abs() > 1000.0 {
             return Err("drift correction must be finite and within +/-1000 ppm".into());
@@ -191,6 +258,12 @@ impl AppSettings {
             || calibration.reference_temperature_c != self.rtc_calibration.reference_temperature_c
         {
             return Err("RTC calibration contains out-of-range values".into());
+        }
+        if self.text_size > 2 {
+            return Err("text size is out of range".into());
+        }
+        if self.ntp_server >= ntp::SERVERS.len() + self.ntp_servers.len() {
+            return Err("NTP server index is out of range".into());
         }
         if self.line_limit == 0 || self.line_limit > 10_000 {
             return Err("line limit must be between 1 and 10000".into());
@@ -211,6 +284,9 @@ impl AppSettings {
 
     /// Deserializes and validates settings from a JSON string.
     pub fn from_json(json: &str) -> Result<Self, String> {
+        if json.len() > MAX_SETTINGS_JSON_BYTES {
+            return Err("settings JSON is too large".into());
+        }
         let settings: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
         settings.validate()?;
         Ok(settings)
@@ -248,6 +324,10 @@ impl Default for AppSettings {
 }
 
 /// The default maximum number of lines kept in each output log.
+fn sensor_watch_studio_ntp_server_count(custom: &[(String, String)]) -> usize {
+    super::ntp::SERVERS.len() + custom.len()
+}
+
 pub fn default_line_limit() -> usize {
     500
 }

@@ -146,9 +146,29 @@ pub fn encode_command(command: &str) -> Result<Vec<u8>, TransportError> {
             "control characters are not allowed",
         ));
     }
+    if !is_allowed_uart_command(command) {
+        return Err(TransportError::InvalidCommand(
+            "command is not allowed over unauthenticated UART",
+        ));
+    }
     let mut frame = command.as_bytes().to_vec();
     frame.extend_from_slice(b"\r\n");
     Ok(frame)
+}
+
+fn is_allowed_uart_command(command: &str) -> bool {
+    match command {
+        "help" | "status" | "time" | "optical" | "events" => true,
+        value if value.starts_with("drift ") => value[6..]
+            .parse::<i32>()
+            .map(|ppm| (-1000..=1000).contains(&ppm))
+            .unwrap_or(false),
+        value if value.starts_with("settime ") => {
+            let timestamp = &value[8..];
+            timestamp.len() == 12 && timestamp.bytes().all(|byte| byte.is_ascii_digit())
+        }
+        _ => false,
+    }
 }
 
 /// Read one CR/LF-terminated shell response, tolerating either line ending.
@@ -287,6 +307,16 @@ mod tests {
     #[test]
     fn command_is_crlf_framed_and_bounded() {
         assert_eq!(encode_command(" time ").unwrap(), b"time\r\n");
+        assert!(matches!(
+            encode_command("panic"),
+            Err(TransportError::InvalidCommand(_))
+        ));
+        assert!(matches!(
+            encode_command("events clear"),
+            Err(TransportError::InvalidCommand(_))
+        ));
+        assert!(encode_command("drift 100").is_ok());
+        assert!(encode_command("drift 1001").is_err());
         assert!(matches!(
             encode_command(""),
             Err(TransportError::InvalidCommand(_))

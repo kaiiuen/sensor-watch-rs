@@ -9,7 +9,7 @@ set -e
 cd "$(dirname "$0")"
 
 echo "==> Building firmware (release)..."
-cargo build --release --target thumbv6m-none-eabi -p sensor-watch
+cargo build --release --target thumbv6m-none-eabi -p sensor-watch --bin sensor-watch
 
 ELF="target/thumbv6m-none-eabi/release/sensor-watch"
 BIN="target/thumbv6m-none-eabi/release/sensor-watch.bin"

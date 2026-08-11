@@ -2,6 +2,7 @@
 
 use eframe::egui;
 use std::fs;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_PREVIEW_BYTES: u64 = 512 * 1024;
@@ -145,7 +146,7 @@ impl FileBrowser {
         self.selected = Some(reopened.clone());
         self.preview_size = Some(metadata.len());
         if metadata.is_file() && is_previewable(&reopened, metadata.len()) {
-            match fs::read_to_string(&reopened) {
+            match read_preview(&reopened) {
                 Ok(contents) => {
                     self.preview = contents;
                     self.preview_allowed = true;
@@ -224,22 +225,21 @@ impl FileBrowser {
         });
 
         let available = ui.available_height().max(180.0);
+        let filter = self.filter.trim().to_lowercase();
+        let mut open_path = None;
+        let mut select_path = None;
         ui.columns(2, |columns| {
             columns[0].set_min_width(240.0);
             egui::ScrollArea::vertical()
                 .max_height(available)
                 .show(&mut columns[0], |ui| {
-                    for entry in self.entries.clone() {
+                    for entry in &self.entries {
                         let name = entry
                             .path
                             .file_name()
                             .map(|n| n.to_string_lossy())
                             .unwrap_or_default();
-                        if !self.filter.trim().is_empty()
-                            && !name
-                                .to_lowercase()
-                                .contains(&self.filter.trim().to_lowercase())
-                        {
+                        if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
                             continue;
                         }
                         let label = format!("{} {}", if entry.is_dir { "📁" } else { "📄" }, name);
@@ -248,14 +248,19 @@ impl FileBrowser {
                             .clicked()
                         {
                             if entry.is_dir {
-                                self.current_dir = entry.path.clone();
-                                self.load_entries();
+                                open_path = Some(entry.path.clone());
                             } else {
-                                self.select(entry.path.clone());
+                                select_path = Some(entry.path.clone());
                             }
                         }
                     }
                 });
+            if let Some(path) = open_path.take() {
+                self.current_dir = path;
+                self.load_entries();
+            } else if let Some(path) = select_path.take() {
+                self.select(path);
+            }
             columns[1].vertical(|ui| {
                 let selected = self.selected.clone();
                 ui.horizontal(|ui| {
@@ -295,6 +300,23 @@ impl FileBrowser {
         });
         copied
     }
+}
+
+fn read_preview(path: &Path) -> std::io::Result<String> {
+    let mut file = fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.by_ref()
+        .take(MAX_PREVIEW_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_PREVIEW_BYTES {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "file changed and is too large to preview",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "file is not valid UTF-8")
+    })
 }
 
 fn copy_to_clipboard(text: &str) -> Option<String> {

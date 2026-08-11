@@ -17,7 +17,7 @@ pub enum TimeMode {
 }
 
 /// The full display state, mirroring the JS `display` object.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Display {
     pub alarm_on_mark: bool,
     pub time_signal_on_mark: bool,

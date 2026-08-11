@@ -15,8 +15,10 @@ const WATCH_SVG: &str = include_str!("../assets/watch.svg");
 
 /// A parsed, renderable watch.
 pub struct WatchRenderer {
-    /// The parsed SVG tree (rebuilt each render from the modified source).
+    /// The parsed SVG tree for the last display state.
     tree: usvg::Tree,
+    last_display: Option<Display>,
+    cached_texture: Option<(Display, [u32; 2], TextureHandle)>,
 }
 
 impl WatchRenderer {
@@ -24,7 +26,11 @@ impl WatchRenderer {
     pub fn new() -> Self {
         let opt = usvg::Options::default();
         let tree = usvg::Tree::from_str(WATCH_SVG, &opt).expect("failed to parse watch SVG");
-        WatchRenderer { tree }
+        WatchRenderer {
+            tree,
+            last_display: None,
+            cached_texture: None,
+        }
     }
 
     /// Renders the watch with the given display state into a ColorImage.
@@ -34,13 +40,14 @@ impl WatchRenderer {
         if size[0] == 0 || size[1] == 0 {
             return None;
         }
-        // Build the SVG source with the display state applied.
-        let svg = apply_display_to_svg(WATCH_SVG, display);
-
-        // Re-parse and render.
-        let opt = usvg::Options::default();
-        let tree = usvg::Tree::from_str(&svg, &opt).ok()?;
-        self.tree = tree;
+        // Reparse only when the LCD state changes. The simulator repaints for
+        // input and background activity far more often than the display changes.
+        if self.last_display != Some(*display) {
+            let svg = apply_display_to_svg(WATCH_SVG, display);
+            let opt = usvg::Options::default();
+            self.tree = usvg::Tree::from_str(&svg, &opt).ok()?;
+            self.last_display = Some(*display);
+        }
 
         let mut pixmap = resvg::tiny_skia::Pixmap::new(size[0], size[1])?;
         let transform = resvg::tiny_skia::Transform::from_scale(
@@ -49,14 +56,11 @@ impl WatchRenderer {
         );
         resvg::render(&self.tree, transform, &mut pixmap.as_mut());
 
-        let data = pixmap.data();
-        let mut rgba = Vec::with_capacity(data.len());
-        for px in data.chunks(4) {
-            rgba.extend_from_slice(&[px[0], px[1], px[2], px[3]]);
-        }
+        // tiny-skia already stores tightly packed RGBA pixels; copy the slice
+        // directly instead of allocating and rebuilding it per pixel.
         Some(ColorImage::from_rgba_unmultiplied(
             [size[0] as usize, size[1] as usize],
-            &rgba,
+            pixmap.data(),
         ))
     }
 }
@@ -220,8 +224,15 @@ pub fn render_to_texture(
     size: [u32; 2],
     ctx: &egui::Context,
 ) -> Option<TextureHandle> {
+    if let Some((cached_display, cached_size, texture)) = &renderer.cached_texture {
+        if cached_display == display && *cached_size == size {
+            return Some(texture.clone());
+        }
+    }
     let image = renderer.render(display, size)?;
-    Some(ctx.load_texture("watch", image, TextureOptions::LINEAR))
+    let texture = ctx.load_texture("watch", image, TextureOptions::LINEAR);
+    renderer.cached_texture = Some((*display, size, texture.clone()));
+    Some(texture)
 }
 
 /// Converts a firmware-style `FaceDisplay` (10 chars + indicators) into the

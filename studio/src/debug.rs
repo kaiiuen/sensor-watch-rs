@@ -5,6 +5,7 @@
 //! detect hangs - if the log stops advancing while an operation is in flight,
 //! something is stuck. The log is bounded so it cannot grow without limit.
 
+use std::collections::VecDeque;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The default maximum number of log lines kept.
@@ -21,7 +22,7 @@ pub struct LogEntry {
 
 /// The debug log.
 pub struct DebugLog {
-    entries: Vec<LogEntry>,
+    entries: VecDeque<LogEntry>,
     /// The maximum number of lines kept; oldest lines are dropped past this.
     limit: usize,
 }
@@ -30,7 +31,7 @@ impl DebugLog {
     /// Creates an empty log with the default line limit.
     pub fn new() -> Self {
         DebugLog {
-            entries: Vec::with_capacity(MAX_LINES),
+            entries: VecDeque::with_capacity(MAX_LINES),
             limit: MAX_LINES,
         }
     }
@@ -41,7 +42,7 @@ impl DebugLog {
         self.limit = limit.max(1);
         if self.entries.len() > self.limit {
             let excess = self.entries.len() - self.limit;
-            self.entries.drain(0..excess);
+            self.entries.drain(..excess);
         }
     }
 
@@ -51,14 +52,14 @@ impl DebugLog {
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
-        self.entries.push(LogEntry {
+        self.entries.push_back(LogEntry {
             timestamp: ts,
             message: message.into(),
         });
         // Bound the log.
         if self.entries.len() > self.limit {
             let excess = self.entries.len() - self.limit;
-            self.entries.drain(0..excess);
+            self.entries.drain(..excess);
         }
     }
 
@@ -68,7 +69,7 @@ impl DebugLog {
     }
 
     /// Returns a reference to the entries.
-    pub fn entries(&self) -> &[LogEntry] {
+    pub fn entries(&self) -> &VecDeque<LogEntry> {
         &self.entries
     }
 

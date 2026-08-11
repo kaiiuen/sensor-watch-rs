@@ -75,11 +75,20 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
     }
     let fw_dir = firmware_dir();
 
-    // Ensure the output directory exists (it may not on a fresh standalone exe).
+    // Ensure the output directory exists (it may not on a fresh standalone exe),
+    // then validate it again. The second check closes the gap where a path could
+    // be replaced by a symlink while it was being created.
     if let Err(e) = std::fs::create_dir_all(output_dir) {
         return BuildResult {
             success: false,
             message: format!("failed to create output dir: {e}"),
+            uf2_path: None,
+        };
+    }
+    if let Err(error) = validate_output_dir(output_dir) {
+        return BuildResult {
+            success: false,
+            message: format!("output directory changed during setup: {error}"),
             uf2_path: None,
         };
     }
@@ -88,6 +97,8 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
     let status = Command::new("cargo")
         .arg("build")
         .arg("--release")
+        .arg("--bin")
+        .arg("sensor-watch")
         .arg("--target")
         .arg(TARGET)
         .current_dir(&fw_dir)
@@ -235,6 +246,16 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
         };
     }
     let backup = uf2.with_extension("uf2.previous");
+    if let Err(error) =
+        ensure_regular_or_absent(&uf2).and_then(|_| ensure_regular_or_absent(&backup))
+    {
+        let _ = std::fs::remove_file(&tmp);
+        return BuildResult {
+            success: false,
+            message: format!("refusing unsafe UF2 output path: {error}"),
+            uf2_path: None,
+        };
+    }
     let had_old = uf2.is_file();
     if had_old {
         let _ = std::fs::remove_file(&backup);
@@ -402,14 +423,60 @@ fn write_manifest(uf2: &Path, data: &[u8], generation: &str) -> std::io::Result<
     fields.insert("signature", serde_json::json!(signature.clone()));
     let manifest = serde_json::to_string_pretty(&fields).map_err(std::io::Error::other)? + "\n";
     let manifest_path = uf2.with_extension("uf2.json");
-    std::fs::write(&manifest_path, manifest)?;
-    std::fs::write(
-        manifest_path.with_extension("json.sig"),
-        format!("{signature}\n"),
+    write_manifest_file(&manifest_path, manifest.as_bytes())?;
+    write_manifest_file(
+        &manifest_path.with_extension("json.sig"),
+        format!("{signature}\n").as_bytes(),
     )
 }
 
+fn write_manifest_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("refusing non-regular manifest path: {}", path.display()),
+            ));
+        }
+    }
+    let temp = path.with_extension("json.tmp");
+    if let Ok(metadata) = std::fs::symlink_metadata(&temp) {
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::AlreadyExists,
+                format!("refusing manifest temp path: {}", temp.display()),
+            ));
+        }
+        std::fs::remove_file(&temp)?;
+    }
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    use std::io::Write;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    if path.exists() {
+        std::fs::remove_file(path)?;
+    }
+    std::fs::rename(temp, path)
+}
+
 /// Locates `rust-objcopy` under the Rust toolchain.
+fn ensure_regular_or_absent(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            Err(format!("refusing symlinked path: {}", path.display()))
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            Err(format!("path is not a regular file: {}", path.display()))
+        }
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot inspect path: {error}")),
+    }
+}
+
 fn find_objcopy() -> Option<PathBuf> {
     let home = std::env::var("HOME")
         .or_else(|_| std::env::var("USERPROFILE"))

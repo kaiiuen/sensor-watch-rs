@@ -3,6 +3,9 @@
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
+const MAX_BLOCKS: usize = 256;
+const MAX_TEXT_PARAMETER_CHARS: usize = 64;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BlockKind {
     OnTick,
@@ -159,7 +162,11 @@ impl BlockEditor {
                     }
                 });
             if ui.button("Add block").clicked() {
-                self.blocks.push(Block::new(self.selected_kind));
+                if self.blocks.len() < MAX_BLOCKS {
+                    self.blocks.push(Block::new(self.selected_kind));
+                } else {
+                    self.notice = format!("Block limit reached ({MAX_BLOCKS}).");
+                }
             }
             if ui.button("Clear all").clicked() {
                 self.blocks.clear();
@@ -189,7 +196,10 @@ impl BlockEditor {
                 if block.kind == BlockKind::DisplayText {
                     ui.horizontal(|ui| {
                         ui.label("Text:");
-                        ui.text_edit_singleline(&mut block.parameter);
+                        ui.add(
+                            egui::TextEdit::singleline(&mut block.parameter)
+                                .char_limit(MAX_TEXT_PARAMETER_CHARS),
+                        );
                     });
                 } else if matches!(
                     block.kind,
@@ -224,6 +234,7 @@ impl BlockEditor {
             ui.add(
                 egui::TextEdit::multiline(&mut self.generated_source)
                     .code_editor()
+                    .interactive(false)
                     .desired_rows(12)
                     .desired_width(f32::INFINITY),
             );
@@ -335,7 +346,11 @@ fn action_source(block: &Block) -> String {
 }
 
 fn escape_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
+    value
+        .chars()
+        .take(MAX_TEXT_PARAMETER_CHARS)
+        .flat_map(|character| character.escape_default())
+        .collect()
 }
 
 #[cfg(test)]
