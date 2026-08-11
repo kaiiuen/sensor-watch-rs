@@ -1,4 +1,4 @@
-//! Firmware Studio — a GUI companion app for the Sensor-Watch firmware.
+//! Firmware Studio - a GUI companion app for the Sensor-Watch firmware.
 //!
 //! This is the end-goal product: an editor, debugger, and assembler that
 //! produces the final `.uf2` firmware file.
@@ -26,6 +26,7 @@ mod theme;
 mod watch_config;
 mod watch_display;
 mod watch_sim;
+mod wiki;
 
 use eframe::egui;
 use i18n::{tr, Key, Language};
@@ -198,6 +199,9 @@ struct StudioApp {
     /// Persisted panel widths for the Watch Faces layout.
     catalog_width: f32,
     preset_height: f32,
+    /// The window size from the last frame, used to detect resizes and reset
+    /// panel ratios.
+    last_window_size: egui::Vec2,
     /// The timestamp of the last successful build.
     last_build_time: Option<u64>,
     /// The number of builds performed this session.
@@ -216,10 +220,18 @@ struct StudioApp {
     sim_log: debug::DebugLog,
     /// A pending destructive action awaiting confirmation in a modal dialog.
     pending_confirm: Option<(String, ConfirmKind)>,
+    /// The face source currently shown in the "View code" popup (name, source).
+    code_view: Option<(String, String)>,
+    /// The result message of the last "Test before adding" fuzz run.
+    fuzz_test_result: Option<String>,
     /// Whether the first-run welcome overlay should be shown.
     first_run: bool,
     /// Whether settings have been persisted on exit (guards against repeats).
     saved_on_exit: bool,
+    /// The built-in reference wiki.
+    wiki: wiki::Wiki,
+    /// The maximum number of lines kept in each output/terminal/debug log.
+    line_limit: usize,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -241,6 +253,36 @@ impl Board {
             Board::RedLite => "Red / Lite",
             Board::Blue => "Blue",
             Board::Pro => "Pro",
+        }
+    }
+}
+
+/// A short human-readable description of a board revision: what it is, how it
+/// differs from the others, and its key hardware details.
+fn board_info(b: Board) -> &'static str {
+    match b {
+        Board::Green => {
+            "Green is the original reference board: a bare PCB with no case. It has a\n\
+             red indicator LED (active-low, so logic 0 lights it), a piezo buzzer,\n\
+             and no onboard sensors. It is the default target for new builds."
+        }
+        Board::RedLite => {
+            "Red / Lite is a compact, low-cost variation of the Green board. It keeps\n\
+             the same red LED polarity and piezo buzzer but drops the light sensor\n\
+             to save cost, so faces that auto-dim by ambient light behave\n\
+             differently. Pick it when flashing a Lite revision."
+        }
+        Board::Blue => {
+            "Blue is the flagship board: it adds a blue LED (active-low, like the\n\
+             red one) and a temperature sensor, so it can log temperature. The\n\
+             buzzer and button layout match Green, but the LED is blue instead of\n\
+             red. Choose Blue for temperature-capable faces."
+        }
+        Board::Pro => {
+            "Pro is the most capable board: it has a 3-color RGB LED (active-low\n\
+             for each channel), a temperature sensor, and a higher-timed buzzer\n\
+             driver. It is the largest and most power-hungry revision. Choose Pro\n\
+             when you need RGB backlight effects or the richer buzzer."
         }
     }
 }
@@ -308,6 +350,8 @@ enum Panel {
     Shell,
     Debug,
     Bugs,
+    Wiki,
+    Tutorials,
     Settings,
 }
 
@@ -349,6 +393,8 @@ impl Panel {
             Panel::Shell => "Shell Access",
             Panel::Debug => tr(lang, Key::DebugOutput),
             Panel::Bugs => "Bugs",
+            Panel::Tutorials => tr(lang, Key::Tutorials),
+            Panel::Wiki => "Wiki",
             Panel::Settings => tr(lang, Key::Settings),
         }
     }
@@ -410,6 +456,7 @@ impl Default for StudioApp {
             text_size: 1,
             catalog_width: 0.0,
             preset_height: 0.0,
+            last_window_size: egui::Vec2::ZERO,
             last_build_time: None,
             build_count: 0,
             build_history: Vec::new(),
@@ -456,8 +503,12 @@ impl Default for StudioApp {
             beep_armed: false,
             beep_target: 0,
             pending_confirm: None,
+            code_view: None,
+            fuzz_test_result: None,
             first_run: true,
             saved_on_exit: false,
+            wiki: wiki::Wiki::new(),
+            line_limit: settings::default_line_limit(),
         };
         app.log.log("Firmware Studio starting");
         app.last_uf2 = build::last_uf2(std::path::Path::new(&app.output_dir));
@@ -525,6 +576,16 @@ impl eframe::App for StudioApp {
         // clock and sim keep running instead of freezing.
         ctx.request_repaint();
 
+        // Detect a window resize (or the very first frame) and reset the Watch
+        // Faces panel ratios so they re-derive proportionally to the new size
+        // instead of going stale.
+        let window_size = ctx.screen_rect().size();
+        if self.last_window_size != window_size {
+            self.last_window_size = window_size;
+            self.catalog_width = 0.0;
+            self.preset_height = 0.0;
+        }
+
         // Keyboard shortcuts (only when the user isn't typing in a text field).
         if !ctx.wants_keyboard_input() {
             if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
@@ -534,6 +595,8 @@ impl eframe::App for StudioApp {
                 self.building = true;
                 self.build_message = tr(self.language, Key::Building).to_string();
                 self.log.log("Starting firmware build");
+                self.terminal_history
+                    .push("Output write: starting firmware build".to_string());
                 let out = std::path::PathBuf::from(self.output_dir.clone());
                 let handle = std::thread::spawn(move || build::build_firmware(&out));
                 self.pending_build = Some(handle);
@@ -583,7 +646,17 @@ impl eframe::App for StudioApp {
                                 self.log.log(format!("UF2 written to {}", p.display()));
                                 self.build_log
                                     .log(format!("UF2 written to {}", p.display()));
+                                self.terminal_history.push(format!(
+                                    "Output write succeeded: UF2 written to {}",
+                                    p.display()
+                                ));
+                            } else {
+                                self.terminal_history
+                                    .push("Output write finished: no UF2 produced".to_string());
                             }
+                        } else {
+                            self.terminal_history
+                                .push(format!("Build/Output write failed: {}", result.message));
                         }
                     }
                     Err(_) => {
@@ -591,6 +664,8 @@ impl eframe::App for StudioApp {
                         self.build_message =
                             tr(self.language, Key::BuildThreadPanicked).to_string();
                         self.log.log("Build thread panicked");
+                        self.terminal_history
+                            .push("Build/Output write failed: thread panicked".to_string());
                     }
                 }
             } else {
@@ -635,15 +710,27 @@ impl eframe::App for StudioApp {
                 self.checksum_busy = false;
                 match handle.join() {
                     Ok(Ok(sha)) => {
+                        let short = sha[..sha.len().min(12)].to_string();
                         self.release_sha256 = Some(sha);
                         self.status = "Release checksum fetched".to_string();
+                        self.log.log("Integrity check: release checksum fetched");
+                        self.terminal_history.push(format!(
+                            "Integrity check: release checksum fetched ({})",
+                            short
+                        ));
                     }
                     Ok(Err(e)) => {
                         self.status = format!("Checksum unavailable: {e}");
                         self.log_error(&format!("Checksum unavailable: {e}"));
+                        self.log.log(format!("Integrity check failed: {e}"));
+                        self.terminal_history
+                            .push(format!("Integrity check failed: {e}"));
                     }
                     Err(_) => {
                         self.status = "Checksum thread panicked".to_string();
+                        self.log.log("Integrity check thread panicked");
+                        self.terminal_history
+                            .push("Integrity check thread panicked".to_string());
                     }
                 }
             } else {
@@ -699,6 +786,8 @@ impl eframe::App for StudioApp {
                             Panel::Shell,
                             Panel::Debug,
                             Panel::Bugs,
+                            Panel::Tutorials,
+                            Panel::Wiki,
                             Panel::Settings,
                         ] {
                             if ui
@@ -856,6 +945,7 @@ impl eframe::App for StudioApp {
                     ui.separator();
                     egui::ScrollArea::vertical()
                         .auto_shrink([false, false])
+                        .stick_to_bottom(true)
                         .max_height(120.0)
                         .show(ui, |ui| {
                             for line in &self.terminal_history {
@@ -892,6 +982,8 @@ impl eframe::App for StudioApp {
             Panel::Shell => self.shell(ui),
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
+            Panel::Tutorials => self.tutorials(ui),
+            Panel::Wiki => self.wiki(ui),
             Panel::Settings => self.settings(ui),
         });
 
@@ -915,7 +1007,7 @@ impl eframe::App for StudioApp {
                         ui.label(step);
                     }
                     ui.add_space(10.0);
-                    if ui.button("Got it — Start using").clicked() {
+                    if ui.button("Got it - Start using").clicked() {
                         self.first_run = false;
                         self.save_settings_internal();
                     }
@@ -979,6 +1071,55 @@ impl eframe::App for StudioApp {
                     }
                 }
             }
+        }
+
+        // "View code" popup: shows a face's source read-only in a monospace
+        // editor. Opened from the Watch Faces tab context menus.
+        if let Some((name, source)) = self.code_view.clone() {
+            // Keep the editor buffer in sync with the face being viewed so the
+            // TextEdit below shows the current source (update runs every frame).
+            if self.editor_name != name {
+                self.editor_name = name.clone();
+                self.editor_source = source;
+            }
+            egui::Window::new(format!("View code: {name}"))
+                .default_size([560.0, 420.0])
+                .resizable(true)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.strong(&name);
+                        ui.separator();
+                        if ui.small_button("Close").clicked() {
+                            self.code_view = None;
+                        }
+                    });
+                    ui.separator();
+                    egui::ScrollArea::both()
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.add(
+                                egui::TextEdit::multiline(&mut self.editor_source)
+                                    .font(egui::TextStyle::Monospace)
+                                    .code_editor()
+                                    .desired_width(f32::INFINITY),
+                            );
+                        });
+                });
+        }
+
+        // "Test before adding" result: fuzzed the face from the context menu.
+        if let Some(result) = self.fuzz_test_result.clone() {
+            egui::Window::new("Fuzz test result")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .show(ctx, |ui| {
+                    ui.label(&result);
+                    ui.add_space(8.0);
+                    if ui.button("OK").clicked() {
+                        self.fuzz_test_result = None;
+                    }
+                });
         }
     }
 }
@@ -1080,197 +1221,203 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
-        ui.collapsing("NTP Time", |ui| {
-            ui.label("Select a server and fetch the current time. Add your own servers below.")
-                .on_hover_text(
-                    "Network Time Protocol (NTP) synchronizes the watch's clock to an\n\
+        egui::CollapsingHeader::new("NTP Time")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label("Select a server and fetch the current time. Add your own servers below.")
+                    .on_hover_text(
+                        "Network Time Protocol (NTP) synchronizes the watch's clock to an\n\
                      atomic time source over the internet. Pick a server, press Fetch,\n\
                      and the app shows the exact UTC time plus the network latency.",
-                );
-            ui.add_space(4.0);
+                    );
+                ui.add_space(4.0);
 
-            // Build the full server list: built-in + custom.
-            let mut all_servers: Vec<(String, String)> = ntp::SERVERS
-                .iter()
-                .map(|(n, h)| (n.to_string(), h.to_string()))
-                .collect();
-            all_servers.extend(self.ntp_servers.iter().cloned());
-            if self.ntp_server >= all_servers.len() {
-                self.ntp_server = 0;
-            }
+                // Build the full server list: built-in + custom.
+                let mut all_servers: Vec<(String, String)> = ntp::SERVERS
+                    .iter()
+                    .map(|(n, h)| (n.to_string(), h.to_string()))
+                    .collect();
+                all_servers.extend(self.ntp_servers.iter().cloned());
+                if self.ntp_server >= all_servers.len() {
+                    self.ntp_server = 0;
+                }
 
-            // Server selection.
-            ui.horizontal(|ui| {
-                ui.label("Server:");
-                egui::ComboBox::from_id_source("ntp_server")
-                    .selected_text(&all_servers[self.ntp_server].0)
-                    .show_ui(ui, |ui| {
-                        for (i, (name, _)) in all_servers.iter().enumerate() {
-                            ui.selectable_value(&mut self.ntp_server, i, name);
+                // Server selection.
+                ui.horizontal(|ui| {
+                    ui.label("Server:");
+                    egui::ComboBox::from_id_source("ntp_server")
+                        .selected_text(&all_servers[self.ntp_server].0)
+                        .show_ui(ui, |ui| {
+                            for (i, (name, _)) in all_servers.iter().enumerate() {
+                                ui.selectable_value(&mut self.ntp_server, i, name);
+                            }
+                        });
+                    if ui.button("Fetch time").clicked() {
+                        self.fetch_ntp();
+                    }
+                });
+
+                // Custom server management.
+                ui.add_space(4.0);
+                ui.collapsing("Manage custom servers", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label("Name:");
+                        ui.text_edit_singleline(&mut self.ntp_edit_name);
+                        ui.label("Host:");
+                        ui.text_edit_singleline(&mut self.ntp_edit_host);
+                        if ui.button("Add").clicked() {
+                            let name = self.ntp_edit_name.trim().to_string();
+                            let host = self.ntp_edit_host.trim().to_string();
+                            if !name.is_empty() && !host.is_empty() {
+                                self.ntp_servers.push((name, host));
+                                self.ntp_edit_name.clear();
+                                self.ntp_edit_host.clear();
+                                self.log.log("Added custom NTP server");
+                                self.save_settings_internal();
+                            }
                         }
                     });
-                if ui.button("Fetch time").clicked() {
-                    self.fetch_ntp();
-                }
-            });
-
-            // Custom server management.
-            ui.add_space(4.0);
-            ui.collapsing("Manage custom servers", |ui| {
-                ui.horizontal(|ui| {
-                    ui.label("Name:");
-                    ui.text_edit_singleline(&mut self.ntp_edit_name);
-                    ui.label("Host:");
-                    ui.text_edit_singleline(&mut self.ntp_edit_host);
-                    if ui.button("Add").clicked() {
-                        let name = self.ntp_edit_name.trim().to_string();
-                        let host = self.ntp_edit_host.trim().to_string();
-                        if !name.is_empty() && !host.is_empty() {
-                            self.ntp_servers.push((name, host));
-                            self.ntp_edit_name.clear();
-                            self.ntp_edit_host.clear();
-                            self.log.log("Added custom NTP server");
+                    // List custom servers with edit/delete.
+                    let mut to_delete: Option<usize> = None;
+                    for (i, (name, host)) in self.ntp_servers.iter().enumerate() {
+                        ui.horizontal(|ui| {
+                            ui.monospace(format!("{name}  ({host})"));
+                            if ui.small_button("Edit").clicked() {
+                                self.ntp_edit_name = name.clone();
+                                self.ntp_edit_host = host.clone();
+                                to_delete = Some(i); // reuse: remove then re-add on Add
+                            }
+                            if ui.small_button("Del").clicked() {
+                                to_delete = Some(i);
+                            }
+                        });
+                    }
+                    if let Some(i) = to_delete {
+                        if i < self.ntp_servers.len() {
+                            self.ntp_servers.remove(i);
+                            if self.ntp_server >= ntp::SERVERS.len() + self.ntp_servers.len() {
+                                self.ntp_server = 0;
+                            }
+                            self.log.log("Removed custom NTP server");
                             self.save_settings_internal();
                         }
                     }
                 });
-                // List custom servers with edit/delete.
-                let mut to_delete: Option<usize> = None;
-                for (i, (name, host)) in self.ntp_servers.iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.monospace(format!("{name}  ({host})"));
-                        if ui.small_button("Edit").clicked() {
-                            self.ntp_edit_name = name.clone();
-                            self.ntp_edit_host = host.clone();
-                            to_delete = Some(i); // reuse: remove then re-add on Add
-                        }
-                        if ui.small_button("Del").clicked() {
-                            to_delete = Some(i);
-                        }
-                    });
-                }
-                if let Some(i) = to_delete {
-                    if i < self.ntp_servers.len() {
-                        self.ntp_servers.remove(i);
-                        if self.ntp_server >= ntp::SERVERS.len() + self.ntp_servers.len() {
-                            self.ntp_server = 0;
-                        }
-                        self.log.log("Removed custom NTP server");
-                        self.save_settings_internal();
-                    }
-                }
-            });
 
-            // Show the fetched time.
-            if let Some(ts) = self.ntp_time {
-                let secs = ts as i64;
-                let days = secs.div_euclid(86400);
-                let rem = secs.rem_euclid(86400);
-                let h = (rem / 3600) % 24;
-                let m = (rem / 60) % 60;
-                let s = rem % 60;
-                // Day of week: 1970-01-01 was Thursday.
-                let dow = ((days + 4).rem_euclid(7)) as usize;
-                let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][dow];
-                ui.add_space(8.0);
-                ui.monospace(format!(
-                    "{weekday}  {:02}:{:02}:{:02} UTC   (ping {:.1} ms, offset {:+.2} ms)",
-                    h,
-                    m,
-                    s,
-                    self.ntp_ping,
-                    self.ntp_offset * 1000.0
-                ));
-            } else if self.ntp_busy {
-                ui.add_space(8.0);
-                ui.spinner();
-                ui.label("Fetching...");
-            } else {
-                ui.add_space(8.0);
-                ui.weak("No time fetched yet.");
-            }
+                // Show the fetched time.
+                if let Some(ts) = self.ntp_time {
+                    let secs = ts as i64;
+                    let days = secs.div_euclid(86400);
+                    let rem = secs.rem_euclid(86400);
+                    let h = (rem / 3600) % 24;
+                    let m = (rem / 60) % 60;
+                    let s = rem % 60;
+                    // Day of week: 1970-01-01 was Thursday.
+                    let dow = ((days + 4).rem_euclid(7)) as usize;
+                    let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][dow];
+                    ui.add_space(8.0);
+                    ui.monospace(format!(
+                        "{weekday}  {:02}:{:02}:{:02} UTC   (ping {:.1} ms, offset {:+.2} ms)",
+                        h,
+                        m,
+                        s,
+                        self.ntp_ping,
+                        self.ntp_offset * 1000.0
+                    ));
+                } else if self.ntp_busy {
+                    ui.add_space(8.0);
+                    ui.spinner();
+                    ui.label("Fetching...");
+                } else {
+                    ui.add_space(8.0);
+                    ui.weak("No time fetched yet.");
+                }
 
-            // Server info table.
-            ui.add_space(8.0);
-            ui.collapsing("Server list", |ui| {
-                egui::Grid::new("ntp_server_list")
-                    .striped(true)
-                    .spacing([16.0, 2.0])
-                    .num_columns(3)
-                    .show(ui, |ui| {
-                        ui.strong("#");
-                        ui.strong("Name");
-                        ui.strong("Host");
-                        ui.end_row();
-                        for (i, (name, host)) in all_servers.iter().enumerate() {
-                            ui.monospace(i.to_string());
-                            ui.label(name);
-                            ui.monospace(host);
+                // Server info table.
+                ui.add_space(8.0);
+                ui.collapsing("Server list", |ui| {
+                    egui::Grid::new("ntp_server_list")
+                        .striped(true)
+                        .spacing([16.0, 2.0])
+                        .num_columns(3)
+                        .show(ui, |ui| {
+                            ui.strong("#");
+                            ui.strong("Name");
+                            ui.strong("Host");
                             ui.end_row();
-                        }
-                    });
+                            for (i, (name, host)) in all_servers.iter().enumerate() {
+                                ui.monospace(i.to_string());
+                                ui.label(name);
+                                ui.monospace(host);
+                                ui.end_row();
+                            }
+                        });
+                });
             });
-        });
 
         // Clock calibration: compute the next-minute-boundary timestamp from the
         // NTP time and generate a `settime` command for the serial shell.
         ui.add_space(16.0);
         ui.separator();
-        ui.collapsing("Clock Calibration", |ui| {
-            ui.label(
-                "Generate a precise set-time command. The watch's serial shell accepts\n\
+        egui::CollapsingHeader::new("Clock Calibration")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label(
+                    "Generate a precise set-time command. The watch's serial shell accepts\n\
                  `settime YYMMDDHHMMSS`; send it at the exact minute boundary.",
-            )
-            .on_hover_text(
-                "The watch's RTC drifts slightly over time. To calibrate it precisely:\n\
+                )
+                .on_hover_text(
+                    "The watch's RTC drifts slightly over time. To calibrate it precisely:\n\
                  1. Fetch the NTP time above.\n\
                  2. This generates a `settime` command for the exact next minute.\n\
                  3. Send it to the watch's serial shell at that moment.\n\n\
                  NOTE: Over USB the watch appears as a file drive (UF2 bootloader), not\n\
                  a serial port. The serial shell is used over the debug UART pins, or\n\
                  via the Studio app when a serial connection is available.",
-            );
-            ui.add_space(4.0);
-            if let Some(ts) = self.ntp_time {
-                // Compute the next minute boundary in UTC.
-                let boundary = (ts / 60 + 1) * 60;
-                let b = boundary as i64;
-                let days = b.div_euclid(86400);
-                let rem = b.rem_euclid(86400);
-                let h = (rem / 3600) % 24;
-                let m = (rem / 60) % 60;
-                let s = rem % 60;
-                let (year, month, day) = watch_sim::civil_from_days(days);
-                let yy = (year % 100) as u32;
-                let cmd = format!(
-                    "settime {:02}{:02}{:02}{:02}{:02}{:02}",
-                    yy, month, day, h, m, s
                 );
-                ui.monospace(format!(
-                    "Next minute boundary: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
-                    year, month, day, h, m, s
-                ));
-                ui.monospace(format!("Command: {cmd}"));
-                if ui.button("Copy command").clicked() {
-                    let _ = ui_copy_to_clipboard(&cmd);
-                    self.status = "Calibration command copied".to_string();
-                    self.log.log(format!("Calibration command: {cmd}"));
+                ui.add_space(4.0);
+                if let Some(ts) = self.ntp_time {
+                    // Compute the next minute boundary in UTC.
+                    let boundary = (ts / 60 + 1) * 60;
+                    let b = boundary as i64;
+                    let days = b.div_euclid(86400);
+                    let rem = b.rem_euclid(86400);
+                    let h = (rem / 3600) % 24;
+                    let m = (rem / 60) % 60;
+                    let s = rem % 60;
+                    let (year, month, day) = watch_sim::civil_from_days(days);
+                    let yy = (year % 100) as u32;
+                    let cmd = format!(
+                        "settime {:02}{:02}{:02}{:02}{:02}{:02}",
+                        yy, month, day, h, m, s
+                    );
+                    ui.monospace(format!(
+                        "Next minute boundary: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
+                        year, month, day, h, m, s
+                    ));
+                    ui.monospace(format!("Command: {cmd}"));
+                    if ui.button("Copy command").clicked() {
+                        let _ = ui_copy_to_clipboard(&cmd);
+                        self.status = "Calibration command copied".to_string();
+                        self.log.log(format!("Calibration command: {cmd}"));
+                    }
+                } else {
+                    ui.weak("Fetch NTP time first to generate a calibration command.");
                 }
-            } else {
-                ui.weak("Fetch NTP time first to generate a calibration command.");
-            }
-        });
+            });
 
         // Drift calibration: measure the watch's drift against NTP over time.
         ui.add_space(16.0);
         ui.separator();
-        ui.collapsing("Drift Calibration", |ui| {
-            ui.label(
-                "Measure the watch's crystal drift (PPM) by recording two samples\n\
+        egui::CollapsingHeader::new("Drift Calibration")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label(
+                    "Measure the watch's crystal drift (PPM) by recording two samples\n\
                  (watch time vs NTP reference) some time apart.",
-            )
-            .on_hover_text(
-                "Every watch crystal runs slightly fast or slow (measured in parts-per-\n\
+                )
+                .on_hover_text(
+                    "Every watch crystal runs slightly fast or slow (measured in parts-per-\n\
                  million, PPM). To measure yours:\n\
                  1. Fetch the NTP time.\n\
                  2. Press 'Record sample' now.\n\
@@ -1278,98 +1425,102 @@ impl StudioApp {
                  4. Fetch NTP again and press 'Record sample' again.\n\
                  The app computes the drift, which you can apply as a frequency\n\
                  correction to the RTC.",
-            );
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                if ui.button("Record sample").clicked() {
-                    if let Some(ts) = self.ntp_time {
-                        // Use the sim watch's live time as the "watch" reading.
-                        let (_, _, _, h, m, s, _) = self.watch.get_time();
-                        let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
-                        self.drift_session.record(watch_secs, ts);
-                        self.save_settings_internal();
-                        let n = if self.drift_session.start.is_some() {
-                            if self.drift_session.end.is_some() {
-                                "end".to_string()
+                );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Record sample").clicked() {
+                        if let Some(ts) = self.ntp_time {
+                            // Use the sim watch's live time as the "watch" reading.
+                            let (_, _, _, h, m, s, _) = self.watch.get_time();
+                            let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
+                            self.drift_session.record(watch_secs, ts);
+                            self.save_settings_internal();
+                            let n = if self.drift_session.start.is_some() {
+                                if self.drift_session.end.is_some() {
+                                    "end".to_string()
+                                } else {
+                                    "start".to_string()
+                                }
                             } else {
                                 "start".to_string()
-                            }
+                            };
+                            self.log.log(format!("Drift sample recorded ({n})"));
                         } else {
-                            "start".to_string()
-                        };
-                        self.log.log(format!("Drift sample recorded ({n})"));
-                    } else {
-                        self.status = "Fetch NTP time first".to_string();
+                            self.status = "Fetch NTP time first".to_string();
+                        }
                     }
+                    if ui.button("Reset").clicked() {
+                        self.drift_session.reset();
+                        self.log.log("Drift session reset");
+                    }
+                });
+                if self.drift_session.ppm != 0.0 {
+                    ui.monospace(format!(
+                        "Last calibrated drift: {:+.2} ppm (from last session)",
+                        self.drift_session.ppm
+                    ));
                 }
-                if ui.button("Reset").clicked() {
-                    self.drift_session.reset();
-                    self.log.log("Drift session reset");
+                if self.drift_session.ppm != 0.0 {
+                    ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
+                    if self.drift_session.ppm.abs() < 0.5 {
+                        ui.label("The watch is running accurately (within 0.5 ppm).");
+                    } else if self.drift_session.ppm > 0.0 {
+                        ui.label("The watch is running FAST; apply a negative correction.");
+                    } else {
+                        ui.label("The watch is running SLOW; apply a positive correction.");
+                    }
+                } else if self.drift_session.start.is_some() {
+                    ui.weak("Start sample recorded. Record a second sample later.");
+                } else {
+                    ui.weak("No samples yet.");
                 }
             });
-            if self.drift_session.ppm != 0.0 {
-                ui.monospace(format!(
-                    "Last calibrated drift: {:+.2} ppm (from last session)",
-                    self.drift_session.ppm
-                ));
-            }
-            if self.drift_session.ppm != 0.0 {
-                ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
-                if self.drift_session.ppm.abs() < 0.5 {
-                    ui.label("The watch is running accurately (within 0.5 ppm).");
-                } else if self.drift_session.ppm > 0.0 {
-                    ui.label("The watch is running FAST; apply a negative correction.");
-                } else {
-                    ui.label("The watch is running SLOW; apply a positive correction.");
-                }
-            } else if self.drift_session.start.is_some() {
-                ui.weak("Start sample recorded. Record a second sample later.");
-            } else {
-                ui.weak("No samples yet.");
-            }
-        });
 
         // Fuzz testing: run randomized input through the face engine.
         ui.add_space(16.0);
         ui.separator();
-        ui.collapsing("Fuzz Testing", |ui| {
-            ui.label("Run randomized button/tick sequences through a face to check stability.")
-                .on_hover_text(
-                    "Fuzzing throws random button presses, ticks, and time changes at a\n\
+        egui::CollapsingHeader::new("Fuzz Testing")
+            .default_open(true)
+            .show(ui, |ui| {
+                ui.label("Run randomized button/tick sequences through a face to check stability.")
+                    .on_hover_text(
+                        "Fuzzing throws random button presses, ticks, and time changes at a\n\
                      watch face to make sure it never panics or produces a broken\n\
                      display. It's a quick way to find crashes before they happen on\n\
                      your wrist. Higher iterations = more thorough but slower.",
-                );
-            ui.add_space(4.0);
-            ui.horizontal(|ui| {
-                ui.label("Iterations:");
-                ui.add(egui::DragValue::new(&mut self.fuzz_iterations).clamp_range(100..=100_000));
-                if ui.button("Run fuzz").clicked() {
-                    let faces = self.presets.active_faces();
-                    let name = if faces.is_empty() {
-                        "SIMPLE_CLOCK".to_string()
-                    } else {
-                        faces[self.sim_face_idx.min(faces.len() - 1)].clone()
-                    };
-                    let iters = self.fuzz_iterations;
-                    let seed = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_nanos() as u64)
-                        .unwrap_or(0);
-                    match fuzz::fuzz_face(&name, iters, seed) {
-                        Ok(n) => {
-                            self.status = format!("Fuzz passed: {n} iterations on {name}");
-                            self.log
-                                .log(format!("Fuzz passed: {n} iterations on {name}"));
-                        }
-                        Err(e) => {
-                            self.status = format!("Fuzz failed: {e}");
-                            self.log.log(format!("Fuzz failed: {e}"));
+                    );
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.label("Iterations:");
+                    ui.add(
+                        egui::DragValue::new(&mut self.fuzz_iterations).clamp_range(100..=100_000),
+                    );
+                    if ui.button("Run fuzz").clicked() {
+                        let faces = self.presets.active_faces();
+                        let name = if faces.is_empty() {
+                            "SIMPLE_CLOCK".to_string()
+                        } else {
+                            faces[self.sim_face_idx.min(faces.len() - 1)].clone()
+                        };
+                        let iters = self.fuzz_iterations;
+                        let seed = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos() as u64)
+                            .unwrap_or(0);
+                        match fuzz::fuzz_face(&name, iters, seed) {
+                            Ok(n) => {
+                                self.status = format!("Fuzz passed: {n} iterations on {name}");
+                                self.log
+                                    .log(format!("Fuzz passed: {n} iterations on {name}"));
+                            }
+                            Err(e) => {
+                                self.status = format!("Fuzz failed: {e}");
+                                self.log.log(format!("Fuzz failed: {e}"));
+                            }
                         }
                     }
-                }
+                });
             });
-        });
     }
 
     /// Fetches the current time from the selected NTP server on a background thread.
@@ -1399,6 +1550,9 @@ impl StudioApp {
             return;
         }
         self.checksum_busy = true;
+        self.log.log("Integrity check: verifying against release");
+        self.terminal_history
+            .push("Integrity check: verifying against release".to_string());
         let handle = std::thread::spawn(fetch_release_sha256);
         self.pending_checksum = Some(handle);
     }
@@ -1428,6 +1582,7 @@ impl StudioApp {
             });
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
+                .stick_to_bottom(true)
                 .max_height(120.0)
                 .show(ui, |ui| {
                     if self.faces_log.is_empty() {
@@ -1651,6 +1806,80 @@ impl StudioApp {
                                             if name_resp.drag_stopped() {
                                                 self.drag_catalog_face = None;
                                             }
+                                            // Right-click context menu on a catalog
+                                            // face: add to preset, preview in the
+                                            // simulator, view source, or fuzz-test it.
+                                            if name_resp.context_menu(|ui| {
+                                                let face_name = face.name.clone();
+                                                if ui.button("Add to preset").clicked() {
+                                                    self.presets.add_face(&face_name);
+                                                    self.log.log(format!(
+                                                        "Added {face_name} to preset"
+                                                    ));
+                                                    ui.close_menu();
+                                                }
+                                                if ui.button("Preview").clicked() {
+                                                    // Select the face: if it is already in
+                                                    // the active preset, jump to its index;
+                                                    // otherwise add it first.
+                                                    let mut idx = None;
+                                                    for (j, f) in self
+                                                        .presets
+                                                        .active_faces()
+                                                        .iter()
+                                                        .enumerate()
+                                                    {
+                                                        if *f == face_name {
+                                                            idx = Some(j);
+                                                            break;
+                                                        }
+                                                    }
+                                                    if idx.is_none() {
+                                                        self.presets.add_face(&face_name);
+                                                        let len = self.presets.active_faces().len();
+                                                        if len > 0 {
+                                                            idx = Some(len - 1);
+                                                        }
+                                                    }
+                                                    if let Some(j) = idx {
+                                                        self.sim_face_idx = j;
+                                                    }
+                                                    self.current_panel = Panel::Simulator;
+                                                    self.log.log(format!(
+                                                        "Previewing face {face_name}"
+                                                    ));
+                                                    ui.close_menu();
+                                                }
+                                                if ui.button("View code").clicked() {
+                                                    self.code_view = Some((
+                                                        face_name.clone(),
+                                                        editor::read_face(&face_name).unwrap_or_else(
+                                                            |e| {
+                                                                format!("Error reading face: {e}")
+                                                            },
+                                                        ),
+                                                    ));
+                                                    ui.close_menu();
+                                                }
+                                                if ui.button("Test before adding").clicked() {
+                                                    let iters = self.fuzz_iterations;
+                                                    let seed = std::time::SystemTime::now()
+                                                        .duration_since(std::time::UNIX_EPOCH)
+                                                        .map(|d| d.as_nanos() as u64)
+                                                        .unwrap_or(0);
+                                                    self.fuzz_test_result = Some(match fuzz::fuzz_face(
+                                                        &face_name, iters, seed,
+                                                    ) {
+                                                        Ok(n) => format!(
+                                                            "Fuzz passed: {n} iterations on {face_name}"
+                                                        ),
+                                                        Err(e) => format!("Fuzz failed: {e}"),
+                                                    });
+                                                    ui.close_menu();
+                                                }
+                                            }).is_some() {
+                                                self.drag_catalog_face = None;
+                                            }
                                             ui.label(&face.description);
                                             if ui
                                                 .small_button("+")
@@ -1736,6 +1965,66 @@ impl StudioApp {
                                             && self.drag_preset_from != Some(i)
                                         {
                                             drop_target = Some(i);
+                                        }
+                                        // Right-click context menu on the active
+                                        // preset row: same controls as the row
+                                        // buttons plus preview / view code / test.
+                                        if name_resp.context_menu(|ui| {
+                                            let face = face.clone();
+                                            if ui.button("Preview").clicked() {
+                                                self.sim_face_idx = i;
+                                                self.current_panel = Panel::Simulator;
+                                                self.log.log(format!("Previewing face {face}"));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("View code").clicked() {
+                                                self.code_view = Some((
+                                                    face.clone(),
+                                                    editor::read_face(&face).unwrap_or_else(|e| {
+                                                        format!("Error reading face: {e}")
+                                                    }),
+                                                ));
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Test before adding").clicked() {
+                                                let iters = self.fuzz_iterations;
+                                                let seed = std::time::SystemTime::now()
+                                                    .duration_since(std::time::UNIX_EPOCH)
+                                                    .map(|d| d.as_nanos() as u64)
+                                                    .unwrap_or(0);
+                                                self.fuzz_test_result = Some(
+                                                    match fuzz::fuzz_face(&face, iters, seed) {
+                                                        Ok(n) => format!(
+                                                            "Fuzz passed: {n} iterations on {face}"
+                                                        ),
+                                                        Err(e) => format!("Fuzz failed: {e}"),
+                                                    },
+                                                );
+                                                ui.close_menu();
+                                            }
+                                            ui.separator();
+                                            if ui.button("Move up").clicked() {
+                                                self.presets.move_face_up(i);
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Move down").clicked() {
+                                                self.presets.move_face_down(i);
+                                                ui.close_menu();
+                                            }
+                                            if ui.button("Remove").clicked() {
+                                                let face = face.clone();
+                                                self.pending_confirm = Some((
+                                                    format!(
+                                                        "Remove '{face}' from the active preset?"
+                                                    ),
+                                                    ConfirmKind::DeleteFaceFromPreset(i),
+                                                ));
+                                                ui.close_menu();
+                                            }
+                                        }).is_some() {
+                                            // The context menu opening consumed the
+                                            // drag; do not treat it as a reorder.
+                                            self.drag_preset_from = None;
                                         }
                                         if ui
                                             .small_button("Up")
@@ -2266,7 +2555,7 @@ impl StudioApp {
             if ui
                 .selectable_label(
                     self.editor_template == i,
-                    format!("{} — {}", t.name, t.description),
+                    format!("{} - {}", t.name, t.description),
                 )
                 .clicked()
             {
@@ -2315,7 +2604,7 @@ impl StudioApp {
                         Ok(_) => {
                             // Best-effort visibility: add a `pub mod <name>;`
                             // declaration so the face shows up in Watch Faces. A
-                            // registration failure is non-fatal — the file is
+                            // registration failure is non-fatal - the file is
                             // saved, just not wired up yet.
                             match editor::register_face(&name) {
                                 Ok(_) => {
@@ -2399,6 +2688,10 @@ impl StudioApp {
                             self.log.log(format!("Target board set to {}", b.label()));
                         }
                     }
+                    ui.separator();
+                    // Description of the selected board: what it is, hardware
+                    // details, and how it differs from the other revisions.
+                    ui.weak(board_info(self.board));
                 });
                 ui.weak(
                     "Choose the board revision you're flashing. The firmware binary is\n\
@@ -2430,6 +2723,8 @@ impl StudioApp {
                     self.building = true;
                     self.build_message = tr(self.language, Key::Building).to_string();
                     self.log.log("Starting firmware build");
+                    self.terminal_history
+                        .push("Output write: starting firmware build".to_string());
                     let out = std::path::PathBuf::from(self.output_dir.clone());
                     let handle = std::thread::spawn(move || build::build_firmware(&out));
                     self.pending_build = Some(handle);
@@ -2489,6 +2784,7 @@ impl StudioApp {
                 });
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
+                    .stick_to_bottom(true)
                     .max_height(200.0)
                     .show(ui, |ui| {
                         let mut entries: Vec<_> = self
@@ -2774,7 +3070,7 @@ impl StudioApp {
             egui::Color32::from_rgb(220, 180, 80),
             "Note: this shell is simulated against the app. Over USB the watch appears \n\
              as a file drive (bootloader), so these round-trips are for practicing \n\
-             commands — not talking to the physical watch. Real serial requires the \n\
+             commands - not talking to the physical watch. Real serial requires the \n\
              debug UART header.",
         );
         ui.separator();
@@ -2816,6 +3112,7 @@ impl StudioApp {
                 ui.add_space(4.0);
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
+                    .stick_to_bottom(true)
                     .show(ui, |ui| {
                         if self.shell_log.is_empty() {
                             ui.weak("(no commands sent yet)");
@@ -2853,6 +3150,7 @@ impl StudioApp {
             ui.separator();
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
+                .stick_to_bottom(true)
                 .show(ui, |ui| {
                     if self.shell_hw_log.is_empty() {
                         ui.weak("(hardware events will appear here)");
@@ -2974,6 +3272,7 @@ impl StudioApp {
         ui.separator();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
+            .stick_to_bottom(true)
             .show(ui, |ui| {
                 if self.log.is_empty() {
                     ui.label("(empty)");
@@ -3032,6 +3331,7 @@ impl StudioApp {
         ui.add_space(8.0);
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
+            .stick_to_bottom(true)
             .show(ui, |ui| {
                 if self.error_log.is_empty() {
                     ui.weak("(no errors recorded)");
@@ -3045,6 +3345,349 @@ impl StudioApp {
             });
     }
 
+    /// The tutorials panel: a beginner-friendly guide to making watch faces.
+    fn tutorials(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Tutorials");
+        ui.separator();
+        ui.label(
+            "New to watch faces? Start here. This guide walks you through what a\n\
+             watch face is, how the buttons work, and how to build your first one.\n\
+             Everything is plain language - no prior coding needed.",
+        );
+        ui.add_space(8.0);
+
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                // What is a watch face?
+                egui::CollapsingHeader::new("What is a watch face?")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.label(
+                            "A watch face is the screen you see on your watch. It is a small\n\
+                             program that decides what to draw and how to react when you\n\
+                             press a button.\n\n\
+                             The watch can hold several faces at once. You switch between\n\
+                             them with the Mode button. Each face is a separate file in the\n\
+                             firmware project, and this app lets you create, edit, and test\n\
+                             them without touching the rest of the code.",
+                        );
+                    });
+                ui.add_space(6.0);
+
+                // The 3 buttons.
+                egui::CollapsingHeader::new("The 3 buttons")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.label(
+                            "The watch has three buttons on the side. In code they are\n\
+                             called Light, Mode, and Alarm, but you can think of them as\n\
+                             L, C, and A.",
+                        );
+                        ui.add_space(4.0);
+                        ui.monospace("L = Light   (Button::Light)");
+                        ui.monospace("C = Mode    (Button::Mode)");
+                        ui.monospace("A = Alarm   (Button::Alarm)");
+                        ui.add_space(4.0);
+                        ui.label(
+                            "Your face decides what each button does. For example, the\n\
+                             Counter template makes the Alarm button add one to a counter.\n\
+                             The watch itself handles the basics (like turning on the\n\
+                             backlight), so your face only needs to react to the presses\n\
+                             that matter to it.",
+                        );
+                    });
+                ui.add_space(6.0);
+
+                // Your first face.
+                egui::CollapsingHeader::new("Your first face")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.label("Follow these steps to make and install your first face:");
+                        ui.add_space(4.0);
+                        for (n, step) in [
+                            "Open the Editor tab.",
+                            "Pick the Counter template.",
+                            "Type a name in snake_case, like my_counter.",
+                            "Click Generate from template to fill in the code.",
+                            "Click Save face. This writes the file and registers it.",
+                            "Open the Watch Faces tab and add your face to the active preset.",
+                            "Open Build & Flash, click Build .uf2, then Copy to watch.",
+                        ]
+                        .iter()
+                        .enumerate()
+                        {
+                            ui.label(format!("{}. {}", n + 1, step));
+                        }
+                        ui.add_space(4.0);
+                        ui.weak(
+                            "Tip: you can test your face in the Simulator tab before\n\
+                             building. The simulator shows the faces in the active preset.",
+                        );
+                    });
+                ui.add_space(6.0);
+
+                // The WatchFace trait.
+                egui::CollapsingHeader::new("The WatchFace trait")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(
+                            "Every face implements the WatchFace trait. A trait is just a\n\
+                             list of things your face must be able to do. You only need to\n\
+                             fill in these four methods:",
+                        );
+                        ui.add_space(4.0);
+                        ui.monospace("setup    - runs once when the watch boots");
+                        ui.monospace("activate - runs when your face appears on screen");
+                        ui.monospace("loop_    - runs on every event (tick or button)");
+                        ui.monospace("resign   - runs when your face leaves the screen");
+                        ui.add_space(4.0);
+                        ui.label(
+                            "Most of your work goes in loop_. It is called once per second\n\
+                             for a tick, and again whenever a button is pressed. Here is a\n\
+                             tiny example that shows HELLO and counts presses of the Alarm\n\
+                             button:",
+                        );
+                        ui.add_space(4.0);
+                        ui.monospace(
+                            "fn loop_(&mut self, event: Event, _settings: &mut Settings) {\n\
+                             \x20   match event {\n\
+                             \x20       Event::Tick => {\n\
+                             \x20           watch::slcd::display_string(\"HELLO\", 0);\n\
+                             \x20       }\n\
+                             \x20       Event::Button(Button::Alarm, ButtonEvent::Up) => {\n\
+                             \x20           self.count += 1;\n\
+                             \x20       }\n\
+                             \x20       _ => {}\n\
+                             \x20   }\n\
+                             }",
+                        );
+                    });
+                ui.add_space(6.0);
+
+                // Events.
+                egui::CollapsingHeader::new("Events")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(
+                            "loop_ receives an Event each time something happens. The most\n\
+                             common ones are:",
+                        );
+                        ui.add_space(4.0);
+                        ui.monospace("Event::Tick - once per second");
+                        ui.monospace("Event::Button(Button, ButtonEvent) - a button changed");
+                        ui.add_space(4.0);
+                        ui.label(
+                            "A button press produces several ButtonEvent values in order:\n\
+                             Down, Up, LongPress, LongUp, and ReallyLongPress. You usually\n\
+                             react to Up (a normal press) or LongPress (holding it down).\n\
+                             Here is how to tell them apart:",
+                        );
+                        ui.add_space(4.0);
+                        ui.monospace(
+                            "Event::Button(Button::Mode, ButtonEvent::Up) => {\n\
+                             \x20   // a quick press of the Mode button\n\
+                             }\n\
+                             Event::Button(Button::Mode, ButtonEvent::LongPress) => {\n\
+                             \x20   // the Mode button was held down\n\
+                             }",
+                        );
+                    });
+                ui.add_space(6.0);
+
+                // Drawing to the display.
+                egui::CollapsingHeader::new("Drawing to the display")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        ui.label(
+                            "The screen is a segment LCD with 10 character positions. You\n\
+                             draw by turning segments on. The most useful helpers are:",
+                        );
+                        ui.add_space(4.0);
+                        ui.monospace("display_string(\"TEXT\", 0) - draw text from a position");
+                        ui.monospace("display_character(b'A', 0) - draw one character");
+                        ui.monospace("set_colon() / clear_colon() - the colon between hours");
+                        ui.monospace("set_indicator(Indicator::Bell) - small icons");
+                        ui.add_space(4.0);
+                        ui.label(
+                            "The second argument to display_string is the starting position\n\
+                             (0 to 9). Positions 4 and 6 are the two middle digits, so a\n\
+                             clock usually draws the hour at position 0 and the minute at\n\
+                             position 5. Indicators are the little icons around the edge,\n\
+                             like the bell for an alarm or PM.",
+                        );
+                    });
+                ui.add_space(6.0);
+
+                // Common pitfalls.
+                egui::CollapsingHeader::new("Common pitfalls")
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for (n, pitfall) in [
+                            "Use snake_case names (my_counter, not MyCounter or my-counter).",
+                            "After saving, your face must be registered so it shows up in Watch Faces. Saving normally does this for you.",
+                            "If the build fails, the error message tells you which file and line. Fix that before flashing.",
+                            "Remember to add your face to the active preset, or it will not be built into the firmware.",
+                            "Test in the Simulator first - it is much faster than building and flashing every time.",
+                        ]
+                        .iter()
+                        .enumerate()
+                        {
+                            ui.label(format!("{}. {}", n + 1, pitfall));
+                        }
+                    });
+            });
+    }
+
+    /// The wiki panel: a built-in reference browser for project concepts.
+    fn wiki(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.heading("Wiki");
+            if ui.button("Back").clicked() {
+                self.wiki.back();
+                self.log.log("Wiki: back".to_string());
+            }
+            if ui.button("Home").clicked() {
+                self.wiki.history.clear();
+                self.wiki.current = String::from("Wiki Home");
+                self.log.log("Wiki: home".to_string());
+            }
+        });
+        ui.separator();
+
+        // Browse repos section.
+        ui.label(egui::RichText::new("Browse repos").strong());
+        ui.horizontal(|ui| {
+            if ui.button("Sensor-Watch").clicked() {
+                let _ = webbrowser::open("https://github.com/joeycastillo/Sensor-Watch");
+            }
+            if ui
+                .button("Second Movement")
+                .on_hover_text("The second-movement firmware variant")
+                .clicked()
+            {
+                let _ = webbrowser::open(
+                    "https://github.com/joeycastillo/Sensor-Watch/tree/main/movement2",
+                );
+            }
+            if ui.button("Author's repo").clicked() {
+                let _ = webbrowser::open("https://github.com/kaiiuen/sensor-watch-rs");
+            }
+        });
+        ui.separator();
+
+        egui::ScrollArea::horizontal().show(ui, |ui| {
+            ui.horizontal(|ui| {
+                // Left pane: search box and page list.
+                ui.vertical(|ui| {
+                    ui.set_width(240.0);
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.wiki.search)
+                            .hint_text("Search pages...")
+                            .desired_width(220.0),
+                    );
+                    ui.add_space(4.0);
+                    let query = self.wiki.search.to_lowercase();
+                    let mut clicked: Option<String> = None;
+                    egui::ScrollArea::vertical()
+                        .max_height(ui.available_height())
+                        .show(ui, |ui| {
+                            for page in &self.wiki.pages {
+                                if !query.is_empty() && !page.title.to_lowercase().contains(&query)
+                                {
+                                    continue;
+                                }
+                                if ui
+                                    .selectable_label(self.wiki.current == page.title, &page.title)
+                                    .clicked()
+                                {
+                                    clicked = Some(page.title.clone());
+                                }
+                            }
+                        });
+                    if let Some(title) = clicked {
+                        self.wiki.navigate(&title);
+                        self.log.log(format!("Wiki: opened {}", title));
+                    }
+                });
+                ui.separator();
+
+                // Right pane: the selected page.
+                ui.vertical(|ui| {
+                    if let Some(page) = self.wiki.current_page().map(|p| p.title.clone()) {
+                        let body = self
+                            .wiki
+                            .current_page()
+                            .map(|p| p.body.clone())
+                            .unwrap_or_default();
+                        ui.heading(&page);
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .max_height(ui.available_height())
+                            .show(ui, |ui| {
+                                // Render the body, splitting on `[[Page]]` tokens.
+                                let mut rest = body.as_str();
+                                loop {
+                                    let start = rest.find("[[");
+                                    let text = match start {
+                                        Some(i) => &rest[..i],
+                                        None => rest,
+                                    };
+                                    for line in text.lines() {
+                                        ui.label(line.trim());
+                                    }
+                                    match start {
+                                        Some(i) => {
+                                            let rest_after = &rest[i + 2..];
+                                            if let Some(end) = rest_after.find("]]") {
+                                                let target = &rest_after[..end];
+                                                let label = target;
+                                                if ui.button(label).clicked() {
+                                                    self.wiki.navigate(target);
+                                                    self.log
+                                                        .log(format!("Wiki: opened {}", target));
+                                                }
+                                                rest = &rest_after[end + 2..];
+                                            } else {
+                                                // Unterminated token; show the rest verbatim.
+                                                for line in rest_after.lines() {
+                                                    ui.label(line.trim());
+                                                }
+                                                break;
+                                            }
+                                        }
+                                        None => break,
+                                    }
+                                }
+                                // Render the explicit cross-links from the page.
+                                let links = self
+                                    .wiki
+                                    .current_page()
+                                    .map(|p| p.links.clone())
+                                    .unwrap_or_default();
+                                if !links.is_empty() {
+                                    ui.add_space(8.0);
+                                    ui.separator();
+                                    ui.strong("Related pages");
+                                    ui.add_space(2.0);
+                                    ui.horizontal_wrapped(|ui| {
+                                        for link in &links {
+                                            if ui.button(link).clicked() {
+                                                self.wiki.navigate(link);
+                                                self.log.log(format!("Wiki: opened {}", link));
+                                            }
+                                        }
+                                    });
+                                }
+                            });
+                    } else {
+                        ui.weak("(no page selected)");
+                    }
+                });
+            });
+        });
+    }
+
     /// The simulator panel: render the watch and handle its buttons.
     fn simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.label(
@@ -3053,190 +3696,211 @@ impl StudioApp {
              settings configured in the Watch Faces tab.",
         );
         ui.separator();
-        ui.horizontal(|ui| {
-            ui.heading("Simulator");
-            ui.separator();
-            // Adjustable size slider.
-            ui.label("Size:");
-            ui.add(
-                egui::Slider::new(&mut self.sim_scale, 0.4..=2.0)
-                    .step_by(0.1)
-                    .suffix("x"),
-            );
-            if ui.button("Reset").clicked() {
-                self.sim_scale = 0.5;
-                self.sim_log.log("Sim size reset".to_string());
-            }
-            ui.separator();
-            // Show which preset face is being simulated.
-            let faces = self.presets.active_faces();
-            let idx = self.sim_face_idx.min(faces.len().saturating_sub(1));
-            // Dual counters: what the sim thinks it's on vs the actual face.
-            ui.label(format!(
-                "Sim face: {} / {}",
-                if faces.is_empty() { 0 } else { idx + 1 },
-                faces.len()
-            ));
-            if !faces.is_empty() {
-                ui.monospace(&faces[idx]);
-            }
-            ui.separator();
-            ui.label(format!("Engine face: {}", self.face_engine.face_name));
-            ui.separator();
-            // Show which render engine produced the current frame: the REAL
-            // firmware seam when available, else the face_sim fallback.
-            ui.label(if self.real_face.is_some() {
-                "Render: real face (firmware seam)".to_string()
-            } else {
-                "Render: face_sim fallback".to_string()
-            });
-            ui.separator();
-            // Fuzz the current face.
-            if ui
-                .button("Fuzz face")
-                .on_hover_text(
-                    "Run randomized button/tick sequences through the current face to\n\
-                 check it never panics or produces a broken display.",
-                )
-                .clicked()
-            {
-                let name = if faces.is_empty() {
-                    "SIMPLE_CLOCK".to_string()
-                } else {
-                    faces[idx].clone()
-                };
-                let iters = self.fuzz_iterations;
-                let seed = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0);
-                match fuzz::fuzz_face(&name, iters, seed) {
-                    Ok(n) => {
-                        self.status = format!("Fuzz passed: {n} iterations on {name}");
-                        self.sim_log
-                            .log(format!("Fuzz passed: {n} iters on {name}"));
-                        self.log
-                            .log(format!("Fuzz passed: {n} iterations on {name}"));
-                    }
-                    Err(e) => {
-                        self.status = format!("Fuzz failed: {e}");
-                        self.sim_log.log(format!("Fuzz failed: {e}"));
-                        self.log_error(&format!("Fuzz failed: {e}"));
-                    }
-                }
-            }
-        });
-        ui.separator();
 
-        // Date/time controller: set the simulated display without tedious
-        // button mashing.
-        ui.collapsing("Date / time controller", |ui| {
-            egui::Grid::new("sim_date_grid")
-                .spacing([12.0, 6.0])
-                .num_columns(4)
-                .show(ui, |ui| {
-                    ui.label("Year");
-                    ui.add(egui::DragValue::new(&mut self.sim_year).clamp_range(1970..=2100));
-                    ui.label("Month");
-                    ui.add(egui::DragValue::new(&mut self.sim_month).clamp_range(1..=12));
-                    ui.end_row();
-                    ui.label("Day");
-                    ui.add(egui::DragValue::new(&mut self.sim_day).clamp_range(1..=31));
-                    ui.label("Weekday");
-                    let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-                    egui::ComboBox::from_id_source("sim_weekday")
-                        .selected_text(names[self.sim_weekday])
-                        .show_ui(ui, |ui| {
-                            for (i, n) in names.iter().enumerate() {
-                                ui.selectable_value(&mut self.sim_weekday, i, *n);
-                            }
-                        });
-                    ui.end_row();
-                    ui.label("Hour");
-                    ui.add(egui::DragValue::new(&mut self.sim_hour).clamp_range(0..=23));
-                    ui.label("Minute");
-                    ui.add(egui::DragValue::new(&mut self.sim_minute).clamp_range(0..=59));
-                    ui.end_row();
-                });
-            ui.horizontal(|ui| {
-                if ui.button("Apply date/time").clicked() {
-                    self.watch.set_datetime(
-                        self.sim_year,
-                        self.sim_month,
-                        self.sim_day,
-                        self.sim_hour,
-                        self.sim_minute,
-                    );
-                    self.sim_log.log(format!(
-                        "Set date/time to {}-{:02}-{:02} {:02}:{:02}",
-                        self.sim_year, self.sim_month, self.sim_day, self.sim_hour, self.sim_minute
-                    ));
-                    self.log.log(format!(
-                        "Sim date set to {}-{:02}-{:02} {:02}:{:02}",
-                        self.sim_year, self.sim_month, self.sim_day, self.sim_hour, self.sim_minute
-                    ));
-                }
-                // Changing the weekday only overrides the weekday; it does not
-                // touch the date/time.
-                if ui.button("Apply weekday").clicked() {
-                    self.watch.weekday_override = Some(self.sim_weekday as u32);
-                    self.sim_log
-                        .log(format!("Weekday set to {}", self.sim_weekday));
-                    self.log.log(format!(
-                        "Weekday set to {}",
-                        ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][self.sim_weekday]
-                    ));
-                }
-                if ui.button("Reset to now").clicked() {
-                    self.watch.time_offset = 0;
-                    self.watch.weekday_override = None;
-                    self.sim_log.log("Reset to now".to_string());
-                    self.log.log("Sim date reset to now");
-                }
-            });
-            ui.separator();
-        });
-
-        // Simulator debug log: under the sim bar / date controller, showing
-        // button presses, face switches, and sim actions.
-        egui::CollapsingHeader::new("Simulator debug log")
-            .default_open(true)
+        // The simulator body can be taller than the window (especially with the
+        // date controller, debug log, and a large watch rendering all expanded),
+        // so wrap it in a scroll area that shows a scrollbar on overflow. The
+        // watch buttons inside draw_watch use pointer mapping against the
+        // allocated rect, which still works inside the scroll area.
+        egui::ScrollArea::both()
+            .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    if ui.small_button("Clear").clicked() {
-                        self.sim_log.clear();
+                    ui.heading("Simulator");
+                    ui.separator();
+                    // Adjustable size slider.
+                    ui.label("Size:");
+                    ui.add(
+                        egui::Slider::new(&mut self.sim_scale, 0.4..=2.0)
+                            .step_by(0.1)
+                            .suffix("x"),
+                    );
+                    if ui.button("Reset").clicked() {
+                        self.sim_scale = 0.5;
+                        self.sim_log.log("Sim size reset".to_string());
                     }
-                    if ui.small_button("Copy").clicked() {
-                        let text = self
-                            .sim_log
-                            .entries()
-                            .iter()
-                            .map(|e| e.message.clone())
-                            .collect::<Vec<_>>()
-                            .join("\n");
-                        let _ = ui_copy_to_clipboard(&text);
+                    ui.separator();
+                    // Show which preset face is being simulated.
+                    let faces = self.presets.active_faces();
+                    let idx = self.sim_face_idx.min(faces.len().saturating_sub(1));
+                    // Dual counters: what the sim thinks it's on vs the actual face.
+                    ui.label(format!(
+                        "Sim face: {} / {}",
+                        if faces.is_empty() { 0 } else { idx + 1 },
+                        faces.len()
+                    ));
+                    if !faces.is_empty() {
+                        ui.monospace(&faces[idx]);
+                    }
+                    ui.separator();
+                    ui.label(format!("Engine face: {}", self.face_engine.face_name));
+                    ui.separator();
+                    // Show which render engine produced the current frame: the REAL
+                    // firmware seam when available, else the face_sim fallback.
+                    ui.label(if self.real_face.is_some() {
+                        "Render: real face (firmware seam)".to_string()
+                    } else {
+                        "Render: face_sim fallback".to_string()
+                    });
+                    ui.separator();
+                    // Fuzz the current face.
+                    if ui
+                        .button("Fuzz face")
+                        .on_hover_text(
+                            "Run randomized button/tick sequences through the current face to\n\
+                 check it never panics or produces a broken display.",
+                        )
+                        .clicked()
+                    {
+                        let name = if faces.is_empty() {
+                            "SIMPLE_CLOCK".to_string()
+                        } else {
+                            faces[idx].clone()
+                        };
+                        let iters = self.fuzz_iterations;
+                        let seed = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_nanos() as u64)
+                            .unwrap_or(0);
+                        match fuzz::fuzz_face(&name, iters, seed) {
+                            Ok(n) => {
+                                self.status = format!("Fuzz passed: {n} iterations on {name}");
+                                self.sim_log
+                                    .log(format!("Fuzz passed: {n} iters on {name}"));
+                                self.log
+                                    .log(format!("Fuzz passed: {n} iterations on {name}"));
+                            }
+                            Err(e) => {
+                                self.status = format!("Fuzz failed: {e}");
+                                self.sim_log.log(format!("Fuzz failed: {e}"));
+                                self.log_error(&format!("Fuzz failed: {e}"));
+                            }
+                        }
                     }
                 });
-                egui::ScrollArea::vertical()
-                    .auto_shrink([false, false])
-                    .max_height(100.0)
-                    .show(ui, |ui| {
-                        if self.sim_log.is_empty() {
-                            ui.weak("(no sim activity yet)");
-                        }
-                        for entry in self.sim_log.entries() {
-                            let secs = entry.timestamp % 60;
-                            let mins = (entry.timestamp / 60) % 60;
-                            let hrs = (entry.timestamp / 3600) % 24;
-                            ui.monospace(format!(
-                                "[{hrs:02}:{mins:02}:{secs:02}] {}",
-                                entry.message
+                ui.separator();
+
+                // Date/time controller: set the simulated display without tedious
+                // button mashing.
+                ui.collapsing("Date / time controller", |ui| {
+                    egui::Grid::new("sim_date_grid")
+                        .spacing([12.0, 6.0])
+                        .num_columns(4)
+                        .show(ui, |ui| {
+                            ui.label("Year");
+                            ui.add(
+                                egui::DragValue::new(&mut self.sim_year).clamp_range(1970..=2100),
+                            );
+                            ui.label("Month");
+                            ui.add(egui::DragValue::new(&mut self.sim_month).clamp_range(1..=12));
+                            ui.end_row();
+                            ui.label("Day");
+                            ui.add(egui::DragValue::new(&mut self.sim_day).clamp_range(1..=31));
+                            ui.label("Weekday");
+                            let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+                            egui::ComboBox::from_id_source("sim_weekday")
+                                .selected_text(names[self.sim_weekday])
+                                .show_ui(ui, |ui| {
+                                    for (i, n) in names.iter().enumerate() {
+                                        ui.selectable_value(&mut self.sim_weekday, i, *n);
+                                    }
+                                });
+                            ui.end_row();
+                            ui.label("Hour");
+                            ui.add(egui::DragValue::new(&mut self.sim_hour).clamp_range(0..=23));
+                            ui.label("Minute");
+                            ui.add(egui::DragValue::new(&mut self.sim_minute).clamp_range(0..=59));
+                            ui.end_row();
+                        });
+                    ui.horizontal(|ui| {
+                        if ui.button("Apply date/time").clicked() {
+                            self.watch.set_datetime(
+                                self.sim_year,
+                                self.sim_month,
+                                self.sim_day,
+                                self.sim_hour,
+                                self.sim_minute,
+                            );
+                            self.sim_log.log(format!(
+                                "Set date/time to {}-{:02}-{:02} {:02}:{:02}",
+                                self.sim_year,
+                                self.sim_month,
+                                self.sim_day,
+                                self.sim_hour,
+                                self.sim_minute
+                            ));
+                            self.log.log(format!(
+                                "Sim date set to {}-{:02}-{:02} {:02}:{:02}",
+                                self.sim_year,
+                                self.sim_month,
+                                self.sim_day,
+                                self.sim_hour,
+                                self.sim_minute
                             ));
                         }
+                        // Changing the weekday only overrides the weekday; it does not
+                        // touch the date/time.
+                        if ui.button("Apply weekday").clicked() {
+                            self.watch.weekday_override = Some(self.sim_weekday as u32);
+                            self.sim_log
+                                .log(format!("Weekday set to {}", self.sim_weekday));
+                            self.log.log(format!(
+                                "Weekday set to {}",
+                                ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][self.sim_weekday]
+                            ));
+                        }
+                        if ui.button("Reset to now").clicked() {
+                            self.watch.time_offset = 0;
+                            self.watch.weekday_override = None;
+                            self.sim_log.log("Reset to now".to_string());
+                            self.log.log("Sim date reset to now");
+                        }
                     });
-            });
+                    ui.separator();
+                });
 
-        self.draw_watch(ui, ctx, self.sim_scale);
+                // Simulator debug log: under the sim bar / date controller, showing
+                // button presses, face switches, and sim actions.
+                egui::CollapsingHeader::new("Simulator debug log")
+                    .default_open(true)
+                    .show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            if ui.small_button("Clear").clicked() {
+                                self.sim_log.clear();
+                            }
+                            if ui.small_button("Copy").clicked() {
+                                let text = self
+                                    .sim_log
+                                    .entries()
+                                    .iter()
+                                    .map(|e| e.message.clone())
+                                    .collect::<Vec<_>>()
+                                    .join("\n");
+                                let _ = ui_copy_to_clipboard(&text);
+                            }
+                        });
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .stick_to_bottom(true)
+                            .max_height(100.0)
+                            .show(ui, |ui| {
+                                if self.sim_log.is_empty() {
+                                    ui.weak("(no sim activity yet)");
+                                }
+                                for entry in self.sim_log.entries() {
+                                    let secs = entry.timestamp % 60;
+                                    let mins = (entry.timestamp / 60) % 60;
+                                    let hrs = (entry.timestamp / 3600) % 24;
+                                    ui.monospace(format!(
+                                        "[{hrs:02}:{mins:02}:{secs:02}] {}",
+                                        entry.message
+                                    ));
+                                }
+                            });
+                    });
+
+                self.draw_watch(ui, ctx, self.sim_scale);
+            });
     }
 
     /// Draws the watch SVG at the given scale with clickable F-91W button hotspots.
@@ -3290,6 +3954,15 @@ impl StudioApp {
         if self.face_tick_accum >= 1.0 {
             self.face_tick_accum -= 1.0;
             self.face_engine.tick();
+            // Log the tick into the shell sim, debug output, and terminal so
+            // the three live views stay in sync with the simulated watch.
+            let (_, _, _, h, m, s, _) = self.watch.get_time();
+            let line = format!("tick: {h:02}:{m:02}:{s:02}");
+            self.shell_log.log(line.clone());
+            self.shell_hw_log
+                .log("RTC tick: 1 Hz interrupt".to_string());
+            self.log.log(line.clone());
+            self.push_terminal(line);
         }
 
         // Use the watch's live simulated time so the clock ticks and the date
@@ -3624,7 +4297,7 @@ impl StudioApp {
             "help" => {
                 self.terminal_history.push(
                     "Commands: help, status, faces, board, build, flash, fuzz, time,\
-                     clear, modules, errors, bugreport, sim, theme, lang"
+                     settime YYMMDDHHMMSS, clear, modules, errors, bugreport, sim, theme, lang"
                         .to_string(),
                 );
             }
@@ -3679,6 +4352,23 @@ impl StudioApp {
                 let (_, _, _, h, m, s, _) = self.watch.get_time();
                 self.terminal_history
                     .push(format!("Sim time: {h:02}:{m:02}:{s:02}"));
+            }
+            "settime" => {
+                // Drive the simulated watch from the terminal, mirroring the
+                // shell sim's settime so both surfaces stay in sync with the
+                // Simulator.
+                let payload = parts.get(1).copied().unwrap_or("");
+                match parse_settime(payload) {
+                    Some((year, month, day, hour, minute)) => {
+                        self.watch.set_datetime(year, month, day, hour, minute);
+                        self.terminal_history.push(format!(
+                            "Sim time set to {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
+                        ));
+                    }
+                    None => self
+                        .terminal_history
+                        .push("Usage: settime YYMMDDHHMMSS".to_string()),
+                }
             }
             "board" => {
                 if let Some(b) = parts.get(1) {
@@ -3789,9 +4479,11 @@ impl StudioApp {
                 .push(format!("Unknown command: {cmd} (try 'help')")),
         }
 
-        // Bound the terminal history to avoid unbounded memory growth.
-        if self.terminal_history.len() > 500 {
-            let excess = self.terminal_history.len() - 500;
+        // Bound the terminal history to the configured line limit to avoid
+        // unbounded memory growth.
+        let limit = self.line_limit.max(1);
+        if self.terminal_history.len() > limit {
+            let excess = self.terminal_history.len() - limit;
             self.terminal_history.drain(..excess);
         }
     }
@@ -3863,6 +4555,26 @@ impl StudioApp {
                 });
                 ui.end_row();
 
+                // Output line limit (applies to every terminal/debug log).
+                ui.label("Log line limit");
+                ui.horizontal(|ui| {
+                    let mut limit = self.line_limit as i64;
+                    let resp = ui.add(
+                        egui::DragValue::new(&mut limit)
+                            .clamp_range(10..=100000)
+                            .speed(10)
+                            .suffix(" lines"),
+                    );
+                    if resp.changed() {
+                        self.line_limit = limit.max(1) as usize;
+                        self.apply_line_limit();
+                        self.log
+                            .log(format!("Log line limit set to {}", self.line_limit));
+                    }
+                    ui.weak("Applies to the terminal, shell, and all debug logs");
+                });
+                ui.end_row();
+
                 // Firmware project path.
                 ui.label(tr(self.language, Key::FirmwareProject));
                 ui.monospace(build::firmware_dir().display().to_string());
@@ -3909,7 +4621,11 @@ impl StudioApp {
                 ui.monospace(format!("{:.1}%", self.sys_stats.cpu_percent));
                 ui.end_row();
                 ui.label("CPU speed");
-                ui.monospace(format!("{} MHz", self.sys_stats.cpu_freq_mhz));
+                if self.sys_stats.cpu_freq_mhz > 0 {
+                    ui.monospace(format!("{} MHz", self.sys_stats.cpu_freq_mhz));
+                } else {
+                    ui.monospace("N/A");
+                }
                 ui.end_row();
                 ui.label("Threads");
                 ui.monospace(format!("{}", self.sys_stats.threads));
@@ -4030,7 +4746,7 @@ impl StudioApp {
                     } else {
                         ui.colored_label(
                             egui::Color32::from_rgb(220, 80, 80),
-                            "Checksum MISMATCH — this executable differs from the official release.",
+                            "Checksum MISMATCH - this executable differs from the official release.",
                         );
                     }
                 }
@@ -4141,6 +4857,17 @@ impl StudioApp {
         self.error_log.log(msg);
     }
 
+    /// Appends a line to the terminal history, dropping the oldest lines once
+    /// it exceeds the configured line limit.
+    fn push_terminal(&mut self, line: impl Into<String>) {
+        self.terminal_history.push(line.into());
+        let limit = self.line_limit.max(1);
+        if self.terminal_history.len() > limit {
+            let excess = self.terminal_history.len() - limit;
+            self.terminal_history.drain(..excess);
+        }
+    }
+
     /// Builds a structured bug report with app state and recent errors.
     fn build_bug_report(&self) -> String {
         let mut out = String::new();
@@ -4186,6 +4913,9 @@ impl StudioApp {
 
     /// Saves the current settings to a JSON file in the app data directory.
     fn save_settings_to_file(&mut self) {
+        self.log.log("Settings export: saving settings to file");
+        self.terminal_history
+            .push("Settings export: saving settings to file".to_string());
         let settings = settings::AppSettings::capture(
             self.language,
             self.theme,
@@ -4201,6 +4931,7 @@ impl StudioApp {
             self.output_dir.clone(),
             self.first_run,
             self.drift_session.ppm,
+            self.line_limit,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -4210,18 +4941,29 @@ impl StudioApp {
                 match std::fs::write(&path, json) {
                     Ok(_) => {
                         self.status = format!("Settings saved to {}", path.display());
-                        self.log
-                            .log(format!("Settings saved to {}", path.display()));
+                        self.log.log(format!(
+                            "Settings export succeeded: saved to {}",
+                            path.display()
+                        ));
+                        self.terminal_history.push(format!(
+                            "Settings export succeeded: saved to {}",
+                            path.display()
+                        ));
                     }
                     Err(e) => {
                         self.status = format!("Failed to save settings: {e}");
-                        self.log.log(format!("Failed to save settings: {e}"));
+                        self.log.log(format!("Settings export failed: {e}"));
+                        self.terminal_history
+                            .push(format!("Settings export failed: {e}"));
                     }
                 }
             }
             Err(e) => {
                 self.status = format!("Failed to serialize settings: {e}");
-                self.log.log(format!("Failed to serialize settings: {e}"));
+                self.log
+                    .log(format!("Settings export failed to serialize: {e}"));
+                self.terminal_history
+                    .push(format!("Settings export failed to serialize: {e}"));
             }
         }
     }
@@ -4243,6 +4985,7 @@ impl StudioApp {
             self.output_dir.clone(),
             self.first_run,
             self.drift_session.ppm,
+            self.line_limit,
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -4252,6 +4995,9 @@ impl StudioApp {
 
     /// Exports the settings JSON to the clipboard.
     fn export_settings(&mut self) {
+        self.log.log("Settings export: exporting settings JSON");
+        self.terminal_history
+            .push("Settings export: exporting settings JSON".to_string());
         let settings = settings::AppSettings::capture(
             self.language,
             self.theme,
@@ -4267,16 +5013,23 @@ impl StudioApp {
             self.output_dir.clone(),
             self.first_run,
             self.drift_session.ppm,
+            self.line_limit,
         );
         match settings.to_json() {
             Ok(json) => {
                 self.status = "Settings JSON copied to clipboard".to_string();
-                self.log.log("Settings JSON copied to clipboard");
+                self.log
+                    .log("Settings export succeeded: JSON copied to clipboard");
+                self.terminal_history
+                    .push("Settings export succeeded: JSON copied to clipboard".to_string());
                 let _ = ui_copy_to_clipboard(&json);
             }
             Err(e) => {
                 self.status = format!("Failed to serialize settings: {e}");
-                self.log.log(format!("Failed to serialize settings: {e}"));
+                self.log
+                    .log(format!("Settings export failed to serialize: {e}"));
+                self.terminal_history
+                    .push(format!("Settings export failed to serialize: {e}"));
             }
         }
     }
@@ -4329,7 +5082,27 @@ impl StudioApp {
         } else {
             s.output_dir
         };
+        self.line_limit = s.line_limit.max(1);
+        self.apply_line_limit();
         self.save_settings_internal();
+    }
+
+    /// Applies the configured line limit to every output log so the bound is
+    /// enforced uniformly across all panes.
+    fn apply_line_limit(&mut self) {
+        let limit = self.line_limit.max(1);
+        self.log.set_limit(limit);
+        self.shell_log.set_limit(limit);
+        self.shell_hw_log.set_limit(limit);
+        self.build_log.set_limit(limit);
+        self.flash_log.set_limit(limit);
+        self.error_log.set_limit(limit);
+        self.faces_log.set_limit(limit);
+        self.sim_log.set_limit(limit);
+        if self.terminal_history.len() > limit {
+            let excess = self.terminal_history.len() - limit;
+            self.terminal_history.drain(..excess);
+        }
     }
 
     /// Exports the source code to a folder.
