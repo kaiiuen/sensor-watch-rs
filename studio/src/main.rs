@@ -5,12 +5,16 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod block_editor;
 mod build;
+mod components;
 mod debug;
+mod diagnostics;
 mod drift;
 mod editor;
 mod face_sim;
 mod faces;
+mod file_browser;
 mod fonts;
 mod fuzz;
 mod i18n;
@@ -21,6 +25,7 @@ mod panic_map;
 mod persist;
 mod presets;
 mod real_face;
+mod restore;
 mod settings;
 mod sysstats;
 mod theme;
@@ -87,6 +92,8 @@ struct StudioApp {
     editor_description: String,
     /// The selected editor template.
     editor_template: usize,
+    /// State for the beginner-friendly visual block editor.
+    block_editor: block_editor::BlockEditor,
     /// The selected NTP server index.
     ntp_server: usize,
     /// Custom NTP servers added by the user (name, host).
@@ -128,8 +135,14 @@ struct StudioApp {
     catalog_search: String,
     /// The catalog category filter (empty = all).
     catalog_category: String,
+    /// The read-only workspace file browser.
+    file_browser: file_browser::FileBrowser,
     /// The target board revision (green, red/lite, blue, pro).
     board: Board,
+    /// Named hardware component profiles and the editable active draft.
+    component_profiles: Vec<components::BuildProfile>,
+    component_profile: usize,
+    component_draft: components::ComponentsConfig,
     /// The index of the preset face currently being simulated.
     sim_face_idx: usize,
     /// Simulator date controller: year, month, day, hour, minute, weekday.
@@ -179,6 +192,8 @@ struct StudioApp {
     shell_log: debug::DebugLog,
     /// The Shell Access tab's low-level "watch brain" log (hardware/ISR view).
     shell_hw_log: debug::DebugLog,
+    /// Offline shell/simulator diagnostics state.
+    diagnostics: diagnostics::DiagnosticsState,
     /// The latest commit message from GitHub (for update notifications).
     latest_commit: Option<String>,
     /// The timestamp (unix seconds) when the update notification was received.
@@ -237,6 +252,10 @@ struct StudioApp {
     wiki: wiki::Wiki,
     /// The maximum number of lines kept in each output/terminal/debug log.
     line_limit: usize,
+    /// Local configuration restore points.
+    restore_store: restore::RestoreStore,
+    /// Name input for a manually created restore point.
+    restore_name: String,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -353,8 +372,10 @@ enum Panel {
     Calibration,
     Modules,
     Shell,
+    Diagnostics,
     Debug,
     Bugs,
+    FileBrowser,
     Wiki,
     Tutorials,
     Settings,
@@ -396,8 +417,10 @@ impl Panel {
             Panel::Calibration => "Calibration",
             Panel::Modules => "Modules",
             Panel::Shell => "Shell Access",
+            Panel::Diagnostics => "Diagnostics",
             Panel::Debug => tr(lang, Key::DebugOutput),
             Panel::Bugs => "Bugs",
+            Panel::FileBrowser => "File Browser",
             Panel::Tutorials => tr(lang, Key::Tutorials),
             Panel::Wiki => "Wiki",
             Panel::Settings => tr(lang, Key::Settings),
@@ -436,6 +459,7 @@ impl Default for StudioApp {
             editor_source: String::new(),
             editor_description: String::new(),
             editor_template: 0,
+            block_editor: block_editor::BlockEditor::default(),
             ntp_server: 0,
             ntp_servers: Vec::new(),
             ntp_edit_name: String::new(),
@@ -474,7 +498,11 @@ impl Default for StudioApp {
             sim_log: debug::DebugLog::new(),
             catalog_search: String::new(),
             catalog_category: String::new(),
+            file_browser: file_browser::FileBrowser::new(),
             board: Board::Green,
+            component_profiles: components::default_profiles(),
+            component_profile: 0,
+            component_draft: components::selected_config(&components::default_profiles(), 0),
             sim_face_idx: 0,
             sim_year: 2026,
             sim_month: 1,
@@ -503,6 +531,7 @@ impl Default for StudioApp {
             shell_input: String::new(),
             shell_log: debug::DebugLog::new(),
             shell_hw_log: debug::DebugLog::new(),
+            diagnostics: diagnostics::DiagnosticsState::new(),
             latest_commit: None,
             update_time: None,
             update_checking: false,
@@ -516,6 +545,8 @@ impl Default for StudioApp {
             saved_on_exit: false,
             wiki: wiki::Wiki::new(),
             line_limit: settings::default_line_limit(),
+            restore_store: restore::RestoreStore::load(),
+            restore_name: String::new(),
         };
         app.log.log("Firmware Studio starting");
         app.last_uf2 = build::last_uf2(std::path::Path::new(&app.output_dir));
@@ -599,6 +630,7 @@ impl eframe::App for StudioApp {
                 self.current_panel = Panel::BuildFlash;
             }
             if ctx.input(|i| i.key_pressed(egui::Key::F6)) && !self.building {
+                self.snapshot_before("Before build");
                 self.building = true;
                 self.build_message = tr(self.language, Key::Building).to_string();
                 self.log.log("Starting firmware build");
@@ -791,8 +823,10 @@ impl eframe::App for StudioApp {
                             Panel::Calibration,
                             Panel::Modules,
                             Panel::Shell,
+                            Panel::Diagnostics,
                             Panel::Debug,
                             Panel::Bugs,
+                            Panel::FileBrowser,
                             Panel::Tutorials,
                             Panel::Wiki,
                             Panel::Settings,
@@ -987,8 +1021,10 @@ impl eframe::App for StudioApp {
             Panel::Calibration => self.calibration(ui),
             Panel::Modules => self.modules(ui),
             Panel::Shell => self.shell(ui),
+            Panel::Diagnostics => self.diagnostics(ui),
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
+            Panel::FileBrowser => self.file_browser(ui),
             Panel::Tutorials => self.tutorials(ui),
             Panel::Wiki => self.wiki(ui),
             Panel::Settings => self.settings(ui),
@@ -1050,10 +1086,12 @@ impl eframe::App for StudioApp {
                 self.pending_confirm = None;
                 match kind {
                     ConfirmKind::DeletePreset(name) => {
+                        self.snapshot_before("Before deleting preset");
                         self.presets.delete_active();
                         self.faces_log.log(format!("Deleted preset {name}"));
                     }
                     ConfirmKind::DeleteFaceFromPreset(index) => {
+                        self.snapshot_before("Before removing face from preset");
                         let face = self
                             .presets
                             .active_faces()
@@ -1064,14 +1102,18 @@ impl eframe::App for StudioApp {
                         self.faces_log
                             .log(format!("Removed {face} from active preset"));
                     }
-                    ConfirmKind::DeleteFaceFile(name) => match editor::delete_face(&name) {
-                        Ok(_) => {
-                            self.log.log(format!("Deleted face {name}"));
-                            self.face_list = faces::discover_faces();
+                    ConfirmKind::DeleteFaceFile(name) => {
+                        self.snapshot_before("Before deleting face");
+                        match editor::delete_face(&name) {
+                            Ok(_) => {
+                                self.log.log(format!("Deleted face {name}"));
+                                self.face_list = faces::discover_faces();
+                            }
+                            Err(e) => self.log.log(format!("Delete failed: {e}")),
                         }
-                        Err(e) => self.log.log(format!("Delete failed: {e}")),
-                    },
+                    }
                     ConfirmKind::RemoveModule(name) => {
+                        self.snapshot_before("Before removing module");
                         self.modules.remove(&name);
                         self.log.log(format!("Removed module {name}"));
                         self.save_settings_internal();
@@ -2509,7 +2551,26 @@ impl StudioApp {
 
     /// The editor panel: create, edit, or delete watch faces.
     fn editor(&mut self, ui: &mut egui::Ui) {
-        ui.heading("Editor");
+        ui.horizontal(|ui| {
+            ui.heading("Editor");
+            ui.separator();
+            if ui
+                .selectable_label(self.block_editor.is_blocks_mode(), "Blocks")
+                .clicked()
+            {
+                self.block_editor.set_blocks_mode(true);
+            }
+            if ui
+                .selectable_label(!self.block_editor.is_blocks_mode(), "Rust")
+                .clicked()
+            {
+                self.block_editor.set_blocks_mode(false);
+            }
+        });
+        if self.block_editor.is_blocks_mode() {
+            self.block_editor.show_blocks(ui, &mut self.editor_source);
+            return;
+        }
         ui.separator();
         ui.label("Create, edit, or delete watch faces.");
         ui.add_space(8.0);
@@ -2705,6 +2766,15 @@ impl StudioApp {
                 );
                 ui.add_space(8.0);
 
+                ui.add_space(8.0);
+                components::show_configurator(
+                    ui,
+                    &mut self.component_profiles,
+                    &mut self.component_profile,
+                    &mut self.component_draft,
+                );
+                ui.add_space(8.0);
+
                 // Estimated times.
                 let selected = self.presets.active_faces().len();
                 let est_compile = 30 + (selected as u32) * 2;
@@ -2723,6 +2793,7 @@ impl StudioApp {
                     .on_hover_text("Compile the firmware into a .uf2 file for the watch")
                     .clicked()
                 {
+                    self.snapshot_before("Before build");
                     self.building = true;
                     self.build_message = tr(self.language, Key::Building).to_string();
                     self.log.log("Starting firmware build");
@@ -2769,6 +2840,7 @@ impl StudioApp {
                         )
                         .clicked()
                     {
+                        self.snapshot_before("Before flash");
                         self.copy_to_watch(&uf2);
                     }
                 } else {
@@ -3097,6 +3169,253 @@ impl StudioApp {
             });
     }
 
+    /// The offline Diagnostics panel. Every check below uses the existing
+    /// simulated shell/watch paths; no physical UART is opened by this panel.
+    fn diagnostics(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Diagnostics");
+        ui.label("Offline checks for the watch shell and simulator. Physical hardware is never implied by simulated results.");
+        ui.horizontal(|ui| {
+            ui.label("Connection mode:");
+            ui.colored_label(egui::Color32::from_rgb(120, 210, 150), "Simulated");
+            ui.weak("UART jig not connected");
+            let run = ui.add_enabled(
+                !self.diagnostics.running,
+                egui::Button::new("Run full diagnostic"),
+            );
+            if run.clicked() {
+                self.run_full_diagnostic();
+            }
+            if ui.button("Copy report").clicked() {
+                let report = self.diagnostics.last_report.clone();
+                if report.is_empty() {
+                    self.status = "Run diagnostics before copying a report".to_string();
+                } else if ui_copy_to_clipboard(&report).is_ok() {
+                    self.status = "Diagnostics report copied".to_string();
+                }
+            }
+            if ui.button("Export report").clicked() {
+                let report = self.diagnostics.last_report.clone();
+                if report.is_empty() {
+                    self.status = "Run diagnostics before exporting a report".to_string();
+                } else {
+                    let path = std::path::Path::new("diagnostics-report.txt");
+                    match std::fs::write(path, report) {
+                        Ok(()) => {
+                            self.status = format!("Diagnostics exported to {}", path.display())
+                        }
+                        Err(error) => self.status = format!("Diagnostics export failed: {error}"),
+                    }
+                }
+            }
+        });
+        ui.colored_label(
+            egui::Color32::from_rgb(220, 180, 80),
+            "SIMULATED ONLY — UART actions are gated until a UART jig is connected. No physical watch was queried.",
+        );
+        ui.separator();
+
+        egui::Grid::new("diagnostic_rows")
+            .striped(true)
+            .show(ui, |ui| {
+                ui.strong("Test");
+                ui.strong("Status");
+                ui.strong("Detail");
+                ui.end_row();
+                for row in &self.diagnostics.rows {
+                    ui.label(row.name);
+                    let color = match row.status {
+                        diagnostics::Status::Pass => egui::Color32::from_rgb(120, 210, 150),
+                        diagnostics::Status::Blocked => egui::Color32::from_rgb(220, 180, 80),
+                        diagnostics::Status::Pending => ui.visuals().weak_text_color(),
+                    };
+                    ui.colored_label(color, row.status.label());
+                    ui.label(&row.detail);
+                    ui.end_row();
+                }
+            });
+        ui.separator();
+        ui.horizontal(|ui| {
+            ui.strong("Live log");
+            ui.weak(format!(
+                "{} / 200 lines · auto-scroll",
+                self.diagnostics.log.len()
+            ));
+            if ui.small_button("Clear").clicked() {
+                self.diagnostics.log.clear();
+            }
+        });
+        egui::ScrollArea::vertical()
+            .id_source("diagnostics_live_log")
+            .stick_to_bottom(true)
+            .auto_shrink([false, false])
+            .max_height(ui.available_height())
+            .show(ui, |ui| {
+                if self.diagnostics.log.is_empty() {
+                    ui.weak("(run a diagnostic to populate the simulated activity log)");
+                }
+                for line in &self.diagnostics.log {
+                    ui.monospace(line);
+                }
+            });
+    }
+
+    fn simulated_command(&mut self, command: &str) -> String {
+        self.run_shell_command(command);
+        self.shell_log
+            .entries()
+            .last()
+            .map(|entry| entry.message.clone())
+            .unwrap_or_default()
+    }
+
+    fn run_full_diagnostic(&mut self) {
+        self.diagnostics.reset();
+        self.diagnostics
+            .log("mode=Simulated; UART jig not connected; no hardware access");
+        self.diagnostics
+            .log("running existing simulated shell/simulator paths");
+
+        let help = self.simulated_command("help");
+        let help_ok = help.contains("CMDS:");
+        self.diagnostics.record(
+            0,
+            if help_ok {
+                diagnostics::Status::Pass
+            } else {
+                diagnostics::Status::Blocked
+            },
+            format!("reply: {help}"),
+        );
+        self.diagnostics.log(format!("shell help -> {help}"));
+
+        let time = self.simulated_command("time");
+        let time_ok = time.len() == 12 && time.bytes().all(|byte| byte.is_ascii_digit());
+        self.diagnostics.record(
+            1,
+            if time_ok {
+                diagnostics::Status::Pass
+            } else {
+                diagnostics::Status::Blocked
+            },
+            format!("reply: {time}"),
+        );
+        self.diagnostics.log(format!("time -> {time}"));
+
+        let settime = self.simulated_command("settime 260101120000");
+        let roundtrip = self.simulated_command("time");
+        let roundtrip_ok = settime == "OK" && roundtrip.starts_with("2601011200");
+        self.diagnostics.record(
+            2,
+            if roundtrip_ok {
+                diagnostics::Status::Pass
+            } else {
+                diagnostics::Status::Blocked
+            },
+            format!("settime={settime}, readback={roundtrip}"),
+        );
+        self.diagnostics.log(format!(
+            "settime round-trip -> {settime}; readback {roundtrip}"
+        ));
+
+        let drift = self.simulated_command("drift -12");
+        let drift_ok = drift == "OK";
+        self.diagnostics.record(
+            3,
+            if drift_ok {
+                diagnostics::Status::Pass
+            } else {
+                diagnostics::Status::Blocked
+            },
+            format!("drift -12 -> {drift}"),
+        );
+        self.diagnostics.log(format!("drift parser -> {drift}"));
+
+        self.watch.update_display();
+        let (_, _, _, hour, minute, second, _) = self.watch.get_time();
+        self.diagnostics.record(
+            4,
+            diagnostics::Status::Pass,
+            format!("clock {hour:02}:{minute:02}:{second:02}; RTC simulator readable"),
+        );
+        self.diagnostics
+            .log(format!("RTC/display -> {hour:02}:{minute:02}:{second:02}"));
+
+        let face_count = self.face_list.len();
+        if face_count > 0 {
+            self.sim_face_idx = (self.sim_face_idx + 1) % face_count;
+        }
+        self.diagnostics.record(
+            5,
+            if face_count > 0 {
+                diagnostics::Status::Pass
+            } else {
+                diagnostics::Status::Blocked
+            },
+            format!("cycled simulator face; {face_count} catalog faces available"),
+        );
+        self.diagnostics
+            .log(format!("face cycling -> index {}", self.sim_face_idx));
+
+        self.press_sim_button(ButtonId::L);
+        self.diagnostics.record(
+            6,
+            diagnostics::Status::Pass,
+            "simulated Light button edge accepted",
+        );
+        self.diagnostics.log("button input -> simulated L press");
+
+        self.watch.update_display();
+        let lcd: String = [
+            self.watch.display.hour_2,
+            self.watch.display.hour_1,
+            self.watch.display.minute_2,
+            self.watch.display.minute_1,
+            self.watch.display.second_2,
+            self.watch.display.second_1,
+        ]
+        .into_iter()
+        .collect();
+        self.diagnostics.record(
+            7,
+            diagnostics::Status::Pass,
+            format!("LCD buffer rendered: {lcd}"),
+        );
+        self.diagnostics.log(format!("LCD output -> {lcd}"));
+
+        self.diagnostics.record(
+            8,
+            diagnostics::Status::Pass,
+            "simulator fault/watchdog state: healthy; physical MCU not inspected",
+        );
+        self.diagnostics
+            .log("watchdog/fault -> simulated healthy (not hardware evidence)");
+
+        self.diagnostics.record(
+            9,
+            diagnostics::Status::Pass,
+            format!(
+                "board {} · UF2 {}",
+                self.board.label(),
+                if self.last_uf2.is_some() {
+                    "available"
+                } else {
+                    "not built"
+                }
+            ),
+        );
+        self.diagnostics.log(format!(
+            "board/UF2 -> {} / {}",
+            self.board.label(),
+            if self.last_uf2.is_some() {
+                "available"
+            } else {
+                "not built"
+            }
+        ));
+        self.diagnostics.finish("Simulated");
+        self.status = "Simulated diagnostics complete; no UART hardware queried".to_string();
+    }
+
     /// The Shell Access panel: a dedicated terminal for talking to the watch.
     /// Split into two halves: the top is the user-facing command surface (the
     /// app sends a command and the watch replies OK/Done/...), and the bottom
@@ -3415,6 +3734,13 @@ impl StudioApp {
                     ui.monospace(format!("[{hrs:02}:{mins:02}:{secs:02}] {}", entry.message));
                 }
             });
+    }
+
+    /// The read-only workspace reference browser.
+    fn file_browser(&mut self, ui: &mut egui::Ui) {
+        if let Some(message) = self.file_browser.ui(ui) {
+            self.status = message;
+        }
     }
 
     /// The tutorials panel: a beginner-friendly guide to making watch faces.
@@ -4755,9 +5081,90 @@ impl StudioApp {
                 self.export_settings();
             }
             if ui.button("Import settings JSON").clicked() {
+                self.snapshot_before("Before settings import");
                 self.import_settings();
             }
         });
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("Restore Points");
+        ui.label("Snapshots contain configuration and app state only; secrets and tokens are never stored.");
+        ui.horizontal(|ui| {
+            ui.label("Name:");
+            ui.text_edit_singleline(&mut self.restore_name);
+            if ui.button("Create").clicked() {
+                let name = if self.restore_name.trim().is_empty() {
+                    "Manual snapshot".to_string()
+                } else {
+                    self.restore_name.trim().to_string()
+                };
+                self.snapshot_before(&name);
+                self.restore_name.clear();
+            }
+        });
+        let mut restore_index = None;
+        let mut delete_index = None;
+        let mut rename_index = None;
+        for (index, point) in self.restore_store.points.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(format!("{} — {}", point.name, point.timestamp));
+                if ui.small_button("Restore").clicked() {
+                    restore_index = Some(index);
+                }
+                if ui.small_button("Delete").clicked() {
+                    delete_index = Some(index);
+                }
+                if ui.small_button("Rename").clicked() {
+                    rename_index = Some(index);
+                }
+                if ui.small_button("Export").clicked() {
+                    match self
+                        .restore_store
+                        .export_json(index)
+                        .and_then(|j| ui_copy_to_clipboard(&j))
+                    {
+                        Ok(_) => self.status = "Restore point copied to clipboard".to_string(),
+                        Err(e) => self.status = format!("Restore point export failed: {e}"),
+                    }
+                }
+            });
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Import").clicked() {
+                match ui_paste_from_clipboard()
+                    .and_then(|j| self.restore_store.import_json(&j).map(|_| j))
+                {
+                    Ok(_) => match self.restore_store.save() {
+                        Ok(_) => self.status = "Restore point imported".to_string(),
+                        Err(e) => self.status = format!("Restore point save failed: {e}"),
+                    },
+                    Err(e) => self.status = format!("Restore point import failed: {e}"),
+                }
+            }
+            if self.restore_store.points.is_empty() {
+                ui.weak("No restore points yet.");
+            }
+        });
+        if let Some(index) = rename_index {
+            let name = if self.restore_name.trim().is_empty() {
+                "Renamed restore point".to_string()
+            } else {
+                self.restore_name.trim().to_string()
+            };
+            self.restore_store.rename(index, name);
+            self.restore_name.clear();
+            let _ = self.restore_store.save();
+            self.status = "Restore point renamed".to_string();
+        }
+        if let Some(index) = delete_index {
+            self.restore_store.delete(index);
+            let _ = self.restore_store.save();
+            self.status = "Restore point deleted".to_string();
+        }
+        if let Some(index) = restore_index {
+            self.restore_selected(index);
+        }
 
         ui.add_space(16.0);
         ui.separator();
@@ -5004,6 +5411,8 @@ impl StudioApp {
             self.first_run,
             self.drift_session.ppm,
             self.line_limit,
+            &self.component_profiles,
+            self.component_profile,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -5040,6 +5449,53 @@ impl StudioApp {
         }
     }
 
+    /// Captures the complete non-secret app state as a restore point.
+    fn snapshot_before(&mut self, name: &str) {
+        let settings = settings::AppSettings::capture(
+            self.language,
+            self.theme,
+            &self.presets,
+            self.ntp_server,
+            &self.ntp_servers,
+            self.sim_scale,
+            &self.watch_config,
+            self.text_size,
+            self.catalog_width,
+            self.preset_height,
+            &self.modules,
+            self.output_dir.clone(),
+            self.first_run,
+            self.drift_session.ppm,
+            self.line_limit,
+            &self.component_profiles,
+            self.component_profile,
+        );
+        self.restore_store
+            .create(name, settings, self.board.label(), self.presets.active);
+        if let Err(e) = self.restore_store.save() {
+            self.log.log(format!("Restore point failed: {e}"));
+        }
+    }
+
+    fn restore_selected(&mut self, index: usize) {
+        let Some(point) = self.restore_store.points.get(index).cloned() else {
+            return;
+        };
+        self.apply_settings(point.settings);
+        self.board = match point.board.as_str() {
+            "Red / Lite" => Board::RedLite,
+            "Blue" => Board::Blue,
+            "Pro" => Board::Pro,
+            _ => Board::Green,
+        };
+        self.presets.active = point
+            .active_preset
+            .min(self.presets.presets.len().saturating_sub(1));
+        self.status = format!("Restored {}", point.name);
+        self.log
+            .log(format!("Restored restore point {}", point.name));
+    }
+
     /// Persists the current settings to the file next to the executable.
     fn save_settings_internal(&mut self) {
         let settings = settings::AppSettings::capture(
@@ -5058,6 +5514,8 @@ impl StudioApp {
             self.first_run,
             self.drift_session.ppm,
             self.line_limit,
+            &self.component_profiles,
+            self.component_profile,
         );
         match persist::save(&settings) {
             Ok(_) => {}
@@ -5086,6 +5544,8 @@ impl StudioApp {
             self.first_run,
             self.drift_session.ppm,
             self.line_limit,
+            &self.component_profiles,
+            self.component_profile,
         );
         match settings.to_json() {
             Ok(json) => {
@@ -5147,6 +5607,16 @@ impl StudioApp {
         self.catalog_width = s.catalog_width;
         self.preset_height = s.preset_height;
         self.modules = s.modules;
+        self.component_profiles = if s.component_profiles.is_empty() {
+            components::default_profiles()
+        } else {
+            s.component_profiles
+        };
+        self.component_profile = s
+            .active_component_profile
+            .min(self.component_profiles.len().saturating_sub(1));
+        self.component_draft =
+            components::selected_config(&self.component_profiles, self.component_profile);
         self.first_run = s.first_run;
         self.drift_session.ppm = s.drift_ppm;
         self.output_dir = if s.output_dir.is_empty() {
