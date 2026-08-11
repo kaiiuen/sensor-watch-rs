@@ -16,28 +16,6 @@
 # Output: flashes target/thumbv6m-none-eabi/release/sensor-watch to the target.
 
 set -e
-
 cd "$(dirname "$0")/.."
-
-ELF="target/thumbv6m-none-eabi/release/sensor-watch"
-
-if [ ! -f "$ELF" ]; then
-    echo "error: firmware ELF not found at $ELF" >&2
-    echo "Build it first with: cargo build --release --target thumbv6m-none-eabi -p sensor-watch" >&2
-    exit 1
-fi
-
-if ! command -v probe-rs >/dev/null 2>&1; then
-    echo "error: probe-rs not found" >&2
-    echo "Install it with: cargo install probe-rs-tools" >&2
-    exit 1
-fi
-
-echo "==> Flashing $ELF to SAM L22J18A over SWD..."
-
-# `probe-rs run` flashes the ELF, resets, and opens a (paused) RTT console.
-# Use --no-flash to skip flashing if you only want to attach, or `probe-rs
-# download --chip ATSAML22J18A --format elf "$ELF"` to flash without resetting.
-probe-rs run --chip ATSAML22J18A --protocol swd --connect-under-reset "$ELF"
-
-echo "==> Done."
+# Compatibility launcher; probe-rs orchestration lives in the Rust host CLI.
+cargo run -p sensor-watch-tools -- flash

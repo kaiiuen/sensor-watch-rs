@@ -377,7 +377,7 @@ fn hex_sha256(data: &[u8]) -> String {
         .collect()
 }
 
-/// Writes the same signed, offline-verifiable manifest used by verify-uf2.py.
+/// Writes the same signed, offline-verifiable manifest used by sensor-watch-tools.
 fn write_manifest(uf2: &Path, data: &[u8], generation: &str) -> std::io::Result<()> {
     let parsed = sensor_watch_core::uf2::validate(data).map_err(std::io::Error::other)?;
     let mut fields = BTreeMap::new();

@@ -17,8 +17,21 @@ fn main() {
     let input = &args[1];
     let output = &args[2];
 
-    let image = fs::read(input).expect("failed to read input binary");
+    let image = match fs::read(input) {
+        Ok(image) => image,
+        Err(error) => {
+            eprintln!("failed to read input binary: {error}");
+            std::process::exit(1);
+        }
+    };
     let uf2 = convert_to_uf2(&image);
-    fs::write(output, &uf2).expect("failed to write output uf2");
+    if uf2.is_empty() {
+        eprintln!("input binary is empty or exceeds the maximum application size");
+        std::process::exit(1);
+    }
+    if let Err(error) = fs::write(output, &uf2) {
+        eprintln!("failed to write output uf2: {error}");
+        std::process::exit(1);
+    }
     println!("wrote {} bytes to {}", uf2.len(), output);
 }

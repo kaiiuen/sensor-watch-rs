@@ -1,0 +1,11 @@
+[package]
+name = "sensor-watch-tools"
+version = "0.1.0"
+edition = "2024"
+description = "Host build, UF2, recovery, and probe-rs tooling for Sensor-Watch"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+serde_json = "1"
+sha2 = "0.10"
+sensor-watch-core = { path = "../core" }
