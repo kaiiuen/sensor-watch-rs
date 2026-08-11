@@ -32,7 +32,16 @@
 
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{
-    alarm, countdown, counter, flashlight, simple_clock, stopwatch, timer, types, world_clock,
+    alarm, countdown, counter, flashlight, interval, invaders, ish, kitchen_conversions, lander,
+    lightmeter, lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
+    minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
+    planetary_hours, planetary_time, preferences, probability, pulsometer, randonaut, ratemeter,
+    repetition_minute, rpn_calculator, rpn_calculator_alt, sailing, save_load, set_time,
+    set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock, simple_clock_bin_led,
+    simple_coin_flip, solar_time, solstice, sos, squash, stopwatch, sunrise_sunset, tachymeter,
+    tally, tarot, tempchart, thermistor_logging, thermistor_readout, thermistor_testing, tide,
+    time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki,
+    weeknumber, wordle, world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -118,6 +127,150 @@ impl RealFaceTrait for simple_clock::SimpleClockFace {
 
 // The other host-migrated faces wired into [`new_face`] forward the same way.
 // Each is the REAL firmware face; the `WatchFace` impl is the untouched trait.
+// Keep this bridge local to the Studio adapter so the real firmware sources stay
+// verbatim.
+#[cfg(feature = "real-faces")]
+macro_rules! impl_real_face_trait {
+    ($face:path) => {
+        impl RealFaceTrait for $face {
+            fn activate(&mut self, settings: &types::Settings) {
+                types::WatchFace::activate(self, settings);
+            }
+            fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+                types::WatchFace::loop_(self, event, settings);
+            }
+        }
+    };
+}
+
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(interval::IntervalFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(invaders::InvadersFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(ish::IshFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(kitchen_conversions::KitchenConversionsFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(lander::LanderFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(lightmeter::LightmeterFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(lis2dw_logging::Lis2dwLoggingFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(mars_time::MarsTimeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(menstrual_cycle::MenstrualCycleFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(metronome::MetronomeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(minimal_clock::MinimalClockFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(minmax::MinmaxFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(minute_repeater_decimal::MinuteRepeaterDecimalFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(moon_phase::MoonPhaseFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(morsecalc::MorsecalcFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(nanosec::NanosecFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(orrery::OrreryFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(periodic::PeriodicFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(ping::PingFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(planetary_hours::PlanetaryHoursFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(planetary_time::PlanetaryTimeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(preferences::PreferencesFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(probability::ProbabilityFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(pulsometer::PulsometerFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(randonaut::RandonautFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(ratemeter::RatemeterFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(repetition_minute::RepetitionMinuteFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(rpn_calculator::RpnCalculatorFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(rpn_calculator_alt::RpnCalculatorAltFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(sailing::SailingFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(save_load::SaveLoadFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(set_time::SetTimeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(set_time_hackwatch::SetTimeHackwatchFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(ships_bell::ShipsBellFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(simon::SimonFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(simple_calculator::SimpleCalculatorFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(simple_clock_bin_led::SimpleClockBinLedFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(simple_coin_flip::SimpleCoinFlipFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(solar_time::SolarTimeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(solstice::SolsticeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(sos::SosFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(squash::SquashFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(sunrise_sunset::SunriseSunsetFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(tachymeter::TachymeterFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(tally::TallyFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(tarot::TarotFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(tempchart::TempchartFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(thermistor_logging::ThermistorLoggingFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(thermistor_readout::ThermistorReadoutFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(thermistor_testing::ThermistorTestingFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(tide::TideFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(time_left::TimeLeftFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(tomato::TomatoFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(toss_up::TossUpFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(totp::TotpFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(totp_lfs::TotpFaceLfs);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(tuning_tones::TuningTonesFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(voltage::VoltageFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(wake::WakeFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(wareki::WarekiFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(weeknumber::WeekNumberClockFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(wordle::WordleFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(world_clock2::WorldClock2Face);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(wyoscan::WyoscanFace);
 #[cfg(feature = "real-faces")]
 impl RealFaceTrait for alarm::AlarmFace {
     fn activate(&mut self, settings: &types::Settings) {
@@ -297,6 +450,7 @@ impl RealFace {
 
 /// Clears the mock from the host `Hw` seam so the global slot doesn't leak
 /// between faces (e.g. when the Studio app swaps the simulated face).
+#[cfg(feature = "real-faces")]
 impl Drop for RealFace {
     fn drop(&mut self) {
         sensor_watch::watch::seam::clear_hw();
@@ -323,6 +477,90 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "TIMER" => Some(Box::new(timer::TimerFace::new())),
         "COUNTDOWN" => Some(Box::new(countdown::CountdownFace::new_static())),
         "FLASHLIGHT" => Some(Box::new(flashlight::FlashlightFace::new_static())),
+        "INTERVAL" => Some(Box::new(interval::IntervalFace::new_static())),
+        "INVADERS" => Some(Box::new(invaders::InvadersFace::new_static())),
+        "ISH" => Some(Box::new(ish::IshFace::new_static())),
+        "KITCHEN_CONVERSIONS" => Some(Box::new(
+            kitchen_conversions::KitchenConversionsFace::new_static(),
+        )),
+        "LANDER" => Some(Box::new(lander::LanderFace::new_static())),
+        "LIGHTMETER" => Some(Box::new(lightmeter::LightmeterFace::new_static())),
+        "LIS2DW_LOGGING" => Some(Box::new(lis2dw_logging::Lis2dwLoggingFace::new_static())),
+        "MARS_TIME" => Some(Box::new(mars_time::MarsTimeFace::new_static())),
+        "MENSTRUAL_CYCLE" => Some(Box::new(menstrual_cycle::MenstrualCycleFace::new_static())),
+        "METRONOME" => Some(Box::new(metronome::MetronomeFace::new_static())),
+        "MINIMAL_CLOCK" => Some(Box::new(minimal_clock::MinimalClockFace::new_static())),
+        "MINMAX" => Some(Box::new(minmax::MinmaxFace::new_static())),
+        "MINUTE_REPEATER_DECIMAL" => Some(Box::new(
+            minute_repeater_decimal::MinuteRepeaterDecimalFace::new_static(),
+        )),
+        "MOON_PHASE" => Some(Box::new(moon_phase::MoonPhaseFace::new_static())),
+        "MORSECALC" => Some(Box::new(morsecalc::MorsecalcFace::new_static())),
+        "NANOSEC" => Some(Box::new(nanosec::NanosecFace::new_static())),
+        "ORRERY" => Some(Box::new(orrery::OrreryFace::new_static())),
+        "PERIODIC" => Some(Box::new(periodic::PeriodicFace::new_static())),
+        "PING" => Some(Box::new(ping::PingFace::new_static())),
+        "PLANETARY_HOURS" => Some(Box::new(planetary_hours::PlanetaryHoursFace::new_static())),
+        "PLANETARY_TIME" => Some(Box::new(planetary_time::PlanetaryTimeFace::new_static())),
+        "PREFERENCES" => Some(Box::new(preferences::PreferencesFace::new_static())),
+        "PROBABILITY" => Some(Box::new(probability::ProbabilityFace::new_static())),
+        "PULSOMETER" => Some(Box::new(pulsometer::PulsometerFace::new_static())),
+        "RANDONAUT" => Some(Box::new(randonaut::RandonautFace::new_static())),
+        "RATEMETER" => Some(Box::new(ratemeter::RatemeterFace::new_static())),
+        "REPETITION_MINUTE" => Some(Box::new(
+            repetition_minute::RepetitionMinuteFace::new_static(),
+        )),
+        "RPN_CALCULATOR" => Some(Box::new(rpn_calculator::RpnCalculatorFace::new_static())),
+        "RPN_CALCULATOR_ALT" => Some(Box::new(
+            rpn_calculator_alt::RpnCalculatorAltFace::new_static(),
+        )),
+        "SAILING" => Some(Box::new(sailing::SailingFace::new_static())),
+        "SAVE_LOAD" => Some(Box::new(save_load::SaveLoadFace::new_static())),
+        "SET_TIME" => Some(Box::new(set_time::SetTimeFace::new_static())),
+        "SET_TIME_HACKWATCH" => Some(Box::new(
+            set_time_hackwatch::SetTimeHackwatchFace::new_static(),
+        )),
+        "SHIPS_BELL" => Some(Box::new(ships_bell::ShipsBellFace::new_static())),
+        "SIMON" => Some(Box::new(simon::SimonFace::new_static())),
+        "SIMPLE_CALCULATOR" => Some(Box::new(
+            simple_calculator::SimpleCalculatorFace::new_static(),
+        )),
+        "SIMPLE_CLOCK_BIN_LED" => Some(Box::new(
+            simple_clock_bin_led::SimpleClockBinLedFace::new_static(),
+        )),
+        "SIMPLE_COIN_FLIP" => Some(Box::new(simple_coin_flip::SimpleCoinFlipFace::new_static())),
+        "SOLAR_TIME" => Some(Box::new(solar_time::SolarTimeFace::new_static())),
+        "SOLSTICE" => Some(Box::new(solstice::SolsticeFace::new_static())),
+        "SOS" => Some(Box::new(sos::SosFace::new_static())),
+        "SQUASH" => Some(Box::new(squash::SquashFace::new_static())),
+        "SUNRISE_SUNSET" => Some(Box::new(sunrise_sunset::SunriseSunsetFace::new_static())),
+        "TACHYMETER" => Some(Box::new(tachymeter::TachymeterFace::new_static())),
+        "TALLY" => Some(Box::new(tally::TallyFace::new_static())),
+        "TAROT" => Some(Box::new(tarot::TarotFace::new_static())),
+        "TEMPCHART" => Some(Box::new(tempchart::TempchartFace::new_static())),
+        "THERMISTOR_LOGGING" => Some(Box::new(
+            thermistor_logging::ThermistorLoggingFace::new_static(),
+        )),
+        "THERMISTOR_READOUT" => Some(Box::new(
+            thermistor_readout::ThermistorReadoutFace::new_static(),
+        )),
+        "THERMISTOR_TESTING" => Some(Box::new(
+            thermistor_testing::ThermistorTestingFace::new_static(),
+        )),
+        "TIDE" => Some(Box::new(tide::TideFace::new_static())),
+        "TIME_LEFT" => Some(Box::new(time_left::TimeLeftFace::new_static())),
+        "TOMATO" => Some(Box::new(tomato::TomatoFace::new_static())),
+        "TOSS_UP" => Some(Box::new(toss_up::TossUpFace::new_static())),
+        "TOTP" => Some(Box::new(totp::TotpFace::new_static())),
+        "TOTP_LFS" => Some(Box::new(totp_lfs::TotpFaceLfs::new_static())),
+        "TUNING_TONES" => Some(Box::new(tuning_tones::TuningTonesFace::new_static())),
+        "VOLTAGE" => Some(Box::new(voltage::VoltageFace::new_static())),
+        "WAKE" => Some(Box::new(wake::WakeFace::new_static())),
+        "WAREKI" => Some(Box::new(wareki::WarekiFace::new_static())),
+        "WEEKNUMBER" => Some(Box::new(weeknumber::WeekNumberClockFace::new_static())),
+        "WORDLE" => Some(Box::new(wordle::WordleFace::new_static())),
+        "WORLD_CLOCK2" => Some(Box::new(world_clock2::WorldClock2Face::new_static())),
+        "WYOSCAN" => Some(Box::new(wyoscan::WyoscanFace::new_static())),
         _ => None,
     }
 }
@@ -341,6 +579,70 @@ fn new_face_name(face_name: &str) -> &'static str {
         "TIMER" => "TIMER",
         "COUNTDOWN" => "COUNTDOWN",
         "FLASHLIGHT" => "FLASHLIGHT",
+        "INTERVAL" => "INTERVAL",
+        "INVADERS" => "INVADERS",
+        "ISH" => "ISH",
+        "KITCHEN_CONVERSIONS" => "KITCHEN_CONVERSIONS",
+        "LANDER" => "LANDER",
+        "LIGHTMETER" => "LIGHTMETER",
+        "LIS2DW_LOGGING" => "LIS2DW_LOGGING",
+        "MARS_TIME" => "MARS_TIME",
+        "MENSTRUAL_CYCLE" => "MENSTRUAL_CYCLE",
+        "METRONOME" => "METRONOME",
+        "MINIMAL_CLOCK" => "MINIMAL_CLOCK",
+        "MINMAX" => "MINMAX",
+        "MINUTE_REPEATER_DECIMAL" => "MINUTE_REPEATER_DECIMAL",
+        "MOON_PHASE" => "MOON_PHASE",
+        "MORSECALC" => "MORSECALC",
+        "NANOSEC" => "NANOSEC",
+        "ORRERY" => "ORRERY",
+        "PERIODIC" => "PERIODIC",
+        "PING" => "PING",
+        "PLANETARY_HOURS" => "PLANETARY_HOURS",
+        "PLANETARY_TIME" => "PLANETARY_TIME",
+        "PREFERENCES" => "PREFERENCES",
+        "PROBABILITY" => "PROBABILITY",
+        "PULSOMETER" => "PULSOMETER",
+        "RANDONAUT" => "RANDONAUT",
+        "RATEMETER" => "RATEMETER",
+        "REPETITION_MINUTE" => "REPETITION_MINUTE",
+        "RPN_CALCULATOR" => "RPN_CALCULATOR",
+        "RPN_CALCULATOR_ALT" => "RPN_CALCULATOR_ALT",
+        "SAILING" => "SAILING",
+        "SAVE_LOAD" => "SAVE_LOAD",
+        "SET_TIME" => "SET_TIME",
+        "SET_TIME_HACKWATCH" => "SET_TIME_HACKWATCH",
+        "SHIPS_BELL" => "SHIPS_BELL",
+        "SIMON" => "SIMON",
+        "SIMPLE_CALCULATOR" => "SIMPLE_CALCULATOR",
+        "SIMPLE_CLOCK_BIN_LED" => "SIMPLE_CLOCK_BIN_LED",
+        "SIMPLE_COIN_FLIP" => "SIMPLE_COIN_FLIP",
+        "SOLAR_TIME" => "SOLAR_TIME",
+        "SOLSTICE" => "SOLSTICE",
+        "SOS" => "SOS",
+        "SQUASH" => "SQUASH",
+        "SUNRISE_SUNSET" => "SUNRISE_SUNSET",
+        "TACHYMETER" => "TACHYMETER",
+        "TALLY" => "TALLY",
+        "TAROT" => "TAROT",
+        "TEMPCHART" => "TEMPCHART",
+        "THERMISTOR_LOGGING" => "THERMISTOR_LOGGING",
+        "THERMISTOR_READOUT" => "THERMISTOR_READOUT",
+        "THERMISTOR_TESTING" => "THERMISTOR_TESTING",
+        "TIDE" => "TIDE",
+        "TIME_LEFT" => "TIME_LEFT",
+        "TOMATO" => "TOMATO",
+        "TOSS_UP" => "TOSS_UP",
+        "TOTP" => "TOTP",
+        "TOTP_LFS" => "TOTP_LFS",
+        "TUNING_TONES" => "TUNING_TONES",
+        "VOLTAGE" => "VOLTAGE",
+        "WAKE" => "WAKE",
+        "WAREKI" => "WAREKI",
+        "WEEKNUMBER" => "WEEKNUMBER",
+        "WORDLE" => "WORDLE",
+        "WORLD_CLOCK2" => "WORLD_CLOCK2",
+        "WYOSCAN" => "WYOSCAN",
         _ => "",
     }
 }
@@ -448,8 +750,9 @@ mod tests {
         ] {
             assert!(RealFace::new(name).is_some(), "{name} should be migrated");
         }
-        // Not yet migrated through the seam => falls back in the app.
-        assert!(RealFace::new("INVADERS").is_none());
+        // MMIO-only stock_stopwatch and unknown names still fall back in the app.
+        assert!(RealFace::new("STOCK_STOPWATCH").is_none());
+        assert!(RealFace::new("NOT_A_FACE").is_none());
     }
 
     #[test]
@@ -477,9 +780,20 @@ mod tests {
 
     #[test]
     fn unmigrated_face_falls_back() {
-        assert!(
-            render_real_face("INVADERS", 2023, 1, 6, 15, 4, 0, 5, true, false, false).is_none()
-        );
+        assert!(render_real_face(
+            "STOCK_STOPWATCH",
+            2023,
+            1,
+            6,
+            15,
+            4,
+            0,
+            5,
+            true,
+            false,
+            false
+        )
+        .is_none());
     }
 
     #[test]

@@ -122,26 +122,28 @@ panic
 The shell replies with `P` followed by 6 hex digits, e.g. `P3fa862`. That is
 the 24-bit fingerprint of the panic `file:line`.
 
-### Mapping fingerprint -> file:line (caveat)
+### Mapping fingerprint -> file:line:column
 
-**There is no symbols table yet.** `probe-rs` and debugger **cannot** map the
-fingerprint back to a source location, because that mapping is a build-time
-table (from the hash of each `panic!` site) that has **not been built**. Right
-now the fingerprint only tells you *which* panic site fired, not where it maps
-to.
+Firmware Studio's **Bugs** panel accepts the `Pxxxxxx` value from the shell and
+scans the firmware Rust source tree for matching `file:line:column` candidates.
+The resolver uses the exact firmware algorithm: FNV-1a with offset basis
+`0x811c9dc5` and prime `0x01000193`, XOR with `line.reverse_bits()`, XOR with
+`column * 2654435761`, then the stored low 24 bits. It scans the source tree
+associated with the workspace containing the release ELF:
 
-To correlate manually, you must reimplement the FNV-1a hash (offset basis
-`0x811c9dc5`, prime `0x01000193`) over each candidate `file:line` and look for a
-match. This is exactly what a future build-time tools step should generate:
+```
+target/thumbv6m-none-eabi/release/sensor-watch
+```
 
-- a `build.rs` (or a small host tool) that walks the sources, computes the
-  fingerprint of every `panic!` location, and emits a `fp -> file:line` table;
-- the table embedded in the firmware and/or printed via the `panic` shell
-  command.
+Run Studio from the workspace or next to its build output so it can discover the
+same firmware directory. A no-match result means the source tree may not match
+the ELF that was flashed, or the fingerprint may not have been produced by this
+firmware version. Multiple matches are shown when the 24-bit truncation is
+ambiguous. The resolver is host-side only and does not require hardware.
 
-Until that exists, treat the fingerprint as a stable but **unresolved**
-identifier. The debugger's DWARF symbols (attaching over SWD as above) is the
-authoritative way to find a panic's real source location today.
+The ELF's DWARF symbols remain the authoritative option for instruction-level
+debugging and backtraces over SWD; the resolver is intended for the stored panic
+fingerprint reported by the UART shell.
 
 ## Quick feedback loop with the UART shell
 
@@ -158,11 +160,32 @@ See [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) for wiring and `src/watch/shell.rs`
 for the code. This is the fastest way to get textual feedback from the running
 device without any debug tooling.
 
+## Structured event breadcrumbs
+
+The firmware keeps a small, RAM-only structured event ring in
+`src/watch/event_log.rs`. It has fixed storage (16 entries, no heap), retains the
+newest entries when full, and records a sequence, packed RTC timestamp (or an
+untimed fallback during early boot/panic), stable event code, and small payload.
+Faults are recorded automatically alongside the persistent fault summary.
+
+Over the UART shell:
+
+```text
+events
+EV 00000000 00000000 01 0002
+events clear
+```
+
+The fields are sequence, timestamp, event code, and payload, all hexadecimal.
+This is deliberately a local breadcrumb buffer rather than a persistent log;
+reset clears it. A future RTT/defmt backend can stream the same event values
+without changing the event-producing call sites. No `defmt` dependency is
+currently enabled, keeping the firmware size and UART behavior unchanged.
+
 ## Optional / not yet done
 
-- A `fp -> file:line` symbols table (see *caveat* above).
-- RTT (`rtt_target`) logging in place of (or alongside) the UART shell, to get
-  streamed logs over the SWD probe without a second UART dongle.
+- RTT (`rtt_target`) or `defmt` transport for streaming the event values over
+  SWD without a second UART dongle.
 
 ## Summary
 
