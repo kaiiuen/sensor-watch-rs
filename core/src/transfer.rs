@@ -149,6 +149,9 @@ impl Frame {
         if bytes[2] != VERSION {
             return Err(DecodeError::Version);
         }
+        if bytes[5] != 0 {
+            return Err(DecodeError::Length);
+        }
         let expected = u16::from_le_bytes([bytes[FRAME_SIZE - 2], bytes[FRAME_SIZE - 1]]);
         if crc16(&bytes[..FRAME_SIZE - CRC_SIZE]) != expected {
             return Err(DecodeError::Crc);
@@ -381,6 +384,16 @@ mod tests {
         corrupt[30] ^= 1;
         assert_eq!(Frame::decode(&corrupt), Err(DecodeError::Crc));
     }
+    #[test]
+    fn rejects_nonzero_reserved_header_byte() {
+        let frame = Frame::new(Command::Read, ObjectId::Settings, 0, 0, 0, &[], [0; 8]).unwrap();
+        let mut bytes = frame.encode();
+        bytes[5] = 1;
+        let crc = crc16(&bytes[..FRAME_SIZE - 2]);
+        bytes[FRAME_SIZE - 2..].copy_from_slice(&crc.to_le_bytes());
+        assert_eq!(Frame::decode(&bytes), Err(DecodeError::Length));
+    }
+
     #[test]
     fn rejects_payload_outside_declared_object() {
         assert!(

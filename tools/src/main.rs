@@ -137,6 +137,21 @@ fn write_manifest(path: &Path, m: &Map<String, Value>) {
     ));
     write_text_new(&sig, &(value_string(m, "signature") + "\n"));
 }
+fn write_binary(path: &Path, data: &[u8]) {
+    if path.is_symlink() {
+        fail(format!(
+            "refusing symlinked output path: {}",
+            path.display()
+        ));
+    }
+    fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(path)
+        .and_then(|mut file| file.write_all(data))
+        .unwrap_or_else(|e| fail(format!("cannot write {}: {e}", path.display())));
+}
 fn write_text_new(path: &Path, text: &str) {
     if path.exists() || path.is_symlink() {
         fail(format!(
@@ -218,7 +233,11 @@ fn objcopy() -> PathBuf {
         "arm-none-eabi-objcopy",
         "arm-none-eabi-objcopy.exe",
     ] {
-        if Command::new(name).arg("--version").output().is_ok() {
+        if Command::new(name)
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success())
+        {
             return PathBuf::from(name);
         }
     }
@@ -282,7 +301,7 @@ fn build() {
         let backup = dir
             .join("recovery/generations")
             .join(format!("{}.uf2", now_nanos()));
-        let m = manifest(&uf2_path, None, None);
+        let m = manifest(&uf2_path, None, Some(&backup));
         fs::create_dir_all(backup.parent().unwrap()).unwrap_or_else(|e| fail(e));
         fs::copy(&uf2_path, &backup).unwrap_or_else(|e| fail(e));
         write_manifest(&backup.with_extension("uf2.json"), &m);
@@ -292,7 +311,7 @@ fn build() {
     if encoded.is_empty() {
         fail("cannot convert firmware binary to UF2");
     }
-    fs::write(&uf2_path, encoded).unwrap_or_else(|e| fail(e));
+    write_binary(&uf2_path, &encoded);
     let manifest_path = uf2_path.with_extension("uf2.json");
     if manifest_path.exists() {
         verify(&uf2_path, Some(&manifest_path), None);
@@ -315,7 +334,7 @@ fn main() -> ExitCode {
             if out.is_empty() {
                 fail("cannot convert input to UF2");
             }
-            fs::write(&output, out).unwrap_or_else(|e| fail(e));
+            write_binary(&output, &out);
             println!("wrote {}", output.display());
         }
         "verify" => {

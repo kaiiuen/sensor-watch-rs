@@ -179,6 +179,9 @@ pub fn decode(bytes: &[u8], auth: Option<&dyn AuthenticationHook>) -> Result<Fra
         }
         payload_len
     } else {
+        if length > MAX_PAYLOAD {
+            return Err(DecodeError::InvalidLength);
+        }
         length
     };
     let mut frame = Frame::empty();
@@ -433,6 +436,22 @@ mod tests {
             decode(&wrong[..wrong_len], Some(&AcceptAuth)),
             Err(DecodeError::Authentication)
         );
+    }
+
+    #[test]
+    fn unauthenticated_commands_reject_authenticated_length_without_panicking() {
+        let mut bytes = [0; MAX_FRAME_LEN];
+        let len =
+            encode_inner(CommandType::Status, 1, &[0; MAX_PAYLOAD], None, &mut bytes).unwrap();
+        bytes[4] = (MAX_PAYLOAD + AUTH_TAG_LEN) as u8;
+        let total = HEADER_LEN + MAX_PAYLOAD + AUTH_TAG_LEN + CRC_LEN;
+        let crc = crc16(&bytes[..total - CRC_LEN]);
+        bytes[total - CRC_LEN..total].copy_from_slice(&crc.to_be_bytes());
+        assert_eq!(
+            decode(&bytes[..total], None),
+            Err(DecodeError::InvalidLength)
+        );
+        assert_eq!(len, HEADER_LEN + MAX_PAYLOAD + CRC_LEN);
     }
 
     #[test]
