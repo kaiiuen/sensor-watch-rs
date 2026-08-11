@@ -147,15 +147,15 @@ See [`docs/DEVELOPER_DEBUGGING.md`](docs/DEVELOPER_DEBUGGING.md) for probe use.
 Produce a `.uf2` for drag-and-drop flashing:
 
 ```
-./build.sh
+cargo run -p sensor-watch-tools -- build
 ```
 
-The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`.
+`build.sh` remains a compatibility launcher. The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`.
 
 > **Note:** This is a Cargo workspace. A bare `cargo build` at the repo root
 > builds the **Firmware Studio GUI app** (the workspace default member), not the
 > firmware. To build the firmware, always pass the embedded target as above, or
-> use `./build.sh` to produce the `.uf2`.
+> use `cargo run -p sensor-watch-tools -- build` to produce the `.uf2`.
 
 ## Testing & linting
 

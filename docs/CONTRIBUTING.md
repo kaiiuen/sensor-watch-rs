@@ -52,12 +52,13 @@ they do not validate physical hardware.
 To produce a `.uf2` file for drag-and-drop flashing:
 
 ```sh
-./build.sh
+cargo run -p sensor-watch-tools -- build
 ```
 
-The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`. The script
-builds the release firmware, extracts the raw binary with `rust-objcopy`, and
-converts it to UF2 using the `uf2tool` binary (run on the host target).
+The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`. The Rust
+host tool builds the release firmware, extracts the raw binary with `rust-objcopy`
+(or `arm-none-eabi-objcopy`), converts it to UF2, and writes the recovery
+manifest. `build.sh` remains a compatibility launcher.
 
 ## Linting
 

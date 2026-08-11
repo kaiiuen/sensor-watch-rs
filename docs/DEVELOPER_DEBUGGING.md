@@ -32,18 +32,18 @@ registers, or get a real backtrace on a fault, you need the **SWD** interface
 
 ## Flashing via probe-rs (scripts)
 
-Two small scripts wrap the probe-rs flash command. Both are optional and only
-touch the release ELF already produced by a normal build.
+Two compatibility scripts launch the Rust host tool's probe-rs command. Both are optional and only touch the release ELF already produced by a normal build.
 
 - `scripts/flash.sh` (POSIX sh / WSL / Git-bash)
 - `scripts/flash.ps1` (Windows PowerShell)
 
-They run:
+They run the equivalent Cargo command:
 
 ```sh
-probe-rs run --chip ATSAML22J18A --protocol swd --connect-under-reset \
-    target/thumbv6m-none-eabi/release/sensor-watch
+cargo run -p sensor-watch-tools -- flash
 ```
+
+The tool invokes `probe-rs run --chip ATSAML22J18A --protocol swd --connect-under-reset`.
 
 `probe-rs run` flashes the ELF, resets the chip, and starts executing while
 opening a (paused) RTT console - the closest thing probe-rs has to a "flash and
@@ -202,9 +202,9 @@ for the fallback ring or the reset-surviving fault/fingerprint registers.
 
 ## Summary
 
-- Optional, purely additive dev tooling: `scripts/flash.sh`, `scripts/flash.ps1`,
+- Optional, purely additive dev tooling: `sensor-watch-tools`, `scripts/flash.sh`, `scripts/flash.ps1`,
   `.vscode/launch.json`, and this document.
-- Normal `.uf2` USB flashing and the `studio` app are untouched (`build.sh`,
-  CI, and the default `cargo` runner are unchanged).
+- Normal `.uf2` USB flashing and the `studio` app are untouched; `build.sh` and
+  the flash scripts remain thin compatibility launchers.
 - To debug on silicon you need: an SWD probe + probe-rs, plus (for VSCode) the
   extension(s) of your choice.

@@ -1,6 +1,6 @@
 # Software-only firmware recovery
 
-This procedure hardens artifact handling on the host. It does **not** add a
+The Rust `sensor-watch-tools` host binary hardens artifact handling on the host. It does **not** add a
 golden image, recovery partition, or rollback selector to the watch firmware.
 The ROM/UF2 bootloader remains the device-side recovery mechanism.
 
@@ -10,7 +10,7 @@ The ROM/UF2 bootloader remains the device-side recovery mechanism.
 2. Validate and create a signed manifest:
 
    ```sh
-   python scripts/verify-uf2.py verify target/thumbv6m-none-eabi/release/sensor-watch.uf2 \
+   cargo run -p sensor-watch-tools -- verify target/thumbv6m-none-eabi/release/sensor-watch.uf2 \
      --manifest target/thumbv6m-none-eabi/release/sensor-watch.uf2.json
    ```
 
@@ -23,7 +23,7 @@ The ROM/UF2 bootloader remains the device-side recovery mechanism.
 3. Preserve a known-good copy before distributing or replacing it:
 
    ```sh
-   python scripts/verify-uf2.py backup \
+   cargo run -p sensor-watch-tools -- backup \
      target/thumbv6m-none-eabi/release/sensor-watch.uf2 \
      recovery/known-good/<generation>.uf2
    ```
@@ -37,9 +37,10 @@ The ROM/UF2 bootloader remains the device-side recovery mechanism.
 Choose a `.uf2` whose adjacent `.json` manifest is trusted, then run:
 
 ```sh
-python scripts/verify-uf2.py rollback \
+cargo run -p sensor-watch-tools -- rollback \
   recovery/known-good/<generation>.uf2 \
-  recovery/staged/sensor-watch.uf2
+  recovery/staged/sensor-watch.uf2 \
+  <trusted-sha256>
 ```
 
 Rollback requires the adjacent or explicitly supplied manifest, revalidates the
@@ -61,9 +62,9 @@ checks remain available.
 Create an auditable host-side report without touching the artifact:
 
 ```sh
-python scripts/verify-uf2.py report \
+cargo run -p sensor-watch-tools -- report \
   recovery/known-good/<generation>.uf2 \
-  --output recovery/known-good/<generation>.report.json
+  <trusted-sha256>
 ```
 
 The report records the generation and explicitly states that CRC failure is

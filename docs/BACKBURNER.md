@@ -106,7 +106,7 @@ A host-side safety layer for checking firmware artifacts before USB flashing,
 recording board metadata and CRC/SHA256 values, preserving a known-good UF2,
 and staging an explicit rollback copy.
 
-**Status:** Done for software-only recovery. `scripts/verify-uf2.py` validates
+**Status:** Done for software-only recovery. the Rust `sensor-watch-tools` binary validates
 UF2 framing, SAM L22 metadata, application size, CRC32, and SHA256. Its
 `backup` and `rollback` commands are non-destructive staging helpers. This does
 not provide a golden-image bootloader, true dual boot, automatic device-side
@@ -159,7 +159,7 @@ Polish and harden the deployment story around the UF2 bootloader:
 - Let the companion app orchestrate a multi-step flash, verify, and reboot loop.
 - Detect a stuck or failed flash and fall back cleanly to a safe state.
 
-**Status:** Partially done. `scripts/verify-uf2.py` now provides host-side
+**Status:** Partially done. the Rust `sensor-watch-tools` binary now provides host-side
 validation, known-good backup preservation, manifest output, and explicit
 rollback staging. Studio orchestration, USB-device detection, reboot
 verification, and automatic fail-safe loops remain unimplemented. There is no
