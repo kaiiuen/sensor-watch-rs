@@ -48,6 +48,32 @@ pub fn path() -> PathBuf {
     config_dir().join(FILE_NAME)
 }
 
+fn replace_existing(tmp: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    let backup = target.with_extension("json.previous");
+    let had_old = target.exists();
+    if had_old {
+        if backup.exists() {
+            std::fs::remove_file(&backup)
+                .map_err(|e| format!("cannot remove old restore backup: {e}"))?;
+        }
+        if let Err(error) = std::fs::rename(target, &backup) {
+            return Err(format!("cannot stage existing restore file: {error}"));
+        }
+    }
+    if let Err(error) = std::fs::rename(tmp, target) {
+        if had_old {
+            let _ = std::fs::rename(&backup, target);
+        }
+        let _ = std::fs::remove_file(tmp);
+        return Err(format!("cannot install restore file: {error}"));
+    }
+    if had_old {
+        std::fs::remove_file(&backup)
+            .map_err(|e| format!("restore saved, but old backup could not be removed: {e}"))?;
+    }
+    Ok(())
+}
+
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -77,7 +103,7 @@ impl RestoreStore {
         let tmp = target.with_extension("json.tmp");
         let _ = std::fs::remove_file(&tmp);
         std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
-        std::fs::rename(&tmp, target).map_err(|e| e.to_string())
+        replace_existing(&tmp, &target)
     }
 
     pub fn create(

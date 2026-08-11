@@ -12,8 +12,9 @@ import json
 import shutil
 import struct
 import sys
-from pathlib import Path
 import zlib
+from pathlib import Path
+from typing import NoReturn
 
 START0 = 0x0A324655
 START1 = 0x9E5D5157
@@ -25,15 +26,27 @@ BLOCK = 512
 MAX_APP_BYTES = 0x3C000 - APP_START
 
 
-def fail(message):
+def fail(message) -> NoReturn:
     print(f"error: {message}", file=sys.stderr)
     raise SystemExit(1)
 
 
 def inspect(path):
-    data = path.read_bytes()
-    if not data or len(data) % BLOCK:
+    try:
+        file_size = path.stat().st_size
+    except OSError as exc:
+        fail(f"cannot inspect {path}: {exc}")
+    if not file_size or file_size % BLOCK:
         fail("UF2 must be non-empty and a multiple of 512 bytes")
+    max_uf2_bytes = ((MAX_APP_BYTES + PAYLOAD - 1) // PAYLOAD) * BLOCK
+    if file_size > max_uf2_bytes:
+        fail(f"UF2 is {file_size} bytes; maximum is {max_uf2_bytes}")
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        fail(f"cannot read {path}: {exc}")
+    if len(data) != file_size:
+        fail("UF2 changed while it was being read")
     count = len(data) // BLOCK
     image = bytearray()
     for index in range(count):
@@ -125,4 +138,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except PermissionError as exc:
+        fail(f"permission denied: {exc}")

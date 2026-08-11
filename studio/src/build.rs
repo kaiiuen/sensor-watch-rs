@@ -130,13 +130,70 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
             };
         }
     };
-    let uf2_data = sensor_watch_core::uf2::convert_to_uf2(&image);
-    if let Err(e) = std::fs::write(&uf2, &uf2_data) {
+    if image.is_empty() || image.len() > sensor_watch_core::uf2::MAX_APPLICATION_BYTES {
         return BuildResult {
             success: false,
-            message: format!("failed to write uf2: {e}"),
+            message: format!(
+                "firmware binary must be non-empty and no larger than {} bytes",
+                sensor_watch_core::uf2::MAX_APPLICATION_BYTES
+            ),
             uf2_path: None,
         };
+    }
+    let uf2_data = sensor_watch_core::uf2::convert_to_uf2(&image);
+    if let Err(error) = sensor_watch_core::uf2::validate(&uf2_data) {
+        return BuildResult {
+            success: false,
+            message: format!("generated UF2 failed validation: {error}"),
+            uf2_path: None,
+        };
+    }
+
+    // Stage beside the destination, then replace it only after validation. Keep
+    // a backup while replacing so a failed Windows rename can be rolled back.
+    let tmp = uf2.with_extension("uf2.tmp");
+    if let Err(e) = std::fs::remove_file(&tmp) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            return BuildResult {
+                success: false,
+                message: format!("failed to remove stale UF2 temp file: {e}"),
+                uf2_path: None,
+            };
+        }
+    }
+    if let Err(e) = std::fs::write(&tmp, &uf2_data) {
+        return BuildResult {
+            success: false,
+            message: format!("failed to write UF2 temp file: {e}"),
+            uf2_path: None,
+        };
+    }
+    let backup = uf2.with_extension("uf2.previous");
+    let had_old = uf2.exists();
+    if had_old {
+        let _ = std::fs::remove_file(&backup);
+        if let Err(e) = std::fs::rename(&uf2, &backup) {
+            let _ = std::fs::remove_file(&tmp);
+            return BuildResult {
+                success: false,
+                message: format!("failed to stage existing UF2: {e}"),
+                uf2_path: None,
+            };
+        }
+    }
+    if let Err(e) = std::fs::rename(&tmp, &uf2) {
+        if had_old {
+            let _ = std::fs::rename(&backup, &uf2);
+        }
+        let _ = std::fs::remove_file(&tmp);
+        return BuildResult {
+            success: false,
+            message: format!("failed to replace UF2: {e}"),
+            uf2_path: None,
+        };
+    }
+    if had_old {
+        let _ = std::fs::remove_file(&backup);
     }
 
     BuildResult {

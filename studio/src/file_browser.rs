@@ -69,6 +69,11 @@ impl FileBrowser {
 
     fn load_entries(&mut self) {
         self.entries.clear();
+        if !is_within_root(&self.current_dir, &self.root) {
+            self.current_dir = self.root.clone();
+            self.message = "Refusing to browse outside the workspace".to_string();
+            return;
+        }
         let read_dir = match fs::read_dir(&self.current_dir) {
             Ok(read_dir) => read_dir,
             Err(error) => {
@@ -78,15 +83,24 @@ impl FileBrowser {
         };
         for item in read_dir.flatten() {
             let path = item.path();
-            if is_excluded(&path, &self.root) {
+            let file_type = match item.file_type() {
+                Ok(file_type) => file_type,
+                Err(_) => continue,
+            };
+            // Do not follow links: a link can escape the workspace or create a cycle.
+            if file_type.is_symlink() || is_excluded(&path, &self.root) {
                 continue;
             }
-            let metadata = match item.metadata() {
+            let canonical = match path.canonicalize() {
+                Ok(canonical) if is_within_root(&canonical, &self.root) => canonical,
+                _ => continue,
+            };
+            let metadata = match fs::metadata(&canonical) {
                 Ok(metadata) => metadata,
                 Err(_) => continue,
             };
             self.entries.push(Entry {
-                path,
+                path: canonical,
                 is_dir: metadata.is_dir(),
                 size: (!metadata.is_dir()).then_some(metadata.len()),
             });
@@ -103,7 +117,14 @@ impl FileBrowser {
     }
 
     fn select(&mut self, path: PathBuf) {
-        let metadata = match fs::metadata(&path) {
+        let path = match path.canonicalize() {
+            Ok(path) if is_within_root(&path, &self.root) => path,
+            _ => {
+                self.message = "Refusing to inspect a path outside the workspace".to_string();
+                return;
+            }
+        };
+        let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) => metadata,
             Err(error) => {
                 self.message = format!("Cannot inspect {}: {error}", path.display());
@@ -280,6 +301,10 @@ fn format_size(size: u64) -> String {
     } else {
         format!("{:.1} MiB", size as f64 / 1_048_576.0)
     }
+}
+
+fn is_within_root(path: &Path, root: &Path) -> bool {
+    path.starts_with(root)
 }
 
 fn is_excluded(path: &Path, root: &Path) -> bool {

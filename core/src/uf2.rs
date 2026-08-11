@@ -25,6 +25,8 @@ pub const SAML22_FAMILY_ID: u32 = 0x2C29_472F;
 
 /// The flash address where the firmware begins (after the bootloader).
 pub const APP_START_ADDR: u32 = 0x2000;
+/// The maximum application size supported by the bootloader.
+pub const MAX_APPLICATION_BYTES: usize = 0x3A000;
 
 /// The size of each UF2 data block (256 bytes of payload).
 const BLOCK_SIZE: usize = UF2_PAYLOAD_SIZE;
@@ -45,7 +47,14 @@ pub fn validate(uf2: &[u8]) -> Result<ValidatedUf2, &'static str> {
     if uf2.is_empty() || !uf2.len().is_multiple_of(UF2_BLOCK_SIZE) {
         return Err("UF2 size is not a non-empty multiple of 512 bytes");
     }
+    let max_block_count = MAX_APPLICATION_BYTES / UF2_PAYLOAD_SIZE;
     let block_count = uf2.len() / UF2_BLOCK_SIZE;
+    if block_count == 0 || block_count > max_block_count {
+        return Err("UF2 application payload is empty or exceeds the maximum size");
+    }
+    if block_count > u32::MAX as usize {
+        return Err("UF2 block count is too large");
+    }
     let mut image = Vec::with_capacity(block_count * UF2_PAYLOAD_SIZE);
 
     for blockno in 0..block_count {
