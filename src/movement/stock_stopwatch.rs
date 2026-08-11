@@ -26,75 +26,119 @@ const DISTANT_FUTURE: DateTime = DateTime {
 static mut TICKS: u32 = 0;
 static mut IS_RUNNING: bool = false;
 
-/// Returns a reference to the TC2 COUNT8 register block.
-fn tc2() -> &'static atsaml22j::tc0::count8::Count8 {
-    // SAFETY: the TC2 register block lives at a fixed address for the whole
-    // program.
-    unsafe { (*atsaml22j::Tc2::PTR).count8() }
+#[cfg(target_arch = "arm")]
+mod timer {
+    /// Returns a reference to the TC2 COUNT8 register block.
+    fn tc2() -> &'static atsaml22j::tc0::count8::Count8 {
+        // SAFETY: the TC2 register block lives at a fixed address for the whole
+        // program.
+        unsafe { (*atsaml22j::Tc2::PTR).count8() }
+    }
+
+    fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
+        // SAFETY: the GCLK register block lives at a fixed address.
+        unsafe { &*atsaml22j::Gclk::PTR }
+    }
+
+    fn mclk() -> &'static atsaml22j::mclk::RegisterBlock {
+        // SAFETY: the MCLK register block lives at a fixed address.
+        unsafe { &*atsaml22j::Mclk::PTR }
+    }
+
+    fn tc2_sync() {
+        while tc2().syncbusy().read().bits() != 0 {}
+    }
+
+    pub(super) fn start() {
+        tc2().ctrla().modify(|_, w| w.enable().set_bit());
+    }
+
+    pub(super) fn stop() {
+        tc2().ctrla().modify(|_, w| w.enable().clear_bit());
+    }
+
+    pub(super) fn initialize() {
+        // SAFETY: configuring a valid timer peripheral.
+        unsafe {
+            mclk().apbcmask().modify(|_, w| w.tc2_().set_bit());
+            gclk()
+                .pchctrl(24)
+                .write(|w| w.r#gen().gclk3().chen().set_bit());
+            stop();
+            tc2().ctrla().write(|w| w.swrst().set_bit());
+            tc2_sync();
+            tc2().ctrla().modify(|_, w| {
+                w.prescaler()
+                    .variant(atsaml22j::tc0::count8::ctrla::Prescalerselect::Div64);
+                w.mode()
+                    .variant(atsaml22j::tc0::count8::ctrla::Modeselect::Count8);
+                w.runstdby().set_bit()
+            });
+            // 32 kHz / 64 / 4 = 128 Hz.
+            tc2().per().write(|w| w.bits(3));
+            tc2().intenset().modify(|_, w| w.ovf().set_bit());
+            cortex_m::peripheral::NVIC::unpend(atsaml22j::Interrupt::TC2);
+            cortex_m::peripheral::NVIC::unmask(atsaml22j::Interrupt::TC2);
+        }
+    }
+
+    pub(super) fn acknowledge_overflow() {
+        tc2().intflag().write(|w| w.ovf().set_bit());
+    }
 }
 
-fn gclk() -> &'static atsaml22j::gclk::RegisterBlock {
-    // SAFETY: the GCLK register block lives at a fixed address.
-    unsafe { &*atsaml22j::Gclk::PTR }
-}
+#[cfg(not(target_arch = "arm"))]
+mod timer {
+    pub(super) fn start() {
+        crate::movement::stock_stopwatch_timer::start();
+    }
 
-fn mclk() -> &'static atsaml22j::mclk::RegisterBlock {
-    // SAFETY: the MCLK register block lives at a fixed address.
-    unsafe { &*atsaml22j::Mclk::PTR }
-}
+    pub(super) fn stop() {
+        crate::movement::stock_stopwatch_timer::stop();
+    }
 
-fn tc2_sync() {
-    while tc2().syncbusy().read().bits() != 0 {}
+    pub(super) fn initialize() {
+        crate::movement::stock_stopwatch_timer::initialize();
+    }
+
+    pub(super) fn acknowledge_overflow() {}
 }
 
 fn cb_start() {
-    // SAFETY: enabling a valid timer peripheral.
+    timer::start();
     unsafe {
-        tc2().ctrla().modify(|_, w| w.enable().set_bit());
         IS_RUNNING = true;
     }
 }
 
 fn cb_stop() {
-    // SAFETY: disabling a valid timer peripheral.
+    timer::stop();
     unsafe {
-        tc2().ctrla().modify(|_, w| w.enable().clear_bit());
         IS_RUNNING = false;
     }
 }
 
 fn cb_initialize() {
-    // SAFETY: configuring a valid timer peripheral.
+    timer::initialize();
     unsafe {
-        mclk().apbcmask().modify(|_, w| w.tc2_().set_bit());
-        gclk()
-            .pchctrl(24)
-            .write(|w| w.r#gen().gclk3().chen().set_bit());
-        cb_stop();
-        tc2().ctrla().write(|w| w.swrst().set_bit());
-        tc2_sync();
-        tc2().ctrla().modify(|_, w| {
-            w.prescaler()
-                .variant(atsaml22j::tc0::count8::ctrla::Prescalerselect::Div64);
-            w.mode()
-                .variant(atsaml22j::tc0::count8::ctrla::Modeselect::Count8);
-            w.runstdby().set_bit()
-        });
-        // 32 kHz / 64 / 4 = 128 Hz.
-        tc2().per().write(|w| w.bits(3));
-        tc2().intenset().modify(|_, w| w.ovf().set_bit());
-        cortex_m::peripheral::NVIC::unpend(atsaml22j::Interrupt::TC2);
-        cortex_m::peripheral::NVIC::unmask(atsaml22j::Interrupt::TC2);
+        IS_RUNNING = false;
     }
 }
 
 /// The TC2 interrupt handler (128 Hz).
-#[unsafe(no_mangle)]
+#[allow(non_snake_case)]
+#[cfg_attr(target_arch = "arm", unsafe(no_mangle))]
 pub extern "C" fn TC2() {
     unsafe {
         TICKS += 1;
     }
-    tc2().intflag().write(|w| w.ovf().set_bit());
+    timer::acknowledge_overflow();
+}
+
+/// Advances the host timer by one 128 Hz interrupt.
+#[cfg(not(target_arch = "arm"))]
+pub fn host_tick() {
+    TC2();
 }
 
 /// The stock stopwatch face state.

@@ -436,10 +436,41 @@ pub mod squash {
     pub use real::SquashFace;
 }
 
-// NOTE: `stock_stopwatch` is intentionally NOT host-migrated. The real face
-// references `atsaml22j` MMIO registers directly (its `tc2()`/`gclk()`/`mclk()`
-// helpers and the `TC2` interrupt handler), bypassing the `Hw` seam, so it
-// cannot be linked into a x86 host test binary. It stays target-only.
+/// Host-only timer state for the REAL stock stopwatch face. The face keeps its
+/// timer API unchanged; its cfg-gated host implementation records lifecycle
+/// operations without touching MMIO.
+pub mod stock_stopwatch_timer {
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    static INITIALIZED: AtomicBool = AtomicBool::new(false);
+    static RUNNING: AtomicBool = AtomicBool::new(false);
+
+    pub fn initialize() {
+        INITIALIZED.store(true, Ordering::Relaxed);
+        RUNNING.store(false, Ordering::Relaxed);
+    }
+
+    pub fn start() {
+        RUNNING.store(true, Ordering::Relaxed);
+    }
+
+    pub fn stop() {
+        RUNNING.store(false, Ordering::Relaxed);
+    }
+
+    #[allow(dead_code)]
+    pub fn is_initialized() -> bool {
+        INITIALIZED.load(Ordering::Relaxed)
+    }
+}
+
+/// The REAL stock stopwatch face. Its timer MMIO is cfg-gated behind the host
+/// timer shim above, so the unchanged face logic can run through the host seam.
+pub mod stock_stopwatch {
+    #[path = "../../../movement/stock_stopwatch.rs"]
+    pub mod real;
+    pub use real::{StockStopwatchFace, host_tick};
+}
 
 /// The REAL `sunrise_sunset` face.
 pub mod sunrise_sunset {
@@ -751,6 +782,9 @@ pub fn enable_tap_detection_if_available() -> bool {
 pub fn disable_tap_detection_if_available() -> bool {
     false
 }
+
+#[cfg(test)]
+mod face_tests_stock_stopwatch;
 
 #[cfg(test)]
 // Host tests for the I-P face subset (driven via the `Hw` seam, parallel to the
