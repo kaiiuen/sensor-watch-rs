@@ -1548,8 +1548,8 @@ mod tests {
         let mut face = thermistor_readout::ThermistorReadoutFace::new();
         face.activate(&settings);
         face.loop_(types::Event::Activate, &mut settings);
-        // "TE" at 0, temperature at pos 4.
-        assert_eq!(mock.text(), "TE  25.0#C");
+        // The default host mock has no thermistor fixture.
+        assert_eq!(mock.text(), "NO TE");
     }
 
     #[test]
@@ -1563,8 +1563,8 @@ mod tests {
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Down),
             &mut settings,
         );
-        // 25 C -> 77.0 F, drawn at pos 4 (after the "TE" label).
-        assert_eq!(mock.text(), "TE  77.0#F");
+        // Unit changes do not manufacture a value when the sensor is absent.
+        assert_eq!(mock.text(), "NO TE");
     }
 
     #[test]

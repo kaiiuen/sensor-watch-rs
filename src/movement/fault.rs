@@ -76,6 +76,7 @@ pub fn record_fault(fault: Fault) {
         crate::watch::event_log::EventCode::Fault,
         fault as u16,
     );
+    crate::watch::logging::fault(fault as u8);
     let reg = deepsleep::get_backup_data(REG_LAST_FAULT);
     let packed = (reg & !0xFF) | (fault as u32 & 0xFF);
     deepsleep::store_backup_data(packed, REG_LAST_FAULT);
@@ -90,6 +91,7 @@ pub fn record_fault(fault: Fault) {
 /// survives the reset that follows a panic, so a developer can later recover the
 /// panic location instead of seeing only the generic `Panic` code.
 pub fn record_panic_fingerprint(fp: u32) {
+    crate::watch::logging::panic_fingerprint(fp);
     let reg = deepsleep::get_backup_data(REG_LAST_FAULT);
     let packed = (reg & 0xFF) | ((fp & 0xFFFFFF) << 8);
     deepsleep::store_backup_data(packed, REG_LAST_FAULT);
@@ -141,6 +143,7 @@ pub fn clear_faults() {
 
 /// Records the reset reason (byte 0 of reg 6, preserving boot data).
 pub fn record_reset_reason(reason: ResetReason) {
+    crate::watch::logging::reset(reason as u8);
     let reg = deepsleep::get_backup_data(REG_RESET_REASON);
     let packed = (reg & !0xFF) | (reason as u32 & 0xFF);
     deepsleep::store_backup_data(packed, REG_RESET_REASON);

@@ -112,8 +112,8 @@ fn real_lightmeter_activate_shows_ev() {
     let settings = h24_settings();
     let mut face = lightmeter::LightmeterFace::new();
     face.activate(&settings);
-    // Lux 0 clamps to EV -9, displayed as "EV" + whole digits "09".
-    assert!(mock.text().starts_with("EV0"));
+    // No I2C fixture is installed, so the real face must fail closed.
+    assert_eq!(mock.text(), "NO LS");
 }
 
 #[test]

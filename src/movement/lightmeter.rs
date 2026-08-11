@@ -8,6 +8,7 @@
 use crate::movement;
 use crate::movement::types::{Button, ButtonEvent, Event, Settings, WatchFace};
 use crate::watch;
+use crate::watch::opt3001::Opt3001;
 use crate::watch::slcd::Indicator;
 
 const LIGHTMETER_CALIBRATION: f32 = 0.0;
@@ -53,6 +54,8 @@ const SHS: [(&str, f32); 12] = [
 pub struct LightmeterFace {
     waiting_for_conversion: u8,
     lux: f32,
+    sensor: Opt3001,
+    sensor_available: bool,
     mode: u8,
     iso: u8,
     ap: u8,
@@ -64,6 +67,8 @@ impl LightmeterFace {
         LightmeterFace {
             waiting_for_conversion: 0,
             lux: 0.0,
+            sensor: Opt3001::new(),
+            sensor_available: false,
             mode: 0,
             iso: LIGHTMETER_ISO_100,
             ap: LIGHTMETER_AP_4P0,
@@ -79,6 +84,10 @@ impl LightmeterFace {
     }
 
     fn show_ev(&self) {
+        if !self.sensor_available {
+            watch::slcd::display_string("NO LS", 0);
+            return;
+        }
         let ev = (libm::log2f(self.lux) + ISOS[self.iso as usize].1 + LIGHTMETER_CALIBRATION)
             .clamp(-9.0, 99.0);
         let evt = libm::roundf(2.0 * ev) as i32;
@@ -152,6 +161,7 @@ impl WatchFace for LightmeterFace {
 
     fn activate(&mut self, _settings: &Settings) {
         self.waiting_for_conversion = 0;
+        self.sensor_available = self.sensor.begin().is_ok();
         self.show_ev();
     }
 
@@ -159,9 +169,18 @@ impl WatchFace for LightmeterFace {
         match event {
             Event::Tick => {
                 if self.waiting_for_conversion != 0 {
+                    self.sensor.tick();
                     self.waiting_for_conversion = 0;
-                    self.lux = 100.0;
-                    self.show_ev();
+                    match self.sensor.read_lux() {
+                        Ok(lux) => {
+                            self.lux = lux;
+                            self.show_ev();
+                        }
+                        Err(_) => {
+                            self.sensor_available = false;
+                            self.show_ev();
+                        }
+                    }
                 }
             }
             Event::Button(Button::Alarm, ButtonEvent::Up) => {
@@ -182,6 +201,11 @@ impl WatchFace for LightmeterFace {
                 watch::slcd::display_string(ISOS[self.iso as usize].0, 4);
             }
             Event::Button(Button::Alarm, ButtonEvent::LongPress) => {
+                if self.sensor.start_conversion().is_err() {
+                    self.sensor_available = false;
+                    self.show_ev();
+                    return;
+                }
                 self.waiting_for_conversion = 1;
                 watch::slcd::display_string("EV  ", 0);
                 watch::slcd::display_string(ISOS[self.iso as usize].0, 4);

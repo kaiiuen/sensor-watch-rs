@@ -314,14 +314,14 @@ pub fn thermistor_temperature(
     nominal_resistance: f32,
     series_resistance: f32,
 ) -> f32 {
-    let mut reading = value as f32;
-
-    if highside {
-        reading = (1023.0 * series_resistance) / (reading / 64.0);
-        reading -= series_resistance;
-    } else {
-        reading = series_resistance / (65535.0 / value as f32 - 1.0);
+    if value == 0 || value == u16::MAX {
+        return f32::NAN;
     }
+    let mut reading = if highside {
+        (65535.0 * series_resistance) / value as f32 - series_resistance
+    } else {
+        series_resistance / (65535.0 / value as f32 - 1.0)
+    };
 
     reading /= nominal_resistance;
     reading = libm::logf(reading);
