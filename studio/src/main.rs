@@ -26,6 +26,7 @@ mod optical;
 mod panic_map;
 mod persist;
 mod presets;
+mod probe;
 mod real_face;
 mod restore;
 mod settings;
@@ -219,6 +220,8 @@ struct StudioApp {
     serial_ports: Vec<transport::PortChoice>,
     selected_serial_port: Option<String>,
     uart: Option<transport::SerialTransport>,
+    /// Most recent explicit UART connection failure, if any.
+    last_uart_error: Option<String>,
     /// The latest commit message from GitHub (for update notifications).
     latest_commit: Option<String>,
     /// The timestamp (unix seconds) when the update notification was received.
@@ -285,6 +288,12 @@ struct StudioApp {
     restore_store: restore::RestoreStore,
     /// Name input for a manually created restore point.
     restore_name: String,
+    /// Whether Advanced-only tools are visible.
+    advanced_mode: bool,
+    /// Whether the advanced-mode warning is awaiting confirmation.
+    advanced_mode_confirm: bool,
+    /// Most recent physical probe report.
+    probe_report: Option<probe::ProbeReport>,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -408,6 +417,7 @@ enum Panel {
     Wiki,
     Tutorials,
     Settings,
+    Probe,
 }
 
 /// The action a simulator button edge produced.
@@ -433,6 +443,7 @@ enum ConfirmKind {
     DeleteFaceFromPreset(usize),
     DeleteFaceFile(String),
     RemoveModule(String),
+    RunPhysicalProbe,
 }
 
 impl Panel {
@@ -453,6 +464,7 @@ impl Panel {
             Panel::Tutorials => tr(lang, Key::Tutorials),
             Panel::Wiki => "Wiki",
             Panel::Settings => tr(lang, Key::Settings),
+            Panel::Probe => "Probe / Test",
         }
     }
 }
@@ -575,6 +587,7 @@ impl Default for StudioApp {
             serial_ports: transport::discover_ports().unwrap_or_default(),
             selected_serial_port: None,
             uart: None,
+            last_uart_error: None,
             latest_commit: None,
             update_time: None,
             update_checking: false,
@@ -590,6 +603,9 @@ impl Default for StudioApp {
             line_limit: settings::default_line_limit(),
             restore_store: restore::RestoreStore::load(),
             restore_name: String::new(),
+            advanced_mode: false,
+            advanced_mode_confirm: false,
+            probe_report: None,
         };
         app.log.log("Firmware Studio starting");
         app.last_uf2 = build::last_uf2(std::path::Path::new(&app.output_dir));
@@ -892,6 +908,16 @@ impl eframe::App for StudioApp {
                     let _ = webbrowser::open("https://github.com/kaiiuen/sensor-watch-rs");
                 }
                 ui.separator();
+                if self.advanced_mode {
+                    ui.colored_label(egui::Color32::from_rgb(230, 170, 70), "ADVANCED")
+                        .on_hover_text("Advanced developer controls are visible");
+                    if ui.small_button("Normal mode").clicked() {
+                        self.advanced_mode = false;
+                        self.current_panel = Panel::Dashboard;
+                        self.save_settings_internal();
+                    }
+                    ui.separator();
+                }
                 // The tab bar scrolls horizontally so it never clips when the
                 // window is narrow.
                 egui::ScrollArea::horizontal().show(ui, |ui| {
@@ -912,7 +938,22 @@ impl eframe::App for StudioApp {
                             Panel::Tutorials,
                             Panel::Wiki,
                             Panel::Settings,
+                            Panel::Probe,
                         ] {
+                            if !self.advanced_mode
+                                && matches!(
+                                    panel,
+                                    Panel::Modules
+                                        | Panel::Shell
+                                        | Panel::Diagnostics
+                                        | Panel::Debug
+                                        | Panel::Bugs
+                                        | Panel::FileBrowser
+                                        | Panel::Probe
+                                )
+                            {
+                                continue;
+                            }
                             if ui
                                 .selectable_label(
                                     self.current_panel == panel,
@@ -1022,88 +1063,107 @@ impl eframe::App for StudioApp {
             });
         });
 
-        // Terminal panel (collapsible) above the footer.
-        egui::TopBottomPanel::bottom("terminal")
-            .resizable(true)
-            .default_height(140.0)
-            .show(ctx, |ui| {
-                ui.horizontal(|ui| {
-                    if ui
-                        .selectable_label(
-                            self.terminal_open,
-                            if self.terminal_open {
-                                "Terminal ▼"
-                            } else {
-                                "Terminal ▲"
-                            },
-                        )
-                        .clicked()
-                    {
-                        self.terminal_open = !self.terminal_open;
-                    }
-                    if ui.small_button("Clear").clicked() {
-                        self.terminal_history.clear();
-                    }
-                    if ui.small_button("Copy all").clicked() {
-                        let text = self.terminal_history.join("\n");
-                        let _ = ui_copy_to_clipboard(&text);
-                    }
-                    if ui.small_button("Export").clicked() {
-                        let text = self.terminal_history.join("\n");
-                        let path = std::path::Path::new("terminal.log");
-                        if std::fs::write(path, text).is_ok() {
-                            self.status = format!("Terminal exported to {}", path.display());
-                        }
-                    }
-                    if ui
-                        .selectable_label(
-                            self.terminal_wrap,
-                            if self.terminal_wrap {
-                                "Wrap"
-                            } else {
-                                "No wrap"
-                            },
-                        )
-                        .clicked()
-                    {
-                        self.terminal_wrap = !self.terminal_wrap;
-                    }
-                    ui.label("Ticks:");
-                    self.tick_filter_ui(ui, "terminal_tick_filter");
-                    ui.weak("(max 500)");
-                });
-                if self.terminal_open {
-                    ui.separator();
-                    egui::ScrollArea::vertical()
-                        .auto_shrink([false, false])
-                        .stick_to_bottom(true)
-                        .max_height(120.0)
-                        .show(ui, |ui| {
-                            for line in &self.terminal_history {
-                                if !self.show_main_event(line) {
-                                    continue;
-                                }
-                                if self.terminal_wrap {
-                                    ui.label(line);
+        // Terminal panel (collapsible) above the footer. It is intentionally
+        // hidden in Normal mode because it exposes protocol and transport tools.
+        if self.advanced_mode {
+            egui::TopBottomPanel::bottom("terminal")
+                .resizable(true)
+                .default_height(140.0)
+                .show(ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        if ui
+                            .selectable_label(
+                                self.terminal_open,
+                                if self.terminal_open {
+                                    "Terminal ▼"
                                 } else {
-                                    ui.monospace(line);
+                                    "Terminal ▲"
+                                },
+                            )
+                            .clicked()
+                        {
+                            self.terminal_open = !self.terminal_open;
+                        }
+                        if ui.small_button("Clear").clicked() {
+                            self.terminal_history.clear();
+                        }
+                        if ui.small_button("Copy all").clicked() {
+                            let text = self.terminal_history.join("\n");
+                            let _ = ui_copy_to_clipboard(&text);
+                        }
+                        if ui.small_button("Export").clicked() {
+                            let text = self.terminal_history.join("\n");
+                            let path = std::path::Path::new("terminal.log");
+                            if std::fs::write(path, text).is_ok() {
+                                self.status = format!("Terminal exported to {}", path.display());
+                            }
+                        }
+                        if ui
+                            .selectable_label(
+                                self.terminal_wrap,
+                                if self.terminal_wrap {
+                                    "Wrap"
+                                } else {
+                                    "No wrap"
+                                },
+                            )
+                            .clicked()
+                        {
+                            self.terminal_wrap = !self.terminal_wrap;
+                        }
+                        ui.label("Ticks:");
+                        self.tick_filter_ui(ui, "terminal_tick_filter");
+                        ui.weak("(max 500)");
+                    });
+                    if self.terminal_open {
+                        ui.separator();
+                        egui::ScrollArea::vertical()
+                            .auto_shrink([false, false])
+                            .stick_to_bottom(true)
+                            .max_height(120.0)
+                            .show(ui, |ui| {
+                                for line in &self.terminal_history {
+                                    if !self.show_main_event(line) {
+                                        continue;
+                                    }
+                                    if self.terminal_wrap {
+                                        ui.label(line);
+                                    } else {
+                                        ui.monospace(line);
+                                    }
                                 }
+                            });
+                        self.tick_log_ui(ui, "terminal_tick_log");
+                        ui.horizontal(|ui| {
+                            ui.label(">");
+                            let resp = ui.text_edit_singleline(&mut self.terminal_input);
+                            let submit =
+                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            if ui.button("Run").clicked() || submit {
+                                let cmd = self.terminal_input.trim().to_string();
+                                self.terminal_input.clear();
+                                self.run_terminal_command(&cmd);
                             }
                         });
-                    self.tick_log_ui(ui, "terminal_tick_log");
-                    ui.horizontal(|ui| {
-                        ui.label(">");
-                        let resp = ui.text_edit_singleline(&mut self.terminal_input);
-                        let submit =
-                            resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                        if ui.button("Run").clicked() || submit {
-                            let cmd = self.terminal_input.trim().to_string();
-                            self.terminal_input.clear();
-                            self.run_terminal_command(&cmd);
-                        }
-                    });
-                }
-            });
+                    }
+                });
+        }
+
+        // Keep a hidden advanced panel from remaining selected after returning
+        // to Normal mode.
+        if !self.advanced_mode
+            && matches!(
+                self.current_panel,
+                Panel::Modules
+                    | Panel::Shell
+                    | Panel::Diagnostics
+                    | Panel::Debug
+                    | Panel::Bugs
+                    | Panel::FileBrowser
+            )
+        {
+            self.current_panel = Panel::Dashboard;
+        }
 
         // The central panel.
         egui::CentralPanel::default().show(ctx, |ui| match self.current_panel {
@@ -1122,7 +1182,29 @@ impl eframe::App for StudioApp {
             Panel::Tutorials => self.tutorials(ui),
             Panel::Wiki => self.wiki(ui),
             Panel::Settings => self.settings(ui),
+            Panel::Probe => self.probe(ui),
         });
+
+        if self.advanced_mode_confirm {
+            egui::Window::new("Enable Advanced mode?")
+                .collapsible(false)
+                .resizable(false)
+                .show(ctx, |ui| {
+                    ui.label("Advanced controls can affect firmware configuration and hardware.");
+                    ui.label("Simulated actions remain simulated; this mode does not make hardware claims.");
+                    ui.add_space(8.0);
+                    ui.horizontal(|ui| {
+                        if ui.button("Enable Advanced mode").clicked() {
+                            self.advanced_mode = true;
+                            self.advanced_mode_confirm = false;
+                            self.save_settings_internal();
+                        }
+                        if ui.button("Keep Normal mode").clicked() {
+                            self.advanced_mode_confirm = false;
+                        }
+                    });
+                });
+        }
 
         // One-time first-run welcome overlay.
         if self.first_run {
@@ -1211,6 +1293,19 @@ impl eframe::App for StudioApp {
                         self.modules.remove(&name);
                         self.log.log(format!("Removed module {name}"));
                         self.save_settings_internal();
+                    }
+                    ConfirmKind::RunPhysicalProbe => {
+                        if self.advanced_mode {
+                            self.probe_report = Some(probe::run(
+                                self.last_uf2.as_deref(),
+                                &self.serial_ports,
+                                self.last_uart_error.as_deref(),
+                                self.uart.as_mut(),
+                            ));
+                            self.status = "Physical probe complete".to_string();
+                        } else {
+                            self.status = "Physical probe requires Advanced mode".to_string();
+                        }
                     }
                 }
             }
@@ -3601,6 +3696,7 @@ impl StudioApp {
         };
         match transport::SerialTransport::connect(&name, transport::DEFAULT_TIMEOUT) {
             Ok(uart) => {
+                self.last_uart_error = None;
                 self.uart = Some(uart);
                 self.transport_mode = transport::TransportMode::UartJig;
                 self.shell_log
@@ -3608,6 +3704,7 @@ impl StudioApp {
                 self.status = format!("Connected to UART jig on {name}");
             }
             Err(error) => {
+                self.last_uart_error = Some(error.to_string());
                 self.uart = None;
                 self.transport_mode = transport::TransportMode::Simulated;
                 self.status = error.to_string();
@@ -3645,6 +3742,96 @@ impl StudioApp {
             }
         } else {
             self.run_shell_command(cmd);
+        }
+    }
+
+    /// The Advanced-only physical probe. USB checks are limited to UF2 metadata;
+    /// runtime read-only checks require the explicitly selected UART jig.
+    fn probe(&mut self, ui: &mut egui::Ui) {
+        ui.heading("Probe / Test");
+        ui.colored_label(
+            egui::Color32::from_rgb(230, 170, 70),
+            "Advanced physical probe — USB is UF2 mass storage only; it cannot expose sensors or runtime hardware.",
+        );
+        ui.label("Simulated mode is not a physical result. The action below never sends mutation commands.");
+        ui.horizontal(|ui| {
+            if ui.button("Refresh COM ports").clicked() {
+                self.refresh_serial_ports();
+            }
+            ui.label(format!(
+                "{} serial port(s) discovered",
+                self.serial_ports.len()
+            ));
+            if self.uart.is_some() {
+                ui.strong(format!(
+                    "Connected: {}",
+                    self.uart.as_ref().unwrap().port_name()
+                ));
+            } else {
+                ui.weak("No UART connection");
+            }
+        });
+        ui.horizontal(|ui| {
+            let enabled = self.advanced_mode;
+            if ui.add_enabled(enabled, egui::Button::new("Run physical probe")).clicked() {
+                self.pending_confirm = Some((
+                    "Run the physical probe? It will inspect removable drives and send only the read-only commands help, time, events, panic, and optical to the already connected selected UART port.".into(),
+                    ConfirmKind::RunPhysicalProbe,
+                ));
+            }
+            if ui.button("Copy report").clicked() {
+                if let Some(report) = &self.probe_report {
+                    match ui_copy_to_clipboard(&report.text()) {
+                        Ok(()) => self.status = "Probe report copied".to_string(),
+                        Err(error) => self.status = format!("Could not copy probe report: {error}"),
+                    }
+                } else {
+                    self.status = "Run a probe before copying a report".to_string();
+                }
+            }
+            if ui.button("Export report").clicked() {
+                if let Some(report) = &self.probe_report {
+                    let path = std::path::Path::new("probe-report.txt");
+                    match std::fs::write(path, report.text()) {
+                        Ok(()) => self.status = format!("Probe report exported to {}", path.display()),
+                        Err(error) => self.status = format!("Could not export probe report: {error}"),
+                    }
+                } else {
+                    self.status = "Run a probe before exporting a report".to_string();
+                }
+            }
+        });
+        ui.separator();
+        if let Some(report) = &self.probe_report {
+            ui.strong("Results");
+            egui::ScrollArea::vertical()
+                .id_source("probe_results")
+                .show(ui, |ui| {
+                    for test in &report.tests {
+                        let color = match test.status {
+                            probe::TestStatus::Pass => egui::Color32::from_rgb(120, 210, 150),
+                            probe::TestStatus::Fail => egui::Color32::from_rgb(220, 90, 90),
+                            _ => egui::Color32::from_rgb(220, 180, 80),
+                        };
+                        ui.colored_label(
+                            color,
+                            format!("[{}] {} — {}", test.status.label(), test.name, test.reason),
+                        );
+                    }
+                    ui.separator();
+                    ui.strong("Bounded probe log (latest entries)");
+                    egui::ScrollArea::vertical()
+                        .id_source("probe_log")
+                        .stick_to_bottom(true)
+                        .max_height(220.0)
+                        .show(ui, |ui| {
+                            for line in &report.log {
+                                ui.monospace(line);
+                            }
+                        });
+                });
+        } else {
+            ui.weak("No physical probe has been run. Select a UART port in Shell Access and connect it explicitly before probing.");
         }
     }
 
@@ -5463,6 +5650,17 @@ impl StudioApp {
                 ui.end_row();
             });
 
+        if !self.advanced_mode {
+            ui.add_space(16.0);
+            ui.separator();
+            ui.heading("Developer / Advanced mode");
+            ui.label("Normal mode keeps protocol, register, diagnostics, and developer tools out of the way.");
+            if ui.button("Enable Advanced mode…").clicked() {
+                self.advanced_mode_confirm = true;
+            }
+            return;
+        }
+
         ui.add_space(16.0);
         ui.separator();
         ui.heading("App Resource Usage");
@@ -6014,7 +6212,8 @@ impl StudioApp {
             &self.component_profiles,
             self.component_profile,
         )
-        .with_board(self.board.label());
+        .with_board(self.board.label())
+        .with_advanced_mode(self.advanced_mode);
         // Use the same atomic, validated writer as automatic persistence.
         let path = persist::settings_path();
         match persist::save(&settings) {
@@ -6060,7 +6259,8 @@ impl StudioApp {
             &self.component_profiles,
             self.component_profile,
         )
-        .with_board(self.board.label());
+        .with_board(self.board.label())
+        .with_advanced_mode(self.advanced_mode);
         self.restore_store
             .create(name, settings, self.board.label(), self.presets.active);
         if let Err(e) = self.restore_store.save() {
@@ -6113,7 +6313,8 @@ impl StudioApp {
             &self.component_profiles,
             self.component_profile,
         )
-        .with_board(self.board.label());
+        .with_board(self.board.label())
+        .with_advanced_mode(self.advanced_mode);
         match persist::save(&settings) {
             Ok(_) => {}
             Err(e) => {
@@ -6149,7 +6350,8 @@ impl StudioApp {
             &self.component_profiles,
             self.component_profile,
         )
-        .with_board(self.board.label());
+        .with_board(self.board.label())
+        .with_advanced_mode(self.advanced_mode);
         match settings.to_json() {
             Ok(json) => {
                 self.log
@@ -6225,6 +6427,8 @@ impl StudioApp {
         self.component_draft =
             components::selected_config(&self.component_profiles, self.component_profile);
         self.first_run = s.first_run;
+        self.advanced_mode = s.advanced_mode;
+        self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
         self.rtc_calibration = s.rtc_calibration;
         self.output_dir = if s.output_dir.is_empty() {

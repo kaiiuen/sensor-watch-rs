@@ -121,6 +121,9 @@ pub struct AppSettings {
     /// The selected target board revision.
     #[serde(default = "default_board")]
     pub board: String,
+    /// Whether advanced protocol, register, and diagnostic controls are visible.
+    #[serde(default)]
+    pub advanced_mode: bool,
 }
 
 impl AppSettings {
@@ -169,11 +172,17 @@ impl AppSettings {
             component_profiles: component_profiles.to_vec(),
             active_component_profile,
             board: default_board(),
+            advanced_mode: false,
         }
     }
 
     pub fn with_board(mut self, board: impl Into<String>) -> Self {
         self.board = board.into();
+        self
+    }
+
+    pub fn with_advanced_mode(mut self, advanced_mode: bool) -> Self {
+        self.advanced_mode = advanced_mode;
         self
     }
 
@@ -328,6 +337,7 @@ impl Default for AppSettings {
             component_profiles: Vec::new(),
             active_component_profile: 0,
             board: default_board(),
+            advanced_mode: false,
         }
     }
 }

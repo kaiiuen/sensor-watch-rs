@@ -158,7 +158,7 @@ pub fn encode_command(command: &str) -> Result<Vec<u8>, TransportError> {
 
 fn is_allowed_uart_command(command: &str) -> bool {
     match command {
-        "help" | "status" | "time" | "optical" | "events" => true,
+        "help" | "status" | "time" | "events" | "panic" | "optical" => true,
         value if value.starts_with("drift ") => value[6..]
             .parse::<i32>()
             .map(|ppm| (-1000..=1000).contains(&ppm))
@@ -307,10 +307,7 @@ mod tests {
     #[test]
     fn command_is_crlf_framed_and_bounded() {
         assert_eq!(encode_command(" time ").unwrap(), b"time\r\n");
-        assert!(matches!(
-            encode_command("panic"),
-            Err(TransportError::InvalidCommand(_))
-        ));
+        assert_eq!(encode_command("panic").unwrap(), b"panic\r\n");
         assert!(matches!(
             encode_command("events clear"),
             Err(TransportError::InvalidCommand(_))
