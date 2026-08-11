@@ -383,8 +383,10 @@ hangs, guaranteeing the watch always recovers.
 ### 6.18 `watch/crc.rs` - CRC-32 integrity check
 
 Computes a CRC-32 over the firmware text region to detect flash bit-rot. A
-mismatch indicates a corrupt image, which the caller can surface as a fault and
-enter a safe recovery state.
+mismatch is recorded as the distinct `Fault::CorruptImage` diagnostic and the
+firmware continues best-effort; this is not a recovery image, rollback selector,
+or true dual-boot implementation. Replacement requires a validated host UF2
+artifact and the existing ROM/UF2 bootloader path.
 
 ### 6.19 `watch/ecc.rs` - SECDED error correction
 
@@ -395,9 +397,11 @@ flash bit-rot is corrected on read rather than silently corrupting data.
 ### 6.20 `watch/shell.rs` - Serial command shell
 
 A minimal command interpreter over the debug UART. Provides `time`,
-`settime YYMMDDHHMMSS`, `drift N`, `optical`, `panic`, `events`, `events clear`,
-and `help` commands. This supports clock calibration and fault/event inspection;
-Studio uses the UART-jig transport when hardware is connected.
+`settime YYMMDDHHMMSS`, `drift`/`drift N`, `optical`, `panic`, `events`,
+`events clear`, and `help` commands. RX is nonblocking with a bounded ring and
+bounded line/error responses. The optional `shell-auth` feature locks mutating
+commands until board code confirms physical presence; the default preserves the
+UART-jig transport used by Studio.
 
 ### 6.21 `watch/memory.rs` - Memory usage
 

@@ -27,7 +27,7 @@ fi
 echo "==> Preserving the previous UF2, if present..."
 if [ -f "$UF2" ]; then
     mkdir -p target/thumbv6m-none-eabi/release/recovery/generations
-    GENERATION="target/thumbv6m-none-eabi/release/recovery/generations/$(date +%s).uf2"
+    GENERATION="target/thumbv6m-none-eabi/release/recovery/generations/$(date +%s%N).uf2"
     python3 scripts/verify-uf2.py backup "$UF2" "$GENERATION"
 fi
 

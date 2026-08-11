@@ -47,7 +47,9 @@ The shell runs on SERCOM3. The pads you need:
 Wire them cross-over to the dongle (A4 to its RX, A2 to its TX, and GND to
 GND), then open a terminal at **9600 baud**, 8-N-1.
 
-The console is a small event-driven interpreter; see `src/watch/shell.rs` for
+The console is a small event-driven interpreter; RX is nonblocking and buffered
+in a bounded ring. An overrun returns `ERR rx-overflow`, and lines longer than 32
+bytes return `ERR line-too-long` rather than being truncated; see `src/watch/shell.rs` for
 the code and `src/watch/uart.rs` for the driver.
 
 ### Shell commands
@@ -56,12 +58,20 @@ Once connected, type a command and press Enter. The supported commands are:
 
 - `time` - report the current RTC time as `TIME YYMMDDHHMMSS`.
 - `settime YYMMDDHHMMSS` - set the clock; replies `OK` on success.
-- `drift N` - apply a frequency-correction step for drift calibration.
+- `drift` - read the signed frequency-correction value.
+- `drift N` - set the signed correction (`N` is -127..127).
 - `optical` - report OPT3001/optical-sensor status.
 - `panic` - report the stored panic fingerprint.
 - `events` - dump the retained RAM event ring.
 - `events clear` - clear the RAM event ring.
 - `help` - list the commands.
+
+Commands use strict ASCII forms: `settime` requires exactly 12 decimal digits,
+and drift values must be signed decimal values in the hardware range. Builds with
+the optional Cargo feature `shell-auth` start with mutating commands locked; board
+code must call `Shell::set_mutation_authorized` after a physical-presence check
+(such as a held service button). The standard build leaves this policy disabled to
+preserve the UART jig workflow.
 
 This is how clock setting and drift correction can be driven from a PC, for
 example by the companion app during calibration. Studio's **Shell Access**

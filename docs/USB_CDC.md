@@ -10,11 +10,13 @@ that mode in `src/watch/shell.rs` and the descriptor constants are retained in
 ## Current status
 
 Native CDC is **not yet supported**. The `atsaml22j` `0.1.0` PAC exposes the
-USB device control and endpoint-status registers, but does not expose the
-USB descriptor/endpoint transfer SRAM required by the SAM L22 USB device
-controller. This workspace also has no TinyUSB or compatible Rust USB device
-stack. Implementing transfers by guessing those addresses would be unsafe and
-could present a nonfunctional device as working.
+The `atsaml22j` `0.1.0` PAC exposes the SAM L22 USB device control/status
+register surface, but does not expose the controller's descriptor/endpoint
+transfer SRAM interface required to install descriptors and service endpoint
+buffers. The workspace dependency graph also contains no TinyUSB port and no
+reviewed compatible Rust USB device stack. Implementing transfers by guessing
+the SRAM mapping, or by treating register presence as a complete device API,
+would be unsafe and could present a nonfunctional device as working.
 
 A CDC application mode is technically feasible without changing the UF2
 bootloader, because the application has its own USB device address space and the
@@ -26,7 +28,13 @@ compile-safe scaffolding, not a CDC claim:
 ```sh
 cargo build --target thumbv6m-none-eabi -p sensor-watch
 cargo build --target thumbv6m-none-eabi -p sensor-watch --features usb-cdc
+cargo test --lib --features usb-cdc
 ```
+
+The host test checks the reviewed descriptor/endpoint contract. It does not
+emulate USB and must not be interpreted as CDC functionality. A host
+`cargo check --features usb-cdc` is expected to fail at the compile-time
+feature guard because the firmware feature is ARM-only.
 
 The default build does not enable USB, preserving the battery-safe 4 MHz clock
 and the existing UF2 application/bootloader split. If `usb-cdc` is enabled,
