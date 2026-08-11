@@ -159,6 +159,18 @@ Produce a `.uf2` for drag-and-drop flashing:
 cargo run -p sensor-watch-tools -- build
 ```
 
+The same host operations are also available through the all-in-one Studio binary:
+
+```
+cargo run -p sensor-watch-studio -- build
+cargo run -p sensor-watch-studio -- help
+```
+
+With no command, Studio starts the GUI. The CLI is host-side tooling: it does not
+turn the UF2 USB drive into a serial link or provide device-side recovery. The
+`flash` command uses a probe-rs-compatible SWD probe; normal UF2 flashing remains
+drag-and-drop or the GUI Build & Flash panel.
+
 `build.sh` remains a compatibility launcher. The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`.
 
 > **Note:** This is a Cargo workspace. A bare `cargo build` at the repo root
@@ -172,7 +184,7 @@ The `core` crate holds pure logic that is host-testable:
 
 ```
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
-# Current checkout: 65 tests pass in the core crate.
+# Current checkout: 66 tests pass in the core crate.
 ```
 
 Lint and format:
@@ -230,20 +242,21 @@ This is separate from the passing core test command above.
 
 ## Status and validation snapshot
 
-- The source tree currently contains 221 `#[test]` attributes across core,
+- The source tree currently contains 224 `#[test]` attributes across core,
   firmware host seams, and Studio. This is a source count, not a passing test
   result.
-- The core host suite currently passes 65 tests. The firmware library target
+- The core host suite currently passes 66 tests. The firmware library target
   runs 0 tests.
 - The Studio package test target builds with four dead-code warnings; no Studio
   test result is claimed here.
 - No complete repository warning total is claimed here because the full
   workspace does not reach a clean build.
 
-This snapshot is for commit `4ff16ba` (2026-08-12). Recent work added UART-jig
+This snapshot is for commit `747dbf8` (2026-08-12). Recent work added the
+all-in-one Studio CLI on top of the reusable Rust tools library. UART-jig
 transport, protocol-only optical and transfer foundations, panic-map and
-host-side recovery validation, and default-enabled Studio real-face coverage.
-These remain software/host capabilities; no on-silicon validation has been run.
+host-side recovery validation, and default-enabled Studio real-face coverage
+remain software/host capabilities; no on-silicon validation has been run.
 
 ## Documentation
 

@@ -723,14 +723,17 @@ failures on its own. Each hardening measure addresses a specific failure mode:
 The project has a CI pipeline (GitHub Actions) that runs on every push:
 
 - **Build** - `cargo build --target thumbv6m-none-eabi`
-- **Clippy** - `cargo clippy -- -D warnings` (firmware + core)
+- **Clippy** - informational firmware clippy for `thumbv6m-none-eabi`, plus
+  strict core clippy with `-D warnings`
 - **Test** - `cargo test -p sensor-watch-core` (host unit tests)
 - **Format** - `cargo fmt --check`
 - **Studio** - build the GUI companion app
 - **UF2** - assemble the firmware `.uf2` artifact
 
-The core crate has 27 unit tests covering date math, settings bit-packing, and
-DateTime pack/unpack. These tests caught a real `is_leap` bug.
+The core crate currently has 66 passing host tests covering date math, settings
+bit-packing, DateTime pack/unpack, UF2 encoding, ECC, event logging, transfer
+validation, optical protocol validation, and other pure logic. These tests
+caught a real `is_leap` bug. Passing host tests do not validate physical hardware.
 
 **Why CI:** it gives *proof* the foundation is correct and prevents regressions.
 Every claim about correctness is verified automatically.

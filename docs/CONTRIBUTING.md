@@ -39,8 +39,8 @@ cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 
 (On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin`.)
 
-The source tree currently contains 221 `#[test]` attributes across core,
-firmware host seams, and Studio. The core host command currently passes 65 tests
+The source tree currently contains 224 `#[test]` attributes across core,
+firmware host seams, and Studio. The core host command currently passes 66 tests
 covering date math, settings bit-packing, DateTime pack/unpack, UF2 encoding,
 event logging, transfer validation, optical protocol validation, and other pure
 logic. The Studio package test target builds with four existing dead-code
@@ -58,7 +58,10 @@ cargo run -p sensor-watch-tools -- build
 The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`. The Rust
 host tool builds the release firmware, extracts the raw binary with `rust-objcopy`
 (or `arm-none-eabi-objcopy`), converts it to UF2, and writes the recovery
-manifest. `build.sh` remains a compatibility launcher.
+manifest. `build.sh` remains a compatibility launcher. The same build, UF2,
+verification, recovery-staging, and probe-flash operations are available through
+`cargo run -p sensor-watch-studio -- help`; with no command that binary starts
+the GUI.
 
 ## Linting
 
