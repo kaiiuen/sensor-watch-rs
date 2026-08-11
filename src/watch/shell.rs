@@ -151,9 +151,10 @@ impl Shell {
             }
             b"help" => {
                 transport_puts(
-                    "CMDS: time, settime YYMMDDHHMMSS, drift [N], optical, panic, events [clear], help\r\n",
+                    "CMDS: time, settime YYMMDDHHMMSS, drift [N], panic, events [clear], help\r\n",
                 );
             }
+            #[cfg(feature = "optical")]
             b"optical" => {
                 transport_puts(crate::watch::optical::status_text());
                 transport_puts("\r\n");

@@ -55,6 +55,9 @@ critical-section = "1.2.0"
 sensor-watch-core = { path = "./core", optional = true }
 
 [features]
+# Optional optical command/status scaffolding. Keep it out of the default
+# firmware image until a board-level optical receiver is available.
+optical = []
 # Only available to the host (`cargo test` / `cargo build` / `cargo run`, NOT the
 # `thumbv6m-none-eabi` firmware target). Gates the mock HW dispatch in `watch`.
 hostmock = ["dep:sensor-watch-core"]
@@ -86,7 +89,7 @@ opt-level = 1
 panic = "abort"
 
 [profile.release]
-opt-level = "s"
+opt-level = "z"
 lto = true
 codegen-units = 1
 panic = "abort"

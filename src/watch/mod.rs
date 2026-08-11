@@ -51,6 +51,7 @@ pub mod lis2dw;
 pub mod logging;
 pub mod memory;
 pub mod opt3001;
+#[cfg(feature = "optical")]
 pub mod optical;
 pub mod rtc;
 pub mod safety;
