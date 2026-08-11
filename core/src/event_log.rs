@@ -71,6 +71,11 @@ impl<const N: usize> EventLog<N> {
         self.len
     }
 
+    /// Returns whether no events are currently retained.
+    pub const fn is_empty(&self) -> bool {
+        self.len == 0
+    }
+
     /// Returns the event at `index`, oldest first.
     pub fn get(&self, index: usize) -> Option<Event> {
         if index >= self.len || N == 0 {
@@ -135,6 +140,17 @@ mod tests {
         let mut log = EventLog::<0>::new();
         assert_eq!(log.push(0, 1, 0), 0);
         assert_eq!(log.len(), 0);
+        assert!(log.is_empty());
         assert_eq!(log.get(0), None);
+    }
+
+    #[test]
+    fn is_empty_tracks_retained_events() {
+        let mut log = EventLog::<1>::new();
+        assert!(log.is_empty());
+        log.push(0, 1, 0);
+        assert!(!log.is_empty());
+        log.clear();
+        assert!(log.is_empty());
     }
 }

@@ -79,7 +79,7 @@ pub fn sync() -> bool {
 /// Writes data with log-structured wear leveling. Host: a plain write at the
 /// given offset (the highest row acts as the "most recent" row).
 pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
-    write(ROW_SIZE as u32 * 0, offset + 4, buffer)
+    write(0, offset + 4, buffer)
 }
 
 /// Reads data written with log-structured wear leveling. Host: reads row 0.
