@@ -153,4 +153,32 @@ mod tests {
         log.clear();
         assert!(log.is_empty());
     }
+
+    #[test]
+    fn ring_invariants_hold_at_capacity_boundaries() {
+        for capacity in 1..=4 {
+            match capacity {
+                1 => assert_ring_contents::<1>(),
+                2 => assert_ring_contents::<2>(),
+                3 => assert_ring_contents::<3>(),
+                4 => assert_ring_contents::<4>(),
+                _ => unreachable!(),
+            }
+        }
+    }
+
+    fn assert_ring_contents<const N: usize>() {
+        let mut log = EventLog::<N>::new();
+        for value in 0..(N as u32 * 3 + 1) {
+            assert_eq!(log.push(value, value as u8, value as u16), value);
+            assert!(log.len() <= N);
+            for index in 0..log.len() {
+                assert_eq!(
+                    log.get(index).expect("valid ring index").data,
+                    (value + 1 - log.len() as u32 + index as u32) as u16
+                );
+            }
+        }
+        assert_eq!(log.get(N), None);
+    }
 }

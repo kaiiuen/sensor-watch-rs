@@ -71,6 +71,8 @@ pub enum EncodeError {
     PayloadTooLarge,
     OutputTooSmall,
     UnsupportedCommand,
+    AuthenticationRequired,
+    AuthenticationNotAllowed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,10 +114,15 @@ fn encode_inner(
     tag: Option<&[u8; AUTH_TAG_LEN]>,
     output: &mut [u8; MAX_FRAME_LEN],
 ) -> Result<usize, EncodeError> {
-    if payload.len() > MAX_PAYLOAD
-        || payload.len() + tag.map_or(0, |_| AUTH_TAG_LEN) > MAX_PAYLOAD + AUTH_TAG_LEN
-    {
+    if payload.len() > MAX_PAYLOAD {
         return Err(EncodeError::PayloadTooLarge);
+    }
+    let requires_auth = matches!(command, CommandType::TimeSync);
+    if requires_auth && tag.is_none() {
+        return Err(EncodeError::AuthenticationRequired);
+    }
+    if !requires_auth && tag.is_some() {
+        return Err(EncodeError::AuthenticationNotAllowed);
     }
     let auth_len = tag.map_or(0, |_| AUTH_TAG_LEN);
     let length = payload.len() + auth_len;
@@ -158,26 +165,29 @@ pub fn decode(bytes: &[u8], auth: Option<&dyn AuthenticationHook>) -> Result<Fra
         return Err(DecodeError::Crc);
     }
     let command = CommandType::from_byte(bytes[3]).ok_or(DecodeError::UnsupportedCommand)?;
-    let (payload_len, tag) = if auth.is_some() {
+    let requires_auth = matches!(command, CommandType::TimeSync);
+    let payload_len = if requires_auth {
+        let hook = auth.ok_or(DecodeError::Authentication)?;
         if length < AUTH_TAG_LEN {
             return Err(DecodeError::Authentication);
         }
-        (
-            length - AUTH_TAG_LEN,
-            Some(&bytes[HEADER_LEN + length - AUTH_TAG_LEN..HEADER_LEN + length]),
-        )
-    } else {
-        (length, None)
-    };
-    if let (Some(hook), Some(tag)) = (auth, tag) {
+        let payload_len = length - AUTH_TAG_LEN;
+        let tag = &bytes[HEADER_LEN + payload_len..HEADER_LEN + length];
         let tag: &[u8; AUTH_TAG_LEN] = tag.try_into().map_err(|_| DecodeError::Authentication)?;
         if !hook.verify(&bytes[..HEADER_LEN + payload_len], tag) {
             return Err(DecodeError::Authentication);
         }
-    }
+        payload_len
+    } else {
+        length
+    };
     let mut frame = Frame::empty();
     frame.command = command;
-    frame.sequence = u32::from_be_bytes(bytes[5..9].try_into().unwrap());
+    frame.sequence = u32::from_be_bytes(
+        bytes[5..9]
+            .try_into()
+            .map_err(|_| DecodeError::InvalidLength)?,
+    );
     frame.payload_len = payload_len;
     frame.payload[..payload_len].copy_from_slice(&bytes[9..9 + payload_len]);
     Ok(frame)
@@ -210,12 +220,12 @@ impl Decoder {
         now_ms: u32,
         auth: Option<&dyn AuthenticationHook>,
     ) -> Option<Result<Frame, DecodeError>> {
-        if let Some(last) = self.last_byte_ms {
-            if now_ms.wrapping_sub(last) > RX_TIMEOUT_MS {
-                self.reset();
-                self.last_byte_ms = Some(now_ms);
-                return Some(Err(DecodeError::Timeout));
-            }
+        if let Some(last) = self.last_byte_ms
+            && now_ms.wrapping_sub(last) > RX_TIMEOUT_MS
+        {
+            self.reset();
+            self.last_byte_ms = Some(now_ms);
+            return Some(Err(DecodeError::Timeout));
         }
         self.last_byte_ms = Some(now_ms);
         if self.len == 0 {
@@ -261,10 +271,10 @@ impl Decoder {
         if self.frames_in_window >= MAX_FRAMES_PER_WINDOW {
             return Err(DecodeError::DutyCycle);
         }
-        if let Some(last) = self.last_sequence {
-            if frame.sequence == last || frame.sequence.wrapping_sub(last) > 0x8000_0000 {
-                return Err(DecodeError::Replay);
-            }
+        if let Some(last) = self.last_sequence
+            && (frame.sequence == last || frame.sequence.wrapping_sub(last) > 0x8000_0000)
+        {
+            return Err(DecodeError::Replay);
         }
         self.frames_in_window += 1;
         self.last_sequence = Some(frame.sequence);
@@ -303,7 +313,7 @@ mod tests {
 
     fn encoded(seq: u32) -> ([u8; MAX_FRAME_LEN], usize) {
         let mut out = [0; MAX_FRAME_LEN];
-        let len = encode(CommandType::TimeSync, seq, b"TIME", &mut out).unwrap();
+        let len = encode(CommandType::Status, seq, b"TIME", &mut out).unwrap();
         (out, len)
     }
 
@@ -311,7 +321,7 @@ mod tests {
     fn round_trip_is_fixed_size_and_heap_free() {
         let (bytes, len) = encoded(7);
         let frame = decode(&bytes[..len], None).unwrap();
-        assert_eq!(frame.command, CommandType::TimeSync);
+        assert_eq!(frame.command, CommandType::Status);
         assert_eq!(frame.sequence, 7);
         assert_eq!(frame.payload(), b"TIME");
     }
@@ -368,6 +378,22 @@ mod tests {
         fn verify(&self, _authenticated_part: &[u8], tag: &[u8; AUTH_TAG_LEN]) -> bool {
             *tag == [0xC3; AUTH_TAG_LEN]
         }
+    }
+
+    #[test]
+    fn state_changing_commands_require_authentication() {
+        let mut bytes = [0; MAX_FRAME_LEN];
+        assert_eq!(
+            encode(CommandType::TimeSync, 1, b"sync", &mut bytes),
+            Err(EncodeError::AuthenticationRequired)
+        );
+        let tag = [0xC3; AUTH_TAG_LEN];
+        let len =
+            encode_authenticated(CommandType::TimeSync, 1, b"sync", &tag, &mut bytes).unwrap();
+        assert_eq!(
+            decode(&bytes[..len], None),
+            Err(DecodeError::Authentication)
+        );
     }
 
     #[test]

@@ -82,7 +82,13 @@ impl Opt3001 {
         if matches!(self.state, State::Converting { .. }) {
             return Err(Error::NotReady);
         }
-        let raw = i2c::read16_checked(ADDRESS, RESULT).map_err(|_| Error::Bus)?;
+        let raw = match i2c::read16_checked(ADDRESS, RESULT) {
+            Ok(raw) => raw,
+            Err(_) => {
+                self.state = State::Unavailable;
+                return Err(Error::Bus);
+            }
+        };
         let exponent = (raw >> 12) as u32;
         let mantissa = (raw & 0x0FFF) as u32;
         if exponent > 0x0C {
