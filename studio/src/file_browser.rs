@@ -124,17 +124,28 @@ impl FileBrowser {
                 return;
             }
         };
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.message = format!("Cannot inspect {}: {error}", path.display());
+        // Re-resolve immediately before opening: the directory listing is not a
+        // capability, and a path can be swapped after it was displayed.
+        let reopened = match path.canonicalize() {
+            Ok(reopened) if reopened == path && is_within_root(&reopened, &self.root) => reopened,
+            _ => {
+                self.message =
+                    "Refusing to inspect a path changed outside the workspace".to_string();
                 return;
             }
         };
-        self.selected = Some(path.clone());
+        let metadata = match fs::symlink_metadata(&reopened) {
+            Ok(metadata) if metadata.file_type().is_file() => metadata,
+            Ok(metadata) => metadata,
+            Err(error) => {
+                self.message = format!("Cannot inspect {}: {error}", reopened.display());
+                return;
+            }
+        };
+        self.selected = Some(reopened.clone());
         self.preview_size = Some(metadata.len());
-        if metadata.is_file() && is_previewable(&path, metadata.len()) {
-            match fs::read_to_string(&path) {
+        if metadata.is_file() && is_previewable(&reopened, metadata.len()) {
+            match fs::read_to_string(&reopened) {
                 Ok(contents) => {
                     self.preview = contents;
                     self.preview_allowed = true;

@@ -46,8 +46,12 @@ pub fn validate_output_dir(path: &Path) -> Result<(), String> {
     if path.as_os_str().is_empty() || path.to_string_lossy().len() > 240 {
         return Err("output directory is empty or excessively long".into());
     }
-    if path.exists() && !path.is_dir() {
-        return Err("output path is not a directory".into());
+    if let Ok(metadata) = std::fs::symlink_metadata(path) {
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
+            return Err("output path must be a real directory, not a symlink or file".into());
+        }
+        path.canonicalize()
+            .map_err(|e| format!("cannot resolve output directory: {e}"))?;
     }
     Ok(())
 }
@@ -173,6 +177,18 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
     // Stage beside the destination, then replace it only after validation. Keep
     // a backup while replacing so a failed Windows rename can be rolled back.
     let tmp = uf2.with_extension("uf2.tmp");
+    for path in [&uf2, &tmp] {
+        if std::fs::symlink_metadata(path)
+            .map(|metadata| metadata.file_type().is_symlink())
+            .unwrap_or(false)
+        {
+            return BuildResult {
+                success: false,
+                message: format!("refusing symlinked build output: {}", path.display()),
+                uf2_path: None,
+            };
+        }
+    }
     if let Err(e) = std::fs::remove_file(&tmp) {
         if e.kind() != std::io::ErrorKind::NotFound {
             return BuildResult {
@@ -189,8 +205,27 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
             uf2_path: None,
         };
     }
+    let staged = match std::fs::read(&tmp) {
+        Ok(data) => data,
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            return BuildResult {
+                success: false,
+                message: format!("failed to read staged UF2: {e}"),
+                uf2_path: None,
+            };
+        }
+    };
+    if staged != uf2_data || sensor_watch_core::uf2::validate(&staged).is_err() {
+        let _ = std::fs::remove_file(&tmp);
+        return BuildResult {
+            success: false,
+            message: "staged UF2 failed content validation".into(),
+            uf2_path: None,
+        };
+    }
     let backup = uf2.with_extension("uf2.previous");
-    let had_old = uf2.exists();
+    let had_old = uf2.is_file();
     if had_old {
         let _ = std::fs::remove_file(&backup);
         if let Err(e) = std::fs::rename(&uf2, &backup) {
@@ -211,6 +246,23 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
             success: false,
             message: format!("failed to replace UF2: {e}"),
             uf2_path: None,
+        };
+    }
+    let published = match std::fs::read(&uf2) {
+        Ok(data) => data,
+        Err(e) => {
+            return BuildResult {
+                success: false,
+                message: format!("UF2 published but could not be re-read: {e}"),
+                uf2_path: Some(uf2),
+            };
+        }
+    };
+    if published != uf2_data || sensor_watch_core::uf2::validate(&published).is_err() {
+        return BuildResult {
+            success: false,
+            message: "published UF2 failed content validation".into(),
+            uf2_path: Some(uf2),
         };
     }
     // Never discard the previous artifact. Preserve it as a uniquely named,

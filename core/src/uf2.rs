@@ -103,8 +103,18 @@ pub fn crc32(bytes: &[u8]) -> u32 {
 /// `image` is the raw binary firmware (e.g. the contents of the `.bin` file
 /// extracted from the ELF). Returns the UF2 data as a `Vec<u8>`.
 pub fn convert_to_uf2(image: &[u8]) -> Vec<u8> {
+    // Reject before calculating capacity: callers may pass untrusted or
+    // compiler-produced input, and capacity allocation must never precede the
+    // bootloader size check.
+    if image.is_empty() || image.len() > MAX_APPLICATION_BYTES {
+        return Vec::new();
+    }
     let num_blocks = image.len().div_ceil(BLOCK_SIZE);
-    let mut out = Vec::with_capacity(num_blocks * TOTAL_BLOCK_SIZE);
+    let output_bytes = match num_blocks.checked_mul(TOTAL_BLOCK_SIZE) {
+        Some(bytes) => bytes,
+        None => return Vec::new(),
+    };
+    let mut out = Vec::with_capacity(output_bytes);
 
     for blockno in 0..num_blocks {
         let ptr = BLOCK_SIZE * blockno;
@@ -150,6 +160,12 @@ mod tests {
         let image = [0xAA; 100];
         let uf2 = convert_to_uf2(&image);
         assert_eq!(uf2.len(), TOTAL_BLOCK_SIZE);
+    }
+
+    #[test]
+    fn oversized_image_is_rejected_before_encoding() {
+        let image = alloc::vec![0xAA; MAX_APPLICATION_BYTES + 1];
+        assert!(convert_to_uf2(&image).is_empty());
     }
 
     #[test]

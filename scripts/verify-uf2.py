@@ -26,6 +26,8 @@ APP_START = 0x2000
 PAYLOAD = 256
 BLOCK = 512
 MAX_APP_BYTES = 0x3C000 - APP_START
+MAX_UF2_BYTES = ((MAX_APP_BYTES + PAYLOAD - 1) // PAYLOAD) * BLOCK
+MAX_MANIFEST_BYTES = 512 * 1024
 FORMAT = "sensor-watch-recovery-manifest-v2"
 
 
@@ -35,17 +37,22 @@ def fail(message) -> NoReturn:
 
 
 def inspect(path):
+    if path.is_symlink():
+        fail(f"refusing symlinked UF2 path: {path}")
     try:
         file_size = path.stat().st_size
-        data = path.read_bytes()
+        if file_size > MAX_UF2_BYTES:
+            fail(f"UF2 is {file_size} bytes; maximum is {MAX_UF2_BYTES}")
+        with path.open("rb") as source:
+            data = source.read(MAX_UF2_BYTES + 1)
+        final_size = path.stat().st_size
     except OSError as exc:
         fail(f"cannot read {path}: {exc}")
-    if len(data) != file_size:
+    if len(data) > MAX_UF2_BYTES or file_size > MAX_UF2_BYTES:
+        fail(f"UF2 exceeds maximum size of {MAX_UF2_BYTES} bytes")
+    if len(data) != file_size or final_size != file_size:
         fail("UF2 changed while it was being read")
     if not file_size or file_size % BLOCK:
-        fail("UF2 must be non-empty and a multiple of 512 bytes")
-    max_uf2_bytes = ((MAX_APP_BYTES + PAYLOAD - 1) // PAYLOAD) * BLOCK
-    if file_size > max_uf2_bytes:
         fail(f"UF2 is {file_size} bytes; maximum is {max_uf2_bytes}")
     count = len(data) // BLOCK
     image = bytearray()
@@ -110,6 +117,8 @@ def write_manifest(path, manifest):
 
 def verify_manifest(path, manifest_path):
     try:
+        if manifest_path.is_symlink() or manifest_path.stat().st_size > MAX_MANIFEST_BYTES:
+            fail("manifest is symlinked or too large")
         manifest = json.loads(manifest_path.read_text(encoding="ascii"))
     except (OSError, ValueError) as exc:
         fail(f"cannot read manifest: {exc}")
@@ -150,6 +159,8 @@ def main():
 
     if args.command == "backup":
         manifest = record(args.uf2)
+        if args.backup.is_symlink():
+            fail(f"refusing symlinked backup path: {args.backup}")
         if args.backup.exists():
             fail(f"refusing to overwrite existing known-good backup: {args.backup}")
         args.backup.parent.mkdir(parents=True, exist_ok=True)
@@ -165,15 +176,25 @@ def main():
         manifest = verify_manifest(args.backup, manifest_path)
     else:
         manifest = record(args.backup)
-    if args.output.resolve() == args.backup.resolve():
-        fail("rollback output must differ from the backup")
+    try:
+        same_path = args.output.resolve() == args.backup.resolve()
+    except OSError as exc:
+        fail(f"cannot resolve rollback paths: {exc}")
+    if same_path or args.output.is_symlink() or args.backup.is_symlink():
+        fail("rollback paths must be distinct regular files")
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temp = args.output.with_suffix(args.output.suffix + ".tmp")
+    if temp.is_symlink():
+        fail(f"refusing symlinked rollback temporary path: {temp}")
+    temp.unlink(missing_ok=True)
     shutil.copy2(args.backup, temp)
-    if temp.stat().st_size != args.backup.stat().st_size:
+    copied_data, _, _ = inspect(temp)
+    if copied_data != args.backup.read_bytes():
         temp.unlink(missing_ok=True)
-        fail("rollback copy size verification failed")
+        fail("rollback copy content verification failed")
+    # os.replace is atomic and overwrites an existing file on Windows as well.
     temp.replace(args.output)
+    inspect(args.output)
     print(f"staged rollback UF2 at {args.output}")
     print(f"generation {manifest['generation_id']}")
     print(f"sha256 {manifest['sha256']}")

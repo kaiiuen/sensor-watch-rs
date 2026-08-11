@@ -1,6 +1,7 @@
 //! Local restore points for Studio configuration and app state.
 
-use std::path::PathBuf;
+use std::io::Read;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
@@ -8,6 +9,8 @@ use super::settings::AppSettings;
 
 pub const MAX_RESTORE_POINTS: usize = 12;
 const FILE_NAME: &str = "studio-restore-points.json";
+const MAX_RESTORE_JSON_BYTES: u64 = 1024 * 1024;
+const MAX_RESTORE_TEXT_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RestorePoint {
@@ -49,8 +52,11 @@ pub fn path() -> PathBuf {
 }
 
 fn replace_existing(tmp: &std::path::Path, target: &std::path::Path) -> Result<(), String> {
+    ensure_regular_or_absent(tmp)?;
+    ensure_regular_or_absent(target)?;
     let backup = target.with_extension("json.previous");
-    let had_old = target.exists();
+    ensure_regular_or_absent(&backup)?;
+    let had_old = target.is_file();
     if had_old {
         if backup.exists() {
             std::fs::remove_file(&backup)
@@ -74,6 +80,44 @@ fn replace_existing(tmp: &std::path::Path, target: &std::path::Path) -> Result<(
     Ok(())
 }
 
+fn ensure_regular_or_absent(path: &Path) -> Result<(), String> {
+    match std::fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_symlink() => Err(format!(
+            "refusing symlinked restore path: {}",
+            path.display()
+        )),
+        Ok(metadata) if !metadata.is_file() => Err(format!(
+            "restore path is not a regular file: {}",
+            path.display()
+        )),
+        Ok(_) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("cannot inspect restore path: {error}")),
+    }
+}
+
+fn read_bounded(path: &Path, max_bytes: u64) -> std::io::Result<String> {
+    let file = std::fs::File::open(path)?;
+    let mut bytes = Vec::new();
+    file.take(max_bytes + 1).read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > max_bytes {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "restore file is too large",
+        ));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "restore file is not UTF-8")
+    })
+}
+
+fn validate_point(point: &RestorePoint) -> Result<(), String> {
+    if point.name.len() > MAX_RESTORE_TEXT_BYTES || point.board.len() > MAX_RESTORE_TEXT_BYTES {
+        return Err("restore point text is too long".into());
+    }
+    point.settings.validate()
+}
+
 fn now() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -83,7 +127,7 @@ fn now() -> u64 {
 
 impl RestoreStore {
     pub fn load() -> Self {
-        let Ok(json) = std::fs::read_to_string(path()) else {
+        let Ok(json) = read_bounded(&path(), MAX_RESTORE_JSON_BYTES) else {
             return Self::default();
         };
         let Ok(mut store) = serde_json::from_str::<Self>(&json) else {
@@ -136,6 +180,7 @@ impl RestoreStore {
     }
 
     pub fn normalize(&mut self) {
+        self.points.retain(|point| validate_point(point).is_ok());
         self.points.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
         self.points.truncate(MAX_RESTORE_POINTS);
     }
@@ -148,7 +193,11 @@ impl RestoreStore {
     }
 
     pub fn import_json(&mut self, json: &str) -> Result<(), String> {
+        if json.len() > MAX_RESTORE_JSON_BYTES as usize {
+            return Err("restore point JSON is too large".into());
+        }
         let point: RestorePoint = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        validate_point(&point)?;
         self.points.push(point);
         self.normalize();
         Ok(())
