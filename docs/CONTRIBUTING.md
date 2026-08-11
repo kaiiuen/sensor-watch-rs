@@ -39,13 +39,13 @@ cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 
 (On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin`.)
 
-The source tree currently contains 208 `#[test]` attributes across core,
-firmware host seams, and Studio. The core host command currently passes 60 tests
+The source tree currently contains 221 `#[test]` attributes across core,
+firmware host seams, and Studio. The core host command currently passes 65 tests
 covering date math, settings bit-packing, DateTime pack/unpack, UF2 encoding,
 event logging, transfer validation, optical protocol validation, and other pure
-logic. A full Studio package test currently stops at the invalid `?. >` token in
-`core/src/transfer.rs:104`. Passing host tests provide confidence in pure logic;
-they do not validate physical hardware.
+logic. The Studio package test target builds with four existing dead-code
+warnings; no Studio test result is claimed here. Passing host tests provide
+confidence in pure logic; they do not validate physical hardware.
 
 ## Building a UF2
 
@@ -69,9 +69,9 @@ cargo clippy -p sensor-watch-core -- -D warnings
 
 The firmware clippy job is informational because the full C-reference HAL API
 and many ported faces carry intentional dead-code and pedantic style lints. The
-`core` clippy job is the strict gate (`-D warnings`). A full Studio build/test
-attempt is currently blocked by the syntax error at `core/src/transfer.rs:104`;
-the core host test command itself passes.
+`core` clippy job is the strict gate (`-D warnings`). The Studio package test
+target builds with four existing dead-code warnings; the core host test command
+itself passes.
 
 ## Formatting
 

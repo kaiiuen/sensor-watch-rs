@@ -163,7 +163,7 @@ The `core` crate holds pure logic that is host-testable:
 
 ```
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
-# Current checkout: 60 tests pass in the core crate.
+# Current checkout: 65 tests pass in the core crate.
 ```
 
 Lint and format:
@@ -174,9 +174,8 @@ cargo clippy -p sensor-watch-core --target x86_64-pc-windows-msvc -- -D warnings
 cargo fmt --check
 
 The firmware clippy job is informational in CI; the core clippy job is the
-warnings-as-errors gate. The Studio package currently does not complete a host
-test build because core/src/transfer.rs contains an invalid `?. >` token at
-line 104. This is separate from the passing core test command above.
+warnings-as-errors gate. The Studio package test target builds with four existing dead-code warnings.
+This is separate from the passing core test command above.
 ```
 
 ## Status
@@ -222,17 +221,17 @@ line 104. This is separate from the passing core test command above.
 
 ## Status and validation snapshot
 
-- The source tree currently contains 208 `#[test]` attributes across core,
+- The source tree currently contains 221 `#[test]` attributes across core,
   firmware host seams, and Studio. This is a source count, not a passing test
   result.
-- The core host suite currently passes 60 tests. The firmware library target
+- The core host suite currently passes 65 tests. The firmware library target
   runs 0 tests.
-- A full Studio package test currently stops at the syntax error in
-  `core/src/transfer.rs:104` (`?. >`); no Studio test result is claimed.
+- The Studio package test target builds with four dead-code warnings; no Studio
+  test result is claimed here.
 - No complete repository warning total is claimed here because the full
   workspace does not reach a clean build.
 
-This snapshot is for commit `e161722` (2026-08-11). Recent work added UART-jig
+This snapshot is for commit `4ff16ba` (2026-08-12). Recent work added UART-jig
 transport, protocol-only optical and transfer foundations, panic-map and
 host-side recovery validation, and default-enabled Studio real-face coverage.
 These remain software/host capabilities; no on-silicon validation has been run.
