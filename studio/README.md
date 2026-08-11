@@ -47,6 +47,11 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Calibration** - clock calibration (generates a `settime` command for the
   next minute boundary), a **beep-on-minute-rollover** helper, and drift
   calibration (parts-per-million).
+- **Shell Access** - explicit **Simulated** mode (the default, using the existing
+  in-app watch model) or **UART Jig** mode. UART mode discovers host serial
+  ports, opens a selected port at **9600 8-N-1**, and exchanges CR/LF-framed
+  shell commands with bounded read/write timeouts. It is for the debug pads
+  (A4 TX, A2 RX, GND), not the watch's UF2 USB port; USB CDC is not assumed.
 - **Modules** - register custom hardware modules for modded boards (e.g. a BLE
   board instead of the accelerometer). Each module targets a HAL file in
   `src/watch/`; modules are persisted and can be enabled/disabled/removed.
@@ -119,6 +124,7 @@ hardware validation.
 - `arboard` - system clipboard
 - `sysinfo` - app resource usage
 - `ureq` - HTTP client for release checksum verification
+- `serialport` - cross-platform UART-jig port discovery and I/O
 - `webbrowser` - open the GitHub repo from the title
 
 ## Source layout
@@ -147,6 +153,8 @@ hardware validation.
 - `wiki.rs` - the built-in reference wiki
 - `real_face.rs` - host seam that runs real firmware faces (behind the opt-in
   `real-faces` feature)
+- `transport.rs` - simulated/UART-jig transport selection, serial discovery,
+  line framing, timeout handling, and host tests
 
 ## License
 

@@ -22,6 +22,7 @@ mod i18n;
 mod integrity;
 mod modules;
 mod ntp;
+mod optical;
 mod panic_map;
 mod persist;
 mod presets;
@@ -30,6 +31,7 @@ mod restore;
 mod settings;
 mod sysstats;
 mod theme;
+mod transport;
 mod watch_config;
 mod watch_display;
 mod watch_sim;
@@ -38,6 +40,7 @@ mod wiki;
 use eframe::egui;
 use i18n::{tr, Key, Language};
 use presets::PresetManager;
+use sha2::{Digest, Sha256};
 use theme::Theme;
 use watch_sim::CasioF91W;
 
@@ -183,6 +186,8 @@ struct StudioApp {
     face_tick_accum: f32,
     /// The drift calibration session.
     drift_session: drift::DriftSession,
+    /// Optional temperature-compensated RTC calibration settings.
+    rtc_calibration: settings::RtcCalibrationSettings,
     /// The number of fuzz iterations to run.
     fuzz_iterations: usize,
     /// The terminal input line.
@@ -200,6 +205,11 @@ struct StudioApp {
     shell_hw_log: debug::DebugLog,
     /// Offline shell/simulator diagnostics state.
     diagnostics: diagnostics::DiagnosticsState,
+    /// Explicit shell transport selection and optional physical UART connection.
+    transport_mode: transport::TransportMode,
+    serial_ports: Vec<transport::PortChoice>,
+    selected_serial_port: Option<String>,
+    uart: Option<transport::SerialTransport>,
     /// The latest commit message from GitHub (for update notifications).
     latest_commit: Option<String>,
     /// The timestamp (unix seconds) when the update notification was received.
@@ -538,6 +548,7 @@ impl Default for StudioApp {
             active_real_mode_24: None,
             face_tick_accum: 0.0,
             drift_session: drift::DriftSession::new(),
+            rtc_calibration: settings::RtcCalibrationSettings::default(),
             fuzz_iterations: 5000,
             terminal_input: String::new(),
             terminal_open: false,
@@ -547,6 +558,10 @@ impl Default for StudioApp {
             shell_log: debug::DebugLog::new(),
             shell_hw_log: debug::DebugLog::new(),
             diagnostics: diagnostics::DiagnosticsState::new(),
+            transport_mode: transport::TransportMode::Simulated,
+            serial_ports: transport::discover_ports().unwrap_or_default(),
+            selected_serial_port: None,
+            uart: None,
             latest_commit: None,
             update_time: None,
             update_checking: false,
@@ -3096,6 +3111,36 @@ impl StudioApp {
                 } else {
                     ui.weak("No samples yet.");
                 }
+
+                ui.add_space(12.0);
+                ui.separator();
+                ui.strong("Optional temperature compensation");
+                ui.label("Stored as versioned settings; disabled by default and never written to hardware by Studio.");
+                let mut changed = false;
+                let mut enabled = self.rtc_calibration.enabled();
+                if ui.checkbox(&mut enabled, "Enable stored calibration").changed() {
+                    self.rtc_calibration.version = if enabled { sensor_watch_core::rtc_calibration::CALIBRATION_VERSION } else { 0 };
+                    changed = true;
+                }
+                ui.horizontal(|ui| {
+                    ui.label("Base correction (PPM)");
+                    changed |= ui.add(egui::DragValue::new(&mut self.rtc_calibration.base_ppm).speed(0.1)).changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Temperature coefficient (PPM/°C)");
+                    changed |= ui.add(egui::DragValue::new(&mut self.rtc_calibration.temperature_coefficient_ppm_per_c).speed(0.01)).changed();
+                });
+                ui.horizontal(|ui| {
+                    ui.label("Reference temperature (°C)");
+                    changed |= ui.add(egui::DragValue::new(&mut self.rtc_calibration.reference_temperature_c).speed(0.1)).changed();
+                });
+                if changed {
+                    self.rtc_calibration.clamp_values();
+                    self.save_settings_internal();
+                }
+                if self.rtc_calibration.enabled() {
+                    ui.monospace(format!("At 25 °C: {:+.2} PPM", sensor_watch_core::rtc_calibration::RtcCalibration::new(self.rtc_calibration.base_ppm, self.rtc_calibration.temperature_coefficient_ppm_per_c, self.rtc_calibration.reference_temperature_c).correction_ppm(25.0)));
+                }
             });
     }
 
@@ -3212,8 +3257,8 @@ impl StudioApp {
             });
     }
 
-    /// The offline Diagnostics panel. Every check below uses the existing
-    /// simulated shell/watch paths; no physical UART is opened by this panel.
+    /// Diagnostics deliberately remain simulated; physical diagnostics require
+    /// an explicit UART command and are never inferred from this report.
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
         ui.heading("Diagnostics");
         ui.label("Offline checks for the watch shell and simulator. Physical hardware is never implied by simulated results.");
@@ -3222,8 +3267,17 @@ impl StudioApp {
         }
         ui.horizontal(|ui| {
             ui.label("Connection mode:");
-            ui.colored_label(egui::Color32::from_rgb(120, 210, 150), "Simulated");
-            ui.weak("UART jig not connected");
+            let mode_color = if self.uart.is_some() {
+                egui::Color32::from_rgb(120, 210, 150)
+            } else {
+                egui::Color32::from_rgb(220, 180, 80)
+            };
+            ui.colored_label(mode_color, self.transport_mode.label());
+            ui.weak(if self.uart.is_some() {
+                "UART connected (diagnostics remain simulated)"
+            } else {
+                "UART jig not connected"
+            });
             let run = ui.add_enabled(
                 !self.diagnostics.running,
                 egui::Button::new("Run full diagnostic"),
@@ -3256,7 +3310,7 @@ impl StudioApp {
         });
         ui.colored_label(
             egui::Color32::from_rgb(220, 180, 80),
-            "SIMULATED ONLY — UART actions are gated until a UART jig is connected. No physical watch was queried.",
+            "SIMULATED CHECKS ONLY — this report never queries physical hardware. Use Shell Access for explicit UART commands.",
         );
         ui.separator();
 
@@ -3458,8 +3512,81 @@ impl StudioApp {
                 "not built"
             }
         ));
+
+        let optical = self.simulated_command("optical");
+        self.diagnostics.record(
+            10,
+            diagnostics::Status::Blocked,
+            format!("{optical}; protocol preview is software-only"),
+        );
+        self.diagnostics.log(format!("optical -> {optical}"));
+        self.diagnostics.log(optical::self_test());
         self.diagnostics.finish("Simulated");
         self.status = "Simulated diagnostics complete; no UART hardware queried".to_string();
+    }
+
+    fn refresh_serial_ports(&mut self) {
+        match transport::discover_ports() {
+            Ok(ports) => {
+                self.serial_ports = ports;
+                self.status = format!("Discovered {} serial port(s)", self.serial_ports.len());
+            }
+            Err(error) => self.status = error.to_string(),
+        }
+    }
+
+    fn connect_uart(&mut self) {
+        let Some(name) = self.selected_serial_port.clone() else {
+            self.status = transport::TransportError::NoPortSelected.to_string();
+            return;
+        };
+        match transport::SerialTransport::connect(&name, transport::DEFAULT_TIMEOUT) {
+            Ok(uart) => {
+                self.uart = Some(uart);
+                self.transport_mode = transport::TransportMode::UartJig;
+                self.shell_log
+                    .log(format!("UART connected: {name} @ 9600 8-N-1"));
+                self.status = format!("Connected to UART jig on {name}");
+            }
+            Err(error) => {
+                self.uart = None;
+                self.transport_mode = transport::TransportMode::Simulated;
+                self.status = error.to_string();
+                self.shell_log.log(format!("UART connect failed: {error}"));
+            }
+        }
+    }
+
+    fn disconnect_uart(&mut self) {
+        if let Some(uart) = self.uart.take() {
+            self.shell_log
+                .log(format!("UART disconnected: {}", uart.port_name()));
+        }
+        self.transport_mode = transport::TransportMode::Simulated;
+        self.status = "Using Simulated shell mode".to_string();
+    }
+
+    fn send_shell_command(&mut self, cmd: &str) {
+        if self.transport_mode == transport::TransportMode::UartJig {
+            let Some(uart) = self.uart.as_mut() else {
+                self.transport_mode = transport::TransportMode::Simulated;
+                self.shell_log
+                    .log("UART unavailable; returned to Simulated mode");
+                self.run_shell_command(cmd);
+                return;
+            };
+            self.shell_log
+                .log(format!("[UART {}] > {cmd}", uart.port_name()));
+            match uart.command(cmd) {
+                Ok(reply) => self.shell_log.log(format!("< {reply}")),
+                Err(error) => {
+                    self.shell_log.log(format!("UART error: {error}"));
+                    self.status = error.to_string();
+                }
+            }
+        } else {
+            self.run_shell_command(cmd);
+        }
     }
 
     /// The Shell Access panel: a dedicated terminal for talking to the watch.
@@ -3477,14 +3604,67 @@ impl StudioApp {
         ui.add_space(4.0);
         ui.colored_label(
             egui::Color32::from_rgb(220, 180, 80),
-            "Note: this shell is simulated against the app. Over USB the watch appears \n\
-             as a file drive (bootloader), so these round-trips are for practicing \n\
-             commands - not talking to the physical watch. Real serial requires the \n\
-             debug UART header.",
+            if self.uart.is_some() {
+                "UART Jig mode: commands target the selected debug UART. The USB port remains UF2-only."
+            } else {
+                "Simulated mode: commands target the in-app watch model. Real serial requires the debug UART header; USB CDC is not used."
+            },
         );
         ui.separator();
+        ui.horizontal(|ui| {
+            ui.label("Transport:");
+            if ui
+                .selectable_label(
+                    self.transport_mode == transport::TransportMode::Simulated,
+                    "Simulated",
+                )
+                .clicked()
+            {
+                self.disconnect_uart();
+            }
+            if ui
+                .selectable_label(
+                    self.transport_mode == transport::TransportMode::UartJig,
+                    "UART Jig",
+                )
+                .clicked()
+            {
+                self.transport_mode = transport::TransportMode::UartJig;
+            }
+            ui.separator();
+            ui.label("Port:");
+            let selected = self.selected_serial_port.clone().unwrap_or_default();
+            let selected_text = if selected.is_empty() {
+                "Select port".to_string()
+            } else {
+                selected.clone()
+            };
+            egui::ComboBox::from_id_source("uart_port")
+                .selected_text(selected_text)
+                .show_ui(ui, |ui| {
+                    for port in &self.serial_ports {
+                        ui.selectable_value(
+                            &mut self.selected_serial_port,
+                            Some(port.name.clone()),
+                            format!("{} — {}", port.name, port.description),
+                        );
+                    }
+                });
+            if ui.button("Refresh").clicked() {
+                self.refresh_serial_ports();
+            }
+            if self.uart.is_some() {
+                if ui.button("Disconnect").clicked() {
+                    self.disconnect_uart();
+                }
+            } else if ui.button("Connect").clicked() {
+                self.connect_uart();
+            }
+        });
+        ui.weak("UART jig: SERCOM3, 9600 8-N-1, A4 TX / A2 RX. USB is UF2 mass storage only; USB CDC is not used.");
+        ui.separator();
 
-        // The two halves split vertically (top/bottom).
+        // The two halves split vertically.
         egui::TopBottomPanel::top("shell_cmd")
             .resizable(true)
             .default_height(ui.available_height() * 0.45)
@@ -3515,7 +3695,7 @@ impl StudioApp {
                     if ui.button("Send").clicked() || submitted {
                         let cmd = self.shell_input.trim().to_string();
                         self.shell_input.clear();
-                        self.run_shell_command(&cmd);
+                        self.send_shell_command(&cmd);
                     }
                 });
                 ui.add_space(4.0);
@@ -3592,7 +3772,13 @@ impl StudioApp {
             "help" => {
                 self.shell_hw_log
                     .log("shell dispatcher: match(\"help\")".to_string());
-                "CMDS: time, settime YYMMDDHHMMSS, drift N".to_string()
+                "CMDS: time, settime YYMMDDHHMMSS, drift N, optical".to_string()
+            }
+            "optical" => {
+                self.shell_hw_log
+                    .log("optical receiver: disabled; external accessory ADC required".to_string());
+                "OPTICAL disabled: SensorUnavailable (LIGHT is a button; external ADC required)"
+                    .to_string()
             }
             "time" => {
                 let (y, mo, d, h, mi, s, _) = self.watch.get_time();
@@ -5661,6 +5847,7 @@ impl StudioApp {
             self.output_dir.clone(),
             self.first_run,
             self.drift_session.ppm,
+            &self.rtc_calibration,
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
@@ -5717,6 +5904,7 @@ impl StudioApp {
             self.output_dir.clone(),
             self.first_run,
             self.drift_session.ppm,
+            &self.rtc_calibration,
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
@@ -5764,6 +5952,7 @@ impl StudioApp {
             self.output_dir.clone(),
             self.first_run,
             self.drift_session.ppm,
+            &self.rtc_calibration,
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
@@ -5794,6 +5983,7 @@ impl StudioApp {
             self.output_dir.clone(),
             self.first_run,
             self.drift_session.ppm,
+            &self.rtc_calibration,
             self.line_limit,
             &self.component_profiles,
             self.component_profile,
@@ -5870,6 +6060,7 @@ impl StudioApp {
             components::selected_config(&self.component_profiles, self.component_profile);
         self.first_run = s.first_run;
         self.drift_session.ppm = s.drift_ppm;
+        self.rtc_calibration = s.rtc_calibration;
         self.output_dir = if s.output_dir.is_empty() {
             settings::default_output_dir()
         } else {
@@ -5932,6 +6123,37 @@ impl StudioApp {
                 return;
             }
         };
+        if let Err(error) = sensor_watch_core::uf2::validate(&data) {
+            self.status = format!("Refusing to copy invalid UF2: {error}");
+            self.log_error(&format!("Refusing to copy invalid UF2: {error}"));
+            self.flash_log
+                .log(format!("UF2 validation failed before copy: {error}"));
+            return;
+        }
+        let manifest = uf2.with_extension("uf2.json");
+        if !manifest.exists() {
+            self.status =
+                "Refusing to copy: artifact manifest is missing (offline verification unavailable)"
+                    .to_string();
+            self.log_error("Refusing to copy: artifact manifest is missing");
+            self.flash_log.log(
+                "UF2 copy blocked: artifact manifest missing; checksum status offline/unverified",
+            );
+            return;
+        }
+        if let Err(error) = verify_artifact_manifest(uf2, &manifest) {
+            self.status =
+                format!("Refusing to copy: offline checksum verification failed ({error})");
+            self.log_error(&format!("Offline checksum verification failed: {error}"));
+            self.flash_log.log(format!(
+                "UF2 copy blocked: offline checksum verification failed: {error}"
+            ));
+            return;
+        }
+        self.flash_log.log(format!(
+            "UF2 validated offline; checksum verified from {}",
+            manifest.display()
+        ));
         for drive in 'A'..='Z' {
             let root = format!("{drive}:\\");
             if let Ok(entries) = std::fs::read_dir(&root) {
@@ -6350,6 +6572,56 @@ fn days_in_month(year: i32, month: u32) -> u32 {
         2 => 28,
         _ => 0,
     }
+}
+
+fn verify_artifact_manifest(
+    artifact: &std::path::Path,
+    manifest_path: &std::path::Path,
+) -> Result<(), String> {
+    let bytes = std::fs::read(artifact).map_err(|e| e.to_string())?;
+    let text = std::fs::read_to_string(manifest_path).map_err(|e| e.to_string())?;
+    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
+    let expected = value
+        .get("sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest has no SHA-256".to_string())?;
+    let parsed = sensor_watch_core::uf2::validate(&bytes)
+        .map_err(|error| format!("UF2 validation failed: {error}"))?;
+    let expected_crc = value
+        .get("crc32_ieee")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest has no CRC-32".to_string())?;
+    let actual_crc = format!("0x{:08X}", sensor_watch_core::uf2::crc32(&parsed.image));
+    if expected_crc != actual_crc {
+        return Err(format!("payload CRC-32 mismatch (expected {expected_crc}, got {actual_crc})"));
+    }
+    let actual = Sha256::digest(&bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    if expected != actual {
+        return Err(format!(
+            "artifact SHA-256 mismatch (expected {expected}, got {actual})"
+        ));
+    }
+    let signature = value
+        .get("signature")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "manifest has no signature".to_string())?
+        .to_string();
+    let object = value
+        .as_object_mut()
+        .ok_or_else(|| "manifest is not an object".to_string())?;
+    object.remove("signature");
+    let canonical = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
+    let digest = Sha256::digest(canonical)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<String>();
+    if signature != format!("sha256:{digest}") {
+        return Err("manifest signature mismatch".to_string());
+    }
+    Ok(())
 }
 
 fn is_valid_sha256(value: &str) -> bool {

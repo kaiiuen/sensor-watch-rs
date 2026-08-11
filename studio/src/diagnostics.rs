@@ -51,6 +51,7 @@ impl DiagnosticsState {
             "LCD output",
             "Watchdog / fault status",
             "UF2 / board info",
+            "Optical protocol (software only)",
         ];
         Self {
             rows: names
