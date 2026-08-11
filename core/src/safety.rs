@@ -37,8 +37,10 @@ pub fn valid_pmux(function: u8) -> bool {
     function <= 7
 }
 
+/// Returns whether an address is usable for a normal 7-bit I2C target.
+/// Reserved addresses outside 0x08..=0x77 are rejected.
 pub fn valid_i2c_address(address: i16) -> bool {
-    (0..=0x7f).contains(&address)
+    (0x08..=0x77).contains(&address)
 }
 
 pub fn is_leap_year(year: u16) -> bool {
@@ -74,8 +76,12 @@ mod tests {
         assert!(!valid_pin(2, 0));
         assert!(valid_pmux(7));
         assert!(!valid_pmux(8));
-        assert!(valid_i2c_address(0x7f));
-        assert!(!valid_i2c_address(0x80));
+        assert!(!valid_i2c_address(0x00));
+        assert!(!valid_i2c_address(0x07));
+        assert!(valid_i2c_address(0x08));
+        assert!(valid_i2c_address(0x77));
+        assert!(!valid_i2c_address(0x78));
+        assert!(!valid_i2c_address(0x7f));
     }
 
     #[test]

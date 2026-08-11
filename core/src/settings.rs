@@ -10,6 +10,19 @@ pub struct Settings {
 }
 
 impl Settings {
+    /// The canonical little-endian representation used by storage and transfer.
+    pub fn encode(self) -> [u8; 4] {
+        self.reg.to_le_bytes()
+    }
+
+    /// Decodes exactly one canonical settings register.
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        let bytes: [u8; 4] = bytes.try_into().ok()?;
+        Some(Self {
+            reg: u32::from_le_bytes(bytes),
+        })
+    }
+
     /// The inactivity interval for asking the active face to resign.
     pub fn to_interval(self) -> u8 {
         ((self.reg >> 1) & 0x3) as u8
@@ -156,5 +169,14 @@ mod tests {
         // Setting red must not affect green.
         assert_eq!(s.led_red_color(), 0xF);
         assert_eq!(s.led_green_color(), 0x0);
+    }
+
+    #[test]
+    fn serialization_is_exact_and_endian_stable() {
+        let settings = Settings { reg: 0xA1B2_C3D4 };
+        assert_eq!(settings.encode(), [0xD4, 0xC3, 0xB2, 0xA1]);
+        assert_eq!(Settings::decode(&settings.encode()), Some(settings));
+        assert_eq!(Settings::decode(&[0; 3]), None);
+        assert_eq!(Settings::decode(&[0; 5]), None);
     }
 }

@@ -90,6 +90,7 @@ impl RtcCalibration {
             || bytes[0..2] != MAGIC
             || bytes[2] != CALIBRATION_VERSION
             || checksum(&bytes[..9]) != u16::from_le_bytes([bytes[9], bytes[10]])
+            || bytes[11] != 0
         {
             return None;
         }
@@ -172,13 +173,16 @@ mod tests {
         assert_eq!(decoded.reference_temperature_c, c.reference_temperature_c);
     }
     #[test]
-    fn rejects_corruption_and_wrong_version() {
+    fn rejects_corruption_wrong_version_and_reserved_bytes() {
         let c = RtcCalibration::new(1.0, 2.0, 25.0);
         let mut bytes = c.encode();
         bytes[4] ^= 1;
         assert!(RtcCalibration::decode(&bytes).is_none());
         bytes = c.encode();
         bytes[2] = 2;
+        assert!(RtcCalibration::decode(&bytes).is_none());
+        bytes = c.encode();
+        bytes[11] = 1;
         assert!(RtcCalibration::decode(&bytes).is_none());
     }
     #[test]

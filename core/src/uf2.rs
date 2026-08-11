@@ -243,6 +243,19 @@ mod tests {
     }
 
     #[test]
+    fn validates_exact_application_boundary() {
+        let image = alloc::vec![0xA5; MAX_APPLICATION_BYTES];
+        let uf2 = convert_to_uf2(&image);
+        assert_eq!(
+            uf2.len(),
+            (MAX_APPLICATION_BYTES / BLOCK_SIZE) * TOTAL_BLOCK_SIZE
+        );
+        let parsed = validate(&uf2).unwrap();
+        assert_eq!(parsed.image, image);
+        assert!(convert_to_uf2(&alloc::vec![0; MAX_APPLICATION_BYTES + 1]).is_empty());
+    }
+
+    #[test]
     fn crc32_matches_ieee_vector() {
         assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
     }

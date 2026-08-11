@@ -14,12 +14,12 @@
 /// Wire frame size, including the CRC.
 pub const FRAME_SIZE: usize = 256;
 /// Maximum bytes carried by one frame.
-pub const MAX_PAYLOAD: usize = 230;
+pub const MAX_PAYLOAD: usize = 228;
 /// Maximum complete object accepted by the receiver.
 pub const MAX_OBJECT_SIZE: u32 = 4096;
 const MAGIC: [u8; 2] = *b"SW";
 const VERSION: u8 = 1;
-const HEADER_SIZE: usize = 24;
+const HEADER_SIZE: usize = 26;
 const CRC_SIZE: usize = 2;
 
 /// Explicitly allowlisted non-secret objects.
@@ -98,7 +98,13 @@ impl Frame {
         payload: &[u8],
         auth_tag: [u8; 8],
     ) -> Option<Self> {
-        if payload.len() > MAX_PAYLOAD || total_len > object.max_size() {
+        if payload.len() > MAX_PAYLOAD
+            || total_len > object.max_size()
+            || offset > total_len
+            || offset
+                .checked_add(payload.len() as u32)
+                .is_none_or(|end| end > total_len)
+        {
             return None;
         }
         let mut data = [0; MAX_PAYLOAD];
@@ -127,11 +133,7 @@ impl Frame {
         out[8..12].copy_from_slice(&self.offset.to_le_bytes());
         out[12..16].copy_from_slice(&self.total_len.to_le_bytes());
         out[16..18].copy_from_slice(&self.payload_len.to_le_bytes());
-        out[18..26.min(HEADER_SIZE)].copy_from_slice(&self.auth_tag[..8.min(HEADER_SIZE - 18)]);
-        // HEADER_SIZE is 24: the tag occupies bytes 18..24.
-        out[18..24].copy_from_slice(&self.auth_tag[..6]);
-        // The remaining two tag bytes are placed immediately before payload.
-        out[24..26].copy_from_slice(&self.auth_tag[6..]);
+        out[18..HEADER_SIZE].copy_from_slice(&self.auth_tag);
         out[26..26 + self.payload_len as usize]
             .copy_from_slice(&self.payload[..self.payload_len as usize]);
         let crc = crc16(&out[..FRAME_SIZE - CRC_SIZE]);
@@ -265,6 +267,7 @@ impl<S, A> Receiver<S, A> {
                 if frame.sequence != self.next_sequence
                     || frame.offset != self.next_offset
                     || frame.total_len == 0
+                    || frame.payload_len == 0
                 {
                     return Err(ReceiveError::Sequence);
                 }
@@ -290,16 +293,20 @@ impl<S, A> Receiver<S, A> {
                     && frame.offset == self.total_len
                     && frame.payload_len == 0 =>
             {
-                if self.object.is_none() {
+                if self.object != Some(frame.object) {
                     return Err(ReceiveError::State);
                 }
                 self.store.commit().map_err(ReceiveError::Store)?;
                 self.object = None;
+                self.total_len = 0;
+                self.next_offset = 0;
                 Ok(())
             }
             Command::Abort => {
                 self.store.abort();
                 self.object = None;
+                self.total_len = 0;
+                self.next_offset = 0;
                 Err(ReceiveError::State)
             }
             _ => Err(ReceiveError::State),
@@ -374,6 +381,34 @@ mod tests {
         corrupt[30] ^= 1;
         assert_eq!(Frame::decode(&corrupt), Err(DecodeError::Crc));
     }
+    #[test]
+    fn rejects_payload_outside_declared_object() {
+        assert!(
+            Frame::new(
+                Command::WriteData,
+                ObjectId::Settings,
+                0,
+                2,
+                3,
+                b"ab",
+                [0; 8],
+            )
+            .is_none()
+        );
+        assert!(
+            Frame::new(
+                Command::WriteData,
+                ObjectId::Settings,
+                0,
+                u32::MAX,
+                u32::MAX,
+                b"x",
+                [0; 8],
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn receiver_commits_only_after_complete_ordered_transfer() {
         let mut r = Receiver::new(Store::default(), Auth);

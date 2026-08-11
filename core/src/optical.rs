@@ -237,7 +237,12 @@ impl Decoder {
             return None;
         }
         if self.len == 1 && byte != PREAMBLE[1] {
-            self.len = 0;
+            // Preserve an overlapping first preamble byte so A5 A5 5A
+            // resynchronizes to the second A5 instead of dropping the frame.
+            self.len = usize::from(byte == PREAMBLE[0]);
+            if self.len == 1 {
+                self.buffer[0] = byte;
+            }
             return None;
         }
         if self.len >= MAX_FRAME_LEN {
@@ -324,6 +329,19 @@ mod tests {
         assert_eq!(frame.command, CommandType::Status);
         assert_eq!(frame.sequence, 7);
         assert_eq!(frame.payload(), b"TIME");
+    }
+
+    #[test]
+    fn overlapping_preamble_resynchronizes() {
+        let (bytes, len) = encoded(4);
+        let mut decoder = Decoder::new();
+        decoder.push(PREAMBLE[0], 0, None);
+        decoder.push(PREAMBLE[0], 0, None);
+        let mut result = None;
+        for byte in bytes[1..len].iter().copied() {
+            result = decoder.push(byte, 1, None);
+        }
+        assert_eq!(result.unwrap().unwrap().sequence, 4);
     }
 
     #[test]
