@@ -52,6 +52,8 @@ struct StudioApp {
     face_list: Vec<faces::FaceInfo>,
     /// Whether a build is currently running.
     building: bool,
+    /// Whether the window is closing; no new work is accepted after this point.
+    shutting_down: bool,
     /// The handle to the background build thread.
     pending_build: Option<std::thread::JoinHandle<build::BuildResult>>,
     /// The last build result message.
@@ -173,6 +175,9 @@ struct StudioApp {
     real_face: Option<real_face::RealFace>,
     /// Whether the last rendered frame used the real-face seam (vs face_sim).
     last_render_used_real: bool,
+    /// The real face and clock mode that were most recently activated.
+    active_real_face_name: Option<String>,
+    active_real_mode_24: Option<bool>,
     /// Accumulator for advancing the face state once per second.
     face_tick_accum: f32,
     /// The drift calibration session.
@@ -438,6 +443,7 @@ impl Default for StudioApp {
             status: String::new(),
             face_list: Vec::new(),
             building: false,
+            shutting_down: false,
             pending_build: None,
             build_message: String::new(),
             last_uf2: None,
@@ -521,6 +527,8 @@ impl Default for StudioApp {
             face_engine: face_sim::FaceEngine::new("SIMPLE_CLOCK"),
             real_face: None,
             last_render_used_real: false,
+            active_real_face_name: None,
+            active_real_mode_24: None,
             face_tick_accum: 0.0,
             drift_session: drift::DriftSession::new(),
             fuzz_iterations: 5000,
@@ -629,13 +637,17 @@ impl eframe::App for StudioApp {
             if ctx.input(|i| i.key_pressed(egui::Key::F5)) {
                 self.current_panel = Panel::BuildFlash;
             }
-            if ctx.input(|i| i.key_pressed(egui::Key::F6)) && !self.building {
+            if ctx.input(|i| i.key_pressed(egui::Key::F6))
+                && !self.shutting_down
+                && !self.building
+                && self.pending_build.is_none()
+            {
                 self.snapshot_before("Before build");
                 self.building = true;
+                self.last_uf2 = None;
                 self.build_message = tr(self.language, Key::Building).to_string();
                 self.log.log("Starting firmware build");
-                self.terminal_history
-                    .push("Output write: starting firmware build".to_string());
+                self.push_terminal("Output write: starting firmware build");
                 let out = std::path::PathBuf::from(self.output_dir.clone());
                 let handle = std::thread::spawn(move || build::build_firmware(&out));
                 self.pending_build = Some(handle);
@@ -649,6 +661,11 @@ impl eframe::App for StudioApp {
         // presets, watch settings, panel sizes, etc. survive the session.
         if ctx.input(|i| i.viewport().close_requested()) && !self.saved_on_exit {
             self.saved_on_exit = true;
+            self.shutting_down = true;
+            if self.building || self.pending_build.is_some() {
+                self.log
+                    .log("Warning: closing with an active build; build thread will not be joined");
+            }
             self.save_settings_internal();
         }
 
@@ -685,17 +702,18 @@ impl eframe::App for StudioApp {
                                 self.log.log(format!("UF2 written to {}", p.display()));
                                 self.build_log
                                     .log(format!("UF2 written to {}", p.display()));
-                                self.terminal_history.push(format!(
+                                self.push_terminal(format!(
                                     "Output write succeeded: UF2 written to {}",
                                     p.display()
                                 ));
                             } else {
-                                self.terminal_history
-                                    .push("Output write finished: no UF2 produced".to_string());
+                                self.push_terminal("Output write finished: no UF2 produced");
                             }
                         } else {
-                            self.terminal_history
-                                .push(format!("Build/Output write failed: {}", result.message));
+                            self.push_terminal(format!(
+                                "Build/Output write failed: {}",
+                                result.message
+                            ));
                         }
                     }
                     Err(_) => {
@@ -703,8 +721,7 @@ impl eframe::App for StudioApp {
                         self.build_message =
                             tr(self.language, Key::BuildThreadPanicked).to_string();
                         self.log.log("Build thread panicked");
-                        self.terminal_history
-                            .push("Build/Output write failed: thread panicked".to_string());
+                        self.push_terminal("Build/Output write failed: thread panicked");
                     }
                 }
             } else {
@@ -749,11 +766,17 @@ impl eframe::App for StudioApp {
                 self.checksum_busy = false;
                 match handle.join() {
                     Ok(Ok(sha)) => {
-                        let short = sha[..sha.len().min(12)].to_string();
+                        if !is_valid_sha256(&sha) {
+                            self.status = "Checksum unavailable: invalid format".to_string();
+                            self.log_error("Checksum unavailable: invalid format");
+                            self.push_terminal("Integrity check failed: invalid checksum format");
+                            return;
+                        }
+                        let short: String = sha.chars().take(12).collect();
                         self.release_sha256 = Some(sha);
                         self.status = "Release checksum fetched".to_string();
                         self.log.log("Integrity check: release checksum fetched");
-                        self.terminal_history.push(format!(
+                        self.push_terminal(format!(
                             "Integrity check: release checksum fetched ({})",
                             short
                         ));
@@ -762,14 +785,12 @@ impl eframe::App for StudioApp {
                         self.status = format!("Checksum unavailable: {e}");
                         self.log_error(&format!("Checksum unavailable: {e}"));
                         self.log.log(format!("Integrity check failed: {e}"));
-                        self.terminal_history
-                            .push(format!("Integrity check failed: {e}"));
+                        self.push_terminal(format!("Integrity check failed: {e}"));
                     }
                     Err(_) => {
                         self.status = "Checksum thread panicked".to_string();
                         self.log.log("Integrity check thread panicked");
-                        self.terminal_history
-                            .push("Integrity check thread panicked".to_string());
+                        self.push_terminal("Integrity check thread panicked");
                     }
                 }
             } else {
@@ -1602,8 +1623,7 @@ impl StudioApp {
         }
         self.checksum_busy = true;
         self.log.log("Integrity check: verifying against release");
-        self.terminal_history
-            .push("Integrity check: verifying against release".to_string());
+        self.push_terminal("Integrity check: verifying against release");
         let handle = std::thread::spawn(fetch_release_sha256);
         self.pending_checksum = Some(handle);
     }
@@ -2799,17 +2819,19 @@ impl StudioApp {
                 if self.building {
                     ui.spinner();
                     ui.label(tr(self.language, Key::Building));
-                } else if ui
-                    .button(tr(self.language, Key::BuildUf2))
-                    .on_hover_text("Compile the firmware into a .uf2 file for the watch")
-                    .clicked()
+                } else if !self.shutting_down
+                    && self.pending_build.is_none()
+                    && ui
+                        .button(tr(self.language, Key::BuildUf2))
+                        .on_hover_text("Compile the firmware into a .uf2 file for the watch")
+                        .clicked()
                 {
                     self.snapshot_before("Before build");
                     self.building = true;
+                    self.last_uf2 = None;
                     self.build_message = tr(self.language, Key::Building).to_string();
                     self.log.log("Starting firmware build");
-                    self.terminal_history
-                        .push("Output write: starting firmware build".to_string());
+                    self.push_terminal("Output write: starting firmware build");
                     let out = std::path::PathBuf::from(self.output_dir.clone());
                     let handle = std::thread::spawn(move || build::build_firmware(&out));
                     self.pending_build = Some(handle);
@@ -2842,14 +2864,17 @@ impl StudioApp {
                         );
                     }
                 }
-                if let Some(uf2) = &self.last_uf2 {
+                if self.building {
+                    ui.weak("Build in progress; flashing is disabled until it finishes.");
+                } else if let Some(uf2) = &self.last_uf2 {
                     let uf2 = uf2.clone();
-                    if ui
-                        .button(tr(self.language, Key::CopyToWatch))
-                        .on_hover_text(
-                            "Write the firmware to the watch's USB drive (bootloader mode)",
-                        )
-                        .clicked()
+                    if !self.shutting_down
+                        && ui
+                            .button(tr(self.language, Key::CopyToWatch))
+                            .on_hover_text(
+                                "Write the firmware to the watch's USB drive (bootloader mode)",
+                            )
+                            .clicked()
                     {
                         self.snapshot_before("Before flash");
                         self.copy_to_watch(&uf2);
@@ -4398,16 +4423,24 @@ impl StudioApp {
                 .unwrap_or(&face_name)
                 != face_name
             {
+                // Drop the old seam guard before constructing the replacement;
+                // `RealFace::new` must acquire the same global lock.
+                self.real_face.take();
                 self.real_face = real_face::RealFace::new(&face_name);
+                self.active_real_face_name = None;
+                self.active_real_mode_24 = None;
             }
         }
         // Advance the face state by one second per real second.
         self.face_tick_accum += self.sim_dt;
-        if self.face_tick_accum >= 1.0 {
+        while self.face_tick_accum >= 1.0 {
             self.face_tick_accum -= 1.0;
             self.face_engine.tick();
-            // Log the tick into the shell sim, debug output, and terminal so
-            // the three live views stay in sync with the simulated watch.
+            if let Some(real) = self.real_face.as_mut() {
+                real.tick();
+            }
+            // Log the tick into the shell sim, debug output, and terminal so the
+            // three live views stay in sync with the simulated watch.
             let (_, _, _, h, m, s, _) = self.watch.get_time();
             let line = format!("tick: {h:02}:{m:02}:{s:02}");
             self.shell_log.log(line.clone());
@@ -4435,10 +4468,12 @@ impl StudioApp {
         // a face has not yet been migrated into the seam, fall back to the
         // hand-written engine (and log the fallback).
         let mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
-        let used_real = if let Some(real) = self.real_face.as_mut() {
-            // `t_year` is signed from the watch; clamp to a sane wall-clock year
-            // for the firmware's 2020-2083 range before handing it to the seam.
-            real.set_time(
+        let active_real_face_name = self.active_real_face_name.clone();
+        let active_real_mode_24 = self.active_real_mode_24;
+        // `t_year` is signed from the watch; clamp to a sane wall-clock year
+        // for the firmware's 2020-2083 range before handing it to the seam.
+        let real_result = self.real_face.as_mut().map(|real| {
+            let valid_time = real.set_time(
                 t_year.clamp(2020, 2083) as u32,
                 t_month,
                 t_day,
@@ -4446,13 +4481,28 @@ impl StudioApp {
                 t_minute,
                 t_second,
             );
-            real.activate(mode_24);
-            true
-        } else {
-            false
-        };
+            let face_name = real.face_name().to_string();
+            let face_changed = active_real_face_name.as_deref() != Some(face_name.as_str());
+            let mode_changed = active_real_mode_24 != Some(mode_24);
+            if valid_time && (face_changed || mode_changed) {
+                real.activate(mode_24);
+            }
+            (valid_time, face_name, real.snapshot())
+        });
+        let (used_real, real_snapshot) =
+            if let Some((valid_time, face_name, snapshot)) = real_result {
+                if valid_time {
+                    self.active_real_face_name = Some(face_name);
+                    self.active_real_mode_24 = Some(mode_24);
+                }
+                (valid_time, Some(snapshot))
+            } else {
+                self.active_real_face_name = None;
+                self.active_real_mode_24 = None;
+                (false, None)
+            };
         let fd = if used_real {
-            let snap = self.real_face.as_ref().unwrap().snapshot();
+            let snap = real_snapshot.expect("real face snapshot when real rendering is active");
             face_sim::FaceDisplay {
                 chars: snap.chars,
                 colon: snap.colon,
@@ -4740,46 +4790,55 @@ impl StudioApp {
     }
 
     fn run_terminal_command(&mut self, cmd: &str) {
-        self.terminal_history.push(format!("> {cmd}"));
+        if self.shutting_down {
+            return;
+        }
+        self.push_terminal(format!("> {cmd}"));
         let parts: Vec<&str> = cmd.split_whitespace().collect();
         if parts.is_empty() {
             return;
         }
         match parts[0].to_lowercase().as_str() {
             "help" => {
-                self.terminal_history.push(
+                self.push_terminal(
                     "Commands: help, status, faces, board, build, flash, fuzz, time,\
                      settime YYMMDDHHMMSS, clear, modules, errors, bugreport, sim, theme, lang"
                         .to_string(),
                 );
             }
             "status" => {
-                self.terminal_history.push(format!(
+                self.push_terminal(format!(
                     "Panel: {:?}, Board: {:?}",
                     self.current_panel, self.board
                 ));
             }
             "faces" => {
                 let faces = self.presets.active_faces();
-                self.terminal_history
-                    .push(format!("{} faces in active preset", faces.len()));
+                self.push_terminal(format!("{} faces in active preset", faces.len()));
                 for f in faces {
-                    self.terminal_history.push(format!("  {f}"));
+                    self.push_terminal(format!("  {f}"));
                 }
             }
             "build" => {
-                self.terminal_history.push("Starting build...".to_string());
-                self.building = true;
-                self.build_message = "Building...".to_string();
-                let out = std::path::PathBuf::from(self.output_dir.clone());
-                let handle = std::thread::spawn(move || build::build_firmware(&out));
-                self.pending_build = Some(handle);
+                if self.building || self.pending_build.is_some() {
+                    self.push_terminal("Build already running");
+                } else {
+                    self.push_terminal("Starting build...");
+                    self.building = true;
+                    self.last_uf2 = None;
+                    self.build_message = "Building...".to_string();
+                    let out = std::path::PathBuf::from(self.output_dir.clone());
+                    let handle = std::thread::spawn(move || build::build_firmware(&out));
+                    self.pending_build = Some(handle);
+                }
             }
             "flash" => {
-                if let Some(uf2) = self.last_uf2.clone() {
+                if self.building {
+                    self.push_terminal("Build in progress; flash unavailable");
+                } else if let Some(uf2) = self.last_uf2.clone() {
                     self.copy_to_watch(&uf2);
                 } else {
-                    self.terminal_history.push("No build yet".to_string());
+                    self.push_terminal("No build yet".to_string());
                 }
             }
             "fuzz" => {
@@ -4794,16 +4853,13 @@ impl StudioApp {
                     .map(|d| d.as_nanos() as u64)
                     .unwrap_or(0);
                 match fuzz::fuzz_face(&name, self.fuzz_iterations, seed) {
-                    Ok(n) => self
-                        .terminal_history
-                        .push(format!("Fuzz passed: {n} iterations on {name}")),
-                    Err(e) => self.terminal_history.push(format!("Fuzz failed: {e}")),
+                    Ok(n) => self.push_terminal(format!("Fuzz passed: {n} iterations on {name}")),
+                    Err(e) => self.push_terminal(format!("Fuzz failed: {e}")),
                 }
             }
             "time" => {
                 let (_, _, _, h, m, s, _) = self.watch.get_time();
-                self.terminal_history
-                    .push(format!("Sim time: {h:02}:{m:02}:{s:02}"));
+                self.push_terminal(format!("Sim time: {h:02}:{m:02}:{s:02}"));
             }
             "settime" => {
                 // Drive the simulated watch from the terminal, mirroring the
@@ -4813,13 +4869,11 @@ impl StudioApp {
                 match parse_settime(payload) {
                     Some((year, month, day, hour, minute)) => {
                         self.watch.set_datetime(year, month, day, hour, minute);
-                        self.terminal_history.push(format!(
+                        self.push_terminal(format!(
                             "Sim time set to {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
                         ));
                     }
-                    None => self
-                        .terminal_history
-                        .push("Usage: settime YYMMDDHHMMSS".to_string()),
+                    None => self.push_terminal("Usage: settime YYMMDDHHMMSS"),
                 }
             }
             "board" => {
@@ -4833,44 +4887,55 @@ impl StudioApp {
                     };
                     if let Some(nb) = next {
                         self.board = nb;
-                        self.terminal_history
-                            .push(format!("Board set to {}", nb.label()));
+                        self.push_terminal(format!("Board set to {}", nb.label()));
                     } else {
-                        self.terminal_history
-                            .push("Unknown board (green/red/blue/pro)".to_string());
+                        self.push_terminal("Unknown board (green/red/blue/pro)");
                     }
                 } else {
-                    self.terminal_history
-                        .push(format!("Board: {}", self.board.label()));
+                    self.push_terminal(format!("Board: {}", self.board.label()));
                 }
             }
             "clear" => self.terminal_history.clear(),
             "modules" => {
                 if self.modules.modules.is_empty() {
-                    self.terminal_history
-                        .push("No custom modules registered".to_string());
+                    self.push_terminal("No custom modules registered");
                 }
-                for m in &self.modules.modules {
-                    self.terminal_history.push(format!(
-                        "{} [{}] {}",
-                        if m.enabled { "ON " } else { "OFF" },
-                        m.target,
-                        m.name
-                    ));
+                let module_lines: Vec<String> = self
+                    .modules
+                    .modules
+                    .iter()
+                    .map(|m| {
+                        format!(
+                            "{} [{}] {}",
+                            if m.enabled { "ON " } else { "OFF" },
+                            m.target,
+                            m.name
+                        )
+                    })
+                    .collect();
+                for line in module_lines {
+                    self.push_terminal(line);
                 }
             }
             "errors" => {
                 let n = self.error_log.entries().len();
-                self.terminal_history.push(format!("{n} errors recorded"));
-                for e in self.error_log.entries().iter().rev().take(10) {
-                    self.terminal_history.push(format!("  {}", e.message));
+                self.push_terminal(format!("{n} errors recorded"));
+                let error_lines: Vec<String> = self
+                    .error_log
+                    .entries()
+                    .iter()
+                    .rev()
+                    .take(10)
+                    .map(|e| format!("  {}", e.message))
+                    .collect();
+                for line in error_lines {
+                    self.push_terminal(line);
                 }
             }
             "bugreport" => {
                 let report = self.build_bug_report();
                 let _ = ui_copy_to_clipboard(&report);
-                self.terminal_history
-                    .push("Bug report copied to clipboard".to_string());
+                self.push_terminal("Bug report copied to clipboard");
             }
             "sim" => {
                 if let Some(b) = parts.get(1) {
@@ -4882,13 +4947,12 @@ impl StudioApp {
                     };
                     if let Some(btn) = btn {
                         self.press_sim_button(btn);
-                        self.terminal_history.push(format!("Pressed {:?}", btn));
+                        self.push_terminal(format!("Pressed {:?}", btn));
                     } else {
-                        self.terminal_history
-                            .push("Unknown button (a/b/c)".to_string());
+                        self.push_terminal("Unknown button (a/b/c)");
                     }
                 } else {
-                    self.terminal_history.push("Usage: sim <a|b|c>".to_string());
+                    self.push_terminal("Usage: sim <a|b|c>".to_string());
                 }
             }
             "theme" => {
@@ -4898,14 +4962,12 @@ impl StudioApp {
                         .find(|t2| t2.name().to_lowercase() == t.to_lowercase());
                     if let Some(t2) = next {
                         self.theme = *t2;
-                        self.terminal_history
-                            .push(format!("Theme set to {}", t2.name()));
+                        self.push_terminal(format!("Theme set to {}", t2.name()));
                     } else {
-                        self.terminal_history.push("Unknown theme".to_string());
+                        self.push_terminal("Unknown theme".to_string());
                     }
                 } else {
-                    self.terminal_history
-                        .push(format!("Theme: {}", self.theme.name()));
+                    self.push_terminal(format!("Theme: {}", self.theme.name()));
                 }
             }
             "lang" => {
@@ -4915,28 +4977,17 @@ impl StudioApp {
                         .find(|l2| l2.name().to_lowercase() == l.to_lowercase());
                     if let Some(l2) = next {
                         self.language = *l2;
-                        self.terminal_history
-                            .push(format!("Language set to {}", l2.name()));
+                        self.push_terminal(format!("Language set to {}", l2.name()));
                     } else {
-                        self.terminal_history
-                            .push("Unknown language (English/简体中文/繁體中文)".to_string());
+                        self.push_terminal("Unknown language (English/简体中文/繁體中文)");
                     }
                 } else {
-                    self.terminal_history
-                        .push(format!("Language: {}", self.language.name()));
+                    self.push_terminal(format!("Language: {}", self.language.name()));
                 }
             }
             _ => self
                 .terminal_history
                 .push(format!("Unknown command: {cmd} (try 'help')")),
-        }
-
-        // Bound the terminal history to the configured line limit to avoid
-        // unbounded memory growth.
-        let limit = self.line_limit.max(1);
-        if self.terminal_history.len() > limit {
-            let excess = self.terminal_history.len() - limit;
-            self.terminal_history.drain(..excess);
         }
     }
 
@@ -5436,7 +5487,13 @@ impl StudioApp {
     /// Appends a line to the terminal history, dropping the oldest lines once
     /// it exceeds the configured line limit.
     fn push_terminal(&mut self, line: impl Into<String>) {
-        self.terminal_history.push(line.into());
+        const MAX_ENTRY_CHARS: usize = 4096;
+        let mut line = line.into();
+        if line.chars().count() > MAX_ENTRY_CHARS {
+            line = line.chars().take(MAX_ENTRY_CHARS).collect();
+            line.push_str("…");
+        }
+        self.terminal_history.push(line);
         let limit = self.line_limit.max(1);
         if self.terminal_history.len() > limit {
             let excess = self.terminal_history.len() - limit;
@@ -5523,7 +5580,7 @@ impl StudioApp {
                             "Settings export succeeded: saved to {}",
                             path.display()
                         ));
-                        self.terminal_history.push(format!(
+                        self.push_terminal(format!(
                             "Settings export succeeded: saved to {}",
                             path.display()
                         ));
@@ -6029,7 +6086,7 @@ fn fetch_release_sha256() -> Result<String, String> {
         .map_err(|e| e.to_string())?;
     let body = resp.into_string().map_err(|e| e.to_string())?;
     let sha = body.trim().to_string();
-    if sha.len() == 64 {
+    if is_valid_sha256(&sha) {
         Ok(sha)
     } else {
         Err("Unexpected checksum format".to_string())
@@ -6167,8 +6224,33 @@ fn parse_settime(payload: &str) -> Option<(i32, u32, u32, u32, u32)> {
     let day = part(4..6);
     let hour = part(6..8);
     let minute = part(8..10);
-    if month == 0 || month > 12 || day == 0 || day > 31 || hour > 23 || minute > 59 {
+    let year = 2000 + yy as i32;
+    if month == 0
+        || month > 12
+        || day == 0
+        || day > days_in_month(year, month)
+        || hour > 23
+        || minute > 59
+    {
         return None;
     }
-    Some((2000 + yy as i32, month, day, hour, minute))
+    Some((year, month, day, hour, minute))
+}
+
+fn is_leap_year(year: i32) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn days_in_month(year: i32, month: u32) -> u32 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 0,
+    }
+}
+
+fn is_valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
