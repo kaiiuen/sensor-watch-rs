@@ -2,12 +2,12 @@
 //!
 //! A bounded ring buffer of timestamped log lines. This lets the user see what
 //! the app is doing in the background (builds, flashes, face discovery) and
-//! detect hangs — if the log stops advancing while an operation is in flight,
+//! detect hangs - if the log stops advancing while an operation is in flight,
 //! something is stuck. The log is bounded so it cannot grow without limit.
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// The maximum number of log lines kept.
+/// The default maximum number of log lines kept.
 const MAX_LINES: usize = 500;
 
 /// A single log entry.
@@ -22,13 +22,26 @@ pub struct LogEntry {
 /// The debug log.
 pub struct DebugLog {
     entries: Vec<LogEntry>,
+    /// The maximum number of lines kept; oldest lines are dropped past this.
+    limit: usize,
 }
 
 impl DebugLog {
-    /// Creates an empty log.
+    /// Creates an empty log with the default line limit.
     pub fn new() -> Self {
         DebugLog {
             entries: Vec::with_capacity(MAX_LINES),
+            limit: MAX_LINES,
+        }
+    }
+
+    /// Sets the maximum number of lines kept, dropping oldest lines immediately
+    /// if the log already exceeds the new limit.
+    pub fn set_limit(&mut self, limit: usize) {
+        self.limit = limit.max(1);
+        if self.entries.len() > self.limit {
+            let excess = self.entries.len() - self.limit;
+            self.entries.drain(0..excess);
         }
     }
 
@@ -43,8 +56,8 @@ impl DebugLog {
             message: message.into(),
         });
         // Bound the log.
-        if self.entries.len() > MAX_LINES {
-            let excess = self.entries.len() - MAX_LINES;
+        if self.entries.len() > self.limit {
+            let excess = self.entries.len() - self.limit;
             self.entries.drain(0..excess);
         }
     }

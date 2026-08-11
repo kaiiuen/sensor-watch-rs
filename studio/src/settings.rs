@@ -56,6 +56,10 @@ pub struct AppSettings {
     /// sessions so the user can recall the calibration without re-measuring.
     #[serde(default)]
     pub drift_ppm: f64,
+    /// The maximum number of lines kept in each output/terminal/debug log.
+    /// Oldest lines are dropped past this so the logs never grow without bound.
+    #[serde(default = "default_line_limit")]
+    pub line_limit: usize,
 }
 
 impl AppSettings {
@@ -76,6 +80,7 @@ impl AppSettings {
         output_dir: String,
         first_run: bool,
         drift_ppm: f64,
+        line_limit: usize,
     ) -> Self {
         AppSettings {
             schema_version: 1,
@@ -93,6 +98,7 @@ impl AppSettings {
             output_dir,
             first_run,
             drift_ppm,
+            line_limit,
         }
     }
 
@@ -128,8 +134,14 @@ impl Default for AppSettings {
             output_dir: default_output_dir(),
             first_run: false,
             drift_ppm: 0.0,
+            line_limit: default_line_limit(),
         }
     }
+}
+
+/// The default maximum number of lines kept in each output log.
+pub fn default_line_limit() -> usize {
+    500
 }
 
 /// The default schema version for settings that predate schema tracking.
