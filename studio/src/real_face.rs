@@ -12,9 +12,11 @@
 //! reimplementation (`face_sim` remains the fallback for faces not yet migrated
 //! through the seam).
 //!
-//! Only a single migrated face is wired up for now (`SIMPLE_CLOCK`). New faces
-//! are added by extending [`new_face`] once their host harness lands in the
-//! firmware seam.
+//! The host-migrated faces wired up here are the stock Casio set plus the other
+//! faces whose host harness has landed in the firmware seam: `SIMPLE_CLOCK`,
+//! `ALARM`, `COUNTER`, `WORLD_CLOCK`, `STOPWATCH`, `TIMER`, `COUNTDOWN`, and
+//! `FLASHLIGHT`. New faces are added by extending [`new_face`] once their host
+//! harness lands in the firmware seam.
 //!
 //! # Feature gating
 //!
@@ -29,7 +31,9 @@
 //! "seam unavailable" and falls back.
 
 #[cfg(feature = "real-faces")]
-use sensor_watch::movement::{simple_clock, types};
+use sensor_watch::movement::{
+    alarm, countdown, counter, flashlight, simple_clock, stopwatch, timer, types, world_clock,
+};
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
 #[cfg(feature = "real-faces")]
@@ -60,6 +64,9 @@ pub struct RealFaceSnapshot {
 pub struct RealFace {
     /// The firmware `WatchFace`'s state.
     face: Box<dyn RealFaceTrait>,
+    /// The name of the face this instance runs (used by the app to detect face
+    /// switches).
+    face_name: &'static str,
     /// The mock hardware the face draws onto.
     mock: MockHw,
     /// The settings the face mutates (the firmware's movement settings).
@@ -89,6 +96,78 @@ impl RealFaceTrait for simple_clock::SimpleClockFace {
     }
 }
 
+// The other host-migrated faces wired into [`new_face`] forward the same way.
+// Each is the REAL firmware face; the `WatchFace` impl is the untouched trait.
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for alarm::AlarmFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+}
+
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for counter::CounterFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+}
+
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for world_clock::WorldClockFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+}
+
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for stopwatch::StopwatchFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+}
+
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for timer::TimerFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+}
+
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for countdown::CountdownFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+}
+
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for flashlight::FlashlightFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+}
+
 #[cfg(feature = "real-faces")]
 impl RealFace {
     /// Creates a running real face for `face_name`, if a real face of that name
@@ -103,6 +182,7 @@ impl RealFace {
             mock,
             settings,
             snapshot: RealFaceSnapshot::default(),
+            face_name: new_face_name(face_name),
         })
     }
 
@@ -170,7 +250,7 @@ impl RealFace {
     /// The name of the face this instance runs (used by the app to detect face
     /// switches).
     pub fn face_name(&self) -> &str {
-        "SIMPLE_CLOCK"
+        self.face_name
     }
 
     fn snapshot_from_mock(&mut self) {
@@ -191,13 +271,41 @@ impl RealFace {
 /// migrated through the firmware seam. Matrix the name against the firmware's
 /// upper-cased face-const name so presets ("SIMPLE_CLOCK", "simple_clock", ...)
 /// resolve.
+///
+/// Faces not yet migrated through the seam (or whose real type needs extra setup
+/// beyond a plain constructor) are intentionally absent, so the app falls back to
+/// `face_sim` for them.
 #[cfg(feature = "real-faces")]
 fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
     let upper = face_name.to_ascii_uppercase();
-    if upper == "SIMPLE_CLOCK" {
-        Some(Box::new(simple_clock::SimpleClockFace::new()))
-    } else {
-        None
+    match upper.as_str() {
+        "SIMPLE_CLOCK" => Some(Box::new(simple_clock::SimpleClockFace::new())),
+        "ALARM" => Some(Box::new(alarm::AlarmFace::new_static())),
+        "COUNTER" => Some(Box::new(counter::CounterFace::new_static())),
+        "WORLD_CLOCK" => Some(Box::new(world_clock::WorldClockFace::new_static())),
+        "STOPWATCH" => Some(Box::new(stopwatch::StopwatchFace::new())),
+        "TIMER" => Some(Box::new(timer::TimerFace::new())),
+        "COUNTDOWN" => Some(Box::new(countdown::CountdownFace::new_static())),
+        "FLASHLIGHT" => Some(Box::new(flashlight::FlashlightFace::new_static())),
+        _ => None,
+    }
+}
+
+/// The canonical upper-cased name of the face `face_name` resolves to, mirroring
+/// [`new_face`]. Used to detect face switches in the app.
+#[cfg(feature = "real-faces")]
+fn new_face_name(face_name: &str) -> &'static str {
+    let upper = face_name.to_ascii_uppercase();
+    match upper.as_str() {
+        "SIMPLE_CLOCK" => "SIMPLE_CLOCK",
+        "ALARM" => "ALARM",
+        "COUNTER" => "COUNTER",
+        "WORLD_CLOCK" => "WORLD_CLOCK",
+        "STOPWATCH" => "STOPWATCH",
+        "TIMER" => "TIMER",
+        "COUNTDOWN" => "COUNTDOWN",
+        "FLASHLIGHT" => "FLASHLIGHT",
+        _ => "",
     }
 }
 
@@ -292,8 +400,20 @@ mod tests {
     fn face_available_for_migrated_face() {
         assert!(RealFace::new("SIMPLE_CLOCK").is_some());
         assert!(RealFace::new("simple_clock").is_some());
+        // The stock Casio set + other host-migrated faces resolve through the seam.
+        for name in [
+            "ALARM",
+            "COUNTER",
+            "WORLD_CLOCK",
+            "STOPWATCH",
+            "TIMER",
+            "COUNTDOWN",
+            "FLASHLIGHT",
+        ] {
+            assert!(RealFace::new(name).is_some(), "{name} should be migrated");
+        }
         // Not yet migrated through the seam => falls back in the app.
-        assert!(RealFace::new("ALARM").is_none());
+        assert!(RealFace::new("INVADERS").is_none());
     }
 
     #[test]
@@ -321,6 +441,30 @@ mod tests {
 
     #[test]
     fn unmigrated_face_falls_back() {
-        assert!(render_real_face("ALARM", 2023, 1, 6, 15, 4, 0, 5, true, false, false).is_none());
+        assert!(
+            render_real_face("INVADERS", 2023, 1, 6, 15, 4, 0, 5, true, false, false).is_none()
+        );
+    }
+
+    #[test]
+    fn real_alarm_renders_24h() {
+        let (y, mo, d, h, mi, s) = friday();
+        let snap = render_real_face("ALARM", y, mo, d, h, mi, s, 5, true, false, false)
+            .expect("ALARM is migrated");
+        // The REAL alarm face writes a day-of-week + alarm index + time.
+        let text: String = snap.chars.iter().collect();
+        assert_eq!(text.trim_end(), "AL01 000");
+        assert!(snap.colon);
+    }
+
+    #[test]
+    fn real_counter_renders_zero() {
+        let (y, mo, d, h, mi, s) = friday();
+        let snap = render_real_face("COUNTER", y, mo, d, h, mi, s, 5, true, false, false)
+            .expect("COUNTER is migrated");
+        // The REAL counter face shows "CO 00" and sets the signal indicator.
+        let text: String = snap.chars.iter().collect();
+        assert_eq!(text.trim_end(), "CO    00");
+        assert!(snap.signal);
     }
 }
