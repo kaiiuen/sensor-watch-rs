@@ -24,6 +24,9 @@
 // from the binary, so silence dead-code warnings at the crate level.
 #![allow(dead_code)]
 
+#[cfg(all(feature = "defmt-log", not(target_arch = "arm")))]
+compile_error!("the `defmt-log` feature is only supported for the ARM firmware target");
+
 #[cfg(target_arch = "arm")]
 use cortex_m_rt::entry;
 
@@ -60,6 +63,14 @@ fn main() -> ! {
     // Initialize the hardware in dependency order: interrupt priorities,
     // clocks, RTC, then the watchdog backstop.
     watch::init();
+
+    // USB CDC is an opt-in application mode. The current SAM L22 PAC does not
+    // expose the transfer SRAM required by a real device stack, so fail
+    // explicitly instead of pretending that CDC is available.
+    #[cfg(feature = "usb-cdc")]
+    if let Err(error) = watch::usb::init() {
+        panic!("USB CDC unavailable: {:?}", error);
+    }
 
     // Check the clock failure detector: if the 32 kHz crystal failed, the RTC
     // is running on the internal oscillator (less accurate). Record a fault.

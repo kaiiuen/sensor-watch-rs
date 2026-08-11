@@ -131,6 +131,16 @@ Build (release, optimized):
 cargo build --release --target thumbv6m-none-eabi
 ```
 
+For optional SWD/RTT structured logging, opt in explicitly:
+
+```
+cargo build --release --target thumbv6m-none-eabi -p sensor-watch --features defmt-log
+```
+
+`defmt-log` is ARM-only and uses `defmt-rtt`; it is absent from the default
+feature set and does not change the normal firmware dependency or size path.
+See [`docs/DEVELOPER_DEBUGGING.md`](docs/DEVELOPER_DEBUGGING.md) for probe use.
+
 Produce a `.uf2` for drag-and-drop flashing:
 
 ```
