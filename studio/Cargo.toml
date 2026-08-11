@@ -7,9 +7,11 @@ license = "MIT OR Apache-2.0"
 
 [features]
 # Enables the Simulator to run REAL firmware faces through the host `Hw` seam.
-# Default-off: the seam requires the firmware host lib to compile as a host
-# dependency first (see `src/real_face.rs`).
+# On by default: the firmware host lib compiles and links cleanly as a `std`
+# dependency, and `RealFace::new` installs its `MockHw` into the host seam (and
+# clears it on drop). See `src/real_face.rs`.
 real-faces = ["dep:sensor-watch"]
+default = ["real-faces"]
 
 [dependencies]
 # GUI framework (pure Rust, cross-platform)

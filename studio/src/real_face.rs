@@ -176,6 +176,11 @@ impl RealFace {
         let face = new_face(face_name)?;
         let mut mock = MockHw::new();
         mock.vcc_mv = 3000; // healthy battery
+                            // Install the mock into the host `Hw` seam so the real face's HAL calls
+                            // (`slcd::*`, `rtc::get_date_time`, ...) forward to this mock instead of
+                            // panicking with "no Hw installed". The `Drop` impl clears it when this
+                            // face is dropped so the global slot doesn't leak between faces.
+        sensor_watch::watch::seam::install_hw(&mut mock);
         let settings = types::Settings::default();
         Some(RealFace {
             face,
@@ -264,6 +269,14 @@ impl RealFace {
             h24: m.indicator(sensor_watch_core::mock_hw::Indicator::H24),
             lap: m.indicator(sensor_watch_core::mock_hw::Indicator::Lap),
         };
+    }
+}
+
+/// Clears the mock from the host `Hw` seam so the global slot doesn't leak
+/// between faces (e.g. when the Studio app swaps the simulated face).
+impl Drop for RealFace {
+    fn drop(&mut self) {
+        sensor_watch::watch::seam::clear_hw();
     }
 }
 
