@@ -17,6 +17,7 @@ mod i18n;
 mod integrity;
 mod modules;
 mod ntp;
+mod panic_map;
 mod persist;
 mod presets;
 mod real_face;
@@ -214,6 +215,10 @@ struct StudioApp {
     flash_log: debug::DebugLog,
     /// Dedicated log for errors/warnings (shown in the Bugs tab).
     error_log: debug::DebugLog,
+    /// Fingerprint entered in the Bugs/Diagnostics resolver.
+    panic_fingerprint_input: String,
+    /// Last panic fingerprint resolution result.
+    panic_resolution: String,
     /// Dedicated log for the Watch Faces tab.
     faces_log: debug::DebugLog,
     /// Dedicated log for the Simulator tab.
@@ -463,6 +468,8 @@ impl Default for StudioApp {
             build_log: debug::DebugLog::new(),
             flash_log: debug::DebugLog::new(),
             error_log: debug::DebugLog::new(),
+            panic_fingerprint_input: String::new(),
+            panic_resolution: String::new(),
             faces_log: debug::DebugLog::new(),
             sim_log: debug::DebugLog::new(),
             catalog_search: String::new(),
@@ -1386,11 +1393,7 @@ impl StudioApp {
                     let m = (rem / 60) % 60;
                     let s = rem % 60;
                     let (year, month, day) = watch_sim::civil_from_days(days);
-                    let yy = (year % 100) as u32;
-                    let cmd = format!(
-                        "settime {:02}{:02}{:02}{:02}{:02}{:02}",
-                        yy, month, day, h, m, s
-                    );
+                    let cmd = ntp::settime_command(boundary);
                     ui.monospace(format!(
                         "Next minute boundary: {:04}-{:02}-{:02} {:02}:{:02}:{:02} UTC",
                         year, month, day, h, m, s
@@ -1431,20 +1434,20 @@ impl StudioApp {
                     if ui.button("Record sample").clicked() {
                         if let Some(ts) = self.ntp_time {
                             // Use the sim watch's live time as the "watch" reading.
-                            let (_, _, _, h, m, s, _) = self.watch.get_time();
-                            let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
-                            self.drift_session.record(watch_secs, ts);
-                            self.save_settings_internal();
-                            let n = if self.drift_session.start.is_some() {
-                                if self.drift_session.end.is_some() {
-                                    "end".to_string()
-                                } else {
-                                    "start".to_string()
+                            let (year, month, day, h, m, s, _) = self.watch.get_time();
+                            let watch_secs = (watch_sim::days_from_civil(year, month, day) as u64)
+                                .saturating_mul(86_400)
+                                .saturating_add((h as u64) * 3_600 + (m as u64) * 60 + s as u64);
+                            match self.drift_session.record(watch_secs, ts) {
+                                Ok(role) => {
+                                    self.save_settings_internal();
+                                    self.log.log(format!("Drift sample recorded ({role})"));
                                 }
-                            } else {
-                                "start".to_string()
-                            };
-                            self.log.log(format!("Drift sample recorded ({n})"));
+                                Err(error) => {
+                                    self.status = error.clone();
+                                    self.log_error(&error);
+                                }
+                            }
                         } else {
                             self.status = "Fetch NTP time first".to_string();
                         }
@@ -2818,10 +2821,13 @@ impl StudioApp {
             .show(ui, |ui| {
                 ui.heading("Calibration");
                 ui.separator();
-                ui.label(
-                    "Calibrate the watch's clock. Fetch the NTP time, then use the\n\
-                     beep-on-minute helper to set the watch precisely at the next\n\
-                     minute boundary.",
+            ui.label(
+                    "Follow the steps in order: fetch a reference, set the watch, then\n\
+                     record start and end samples after a useful measurement interval.",
+                );
+                ui.colored_label(
+                    egui::Color32::from_rgb(230, 180, 80),
+                    "Offline-safe: Studio does not perform serial I/O. Send the copied commands\nvia the UART jig/debug pads; USB is bootloader-only.",
                 );
                 ui.add_space(8.0);
 
@@ -2840,12 +2846,17 @@ impl StudioApp {
                     let h = (rem / 3600) % 24;
                     let m = (rem / 60) % 60;
                     let s = rem % 60;
-                    ui.monospace(format!("NTP time: {h:02}:{m:02}:{s:02} UTC"));
+                    let (year, month, day) = watch_sim::civil_from_days(secs.div_euclid(86400));
+                    ui.monospace(format!(
+                        "Current reference: {year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02} UTC (ping {:.1} ms, offset {:+.1} ms)",
+                        self.ntp_ping,
+                        self.ntp_offset * 1000.0
+                    ));
                 }
 
                 ui.add_space(12.0);
                 ui.separator();
-                ui.strong("Clock calibration");
+                ui.strong("Step 2 — Set the clock at the next minute boundary");
                 if let Some(ts) = self.ntp_time {
                     let boundary = (ts / 60 + 1) * 60;
                     let b = boundary as i64;
@@ -2855,13 +2866,10 @@ impl StudioApp {
                     let s = rem % 60;
                     let days = b.div_euclid(86400);
                     let (year, month, day) = watch_sim::civil_from_days(days);
-                    let yy = (year % 100) as u32;
-                    let cmd = format!(
-                        "settime {:02}{:02}{:02}{:02}{:02}{:02}",
-                        yy, month, day, h, m, s
-                    );
-                    ui.monospace(format!("Next minute boundary: {h:02}:{m:02}:{s:02} UTC"));
-                    ui.monospace(format!("Command: {cmd}"));
+                    let cmd = ntp::settime_command(boundary);
+                    ui.monospace(format!("Next minute boundary: {year:04}-{month:02}-{day:02} {h:02}:{m:02}:{s:02} UTC"));
+                    ui.monospace(format!("UART command: {cmd}"));
+                    ui.weak("Copy this exact command and send it manually via the UART jig/debug pads.");
                     if ui.button("Copy command").clicked() {
                         let _ = ui_copy_to_clipboard(&cmd);
                         self.status = "Calibration command copied".to_string();
@@ -2872,10 +2880,10 @@ impl StudioApp {
 
                 ui.add_space(12.0);
                 ui.separator();
-                ui.strong("Beep on minute rollover");
+                ui.strong("Optional — minute-boundary cue");
                 ui.label(
-                    "Arm a beep that sounds at the exact next minute boundary, so you\n\
-                     can set the watch precisely when it beeps.",
+                    "Arm a software cue for the exact next minute boundary. This is only a\n\
+                     timing aid; Studio does not connect to or write the watch.",
                 );
                 ui.horizontal(|ui| {
                     if ui.button("Arm beep").clicked() {
@@ -2892,50 +2900,86 @@ impl StudioApp {
                     }
                 });
                 if self.beep_armed {
-                    if let Some(ts) = self.ntp_time {
-                        let remaining = self.beep_target.saturating_sub(ts);
-                        ui.monospace(format!("Beep in {remaining} s"));
-                        if remaining <= 1 {
-                            ui.colored_label(
-                                egui::Color32::from_rgb(80, 200, 120),
-                                "BEEP! Set the watch now.",
-                            );
-                            self.beep_armed = false;
-                        }
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0);
+                    let remaining = self.beep_target.saturating_sub(now);
+                    ui.monospace(format!("Cue in {remaining} s"));
+                    if remaining <= 1 {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(80, 200, 120),
+                            "BEEP! Set the watch now (software cue).",
+                        );
+                        self.beep_armed = false;
+                    } else {
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
                     }
                 }
 
                 ui.add_space(12.0);
                 ui.separator();
-                ui.strong("Drift calibration");
+                ui.strong("Step 3 — Measure drift");
                 ui.label(
-                    "Record two samples (watch time vs NTP) some time apart to\n\
-                     measure the crystal drift in parts-per-million.",
+                    "Fetch NTP before each sample. Record the start, wait at least one\n\
+                     minute (hours or days is better), fetch again, then record the end.",
                 );
                 ui.horizontal(|ui| {
                     if ui.button("Record sample").clicked() {
-                        if let Some(ts) = self.ntp_time {
-                            let (_, _, _, h, m, s, _) = self.watch.get_time();
-                            let watch_secs = (h as u64) * 3600 + (m as u64) * 60 + s as u64;
-                            self.drift_session.record(watch_secs, ts);
-                            self.log.log("Drift sample recorded");
-                            self.save_settings_internal();
+                        if let Some(reference) = self.ntp_time {
+                            let (year, month, day, hour, minute, second, _) = self.watch.get_time();
+                            let watch_secs = (watch_sim::days_from_civil(year, month, day) as u64)
+                                .saturating_mul(86_400)
+                                .saturating_add((hour as u64) * 3_600 + (minute as u64) * 60 + second as u64);
+                            match self.drift_session.record(watch_secs, reference) {
+                                Ok(role) => {
+                                    self.status = format!("Recorded {role} drift sample");
+                                    self.log.log(format!("Drift {role} sample recorded"));
+                                    self.save_settings_internal();
+                                }
+                                Err(error) => {
+                                    self.status = error.clone();
+                                    self.log_error(&error);
+                                }
+                            }
                         } else {
                             self.status = "Fetch NTP time first".to_string();
                         }
                     }
-                    if ui.button("Reset").clicked() {
+                    if ui.button("Reset samples").clicked() {
                         self.drift_session.reset();
+                        self.beep_armed = false;
+                        self.save_settings_internal();
+                        self.status = "Calibration samples reset".to_string();
                     }
                 });
-                if self.drift_session.ppm != 0.0 {
-                    ui.monospace(format!(
-                        "Last calibrated drift: {:+.2} ppm (from last session)",
-                        self.drift_session.ppm
-                    ));
+                if let Some(start) = self.drift_session.start {
+                    ui.monospace(format!("Start: watch {} / reference {}", start.watch_seconds, start.reference_seconds));
                 }
-                if self.drift_session.ppm != 0.0 {
-                    ui.monospace(format!("Drift: {:+.2} ppm", self.drift_session.ppm));
+                if let Some(end) = self.drift_session.end {
+                    ui.monospace(format!("End: watch {} / reference {}", end.watch_seconds, end.reference_seconds));
+                }
+                if let (Some(start), Some(end)) = (self.drift_session.start, self.drift_session.end) {
+                    match drift::measure(start, end) {
+                        Ok(measurement) => {
+                            ui.monospace(format!("Measured drift: {:+.2} ppm (error {:+} s over {} s)", measurement.ppm, measurement.error_seconds, measurement.elapsed_seconds));
+                            ui.monospace(format!("Recommended correction: {:+} ppm", measurement.correction_ppm));
+                            let command = format!("drift {}", measurement.correction_ppm);
+                            ui.monospace(format!("UART command: {command}"));
+                            if ui.button("Copy correction command").clicked() {
+                                let _ = ui_copy_to_clipboard(&command);
+                                self.status = "Drift correction command copied".to_string();
+                            }
+                            ui.weak("Send this command manually through the UART jig/debug pads; Studio never performs serial I/O.");
+                        }
+                        Err(error) => {
+                            ui.colored_label(egui::Color32::from_rgb(220, 100, 90), error);
+                        }
+                    }
+                } else if self.drift_session.start.is_some() {
+                    ui.weak("Start recorded. Fetch NTP again after the interval, then record the end sample.");
+                } else {
+                    ui.weak("No samples yet.");
                 }
             });
     }
@@ -3324,6 +3368,34 @@ impl StudioApp {
             }
         });
         ui.separator();
+        ui.strong("Firmware panic fingerprint");
+        ui.label("Resolve the Pxxxxxx value printed by the watch's `panic` shell command against the firmware source tree.");
+        let mut resolve_fingerprint = false;
+        ui.horizontal(|ui| {
+            ui.label("Fingerprint:");
+            let response = ui.text_edit_singleline(&mut self.panic_fingerprint_input);
+            resolve_fingerprint = ui.button("Resolve").clicked()
+                || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+        });
+        if resolve_fingerprint {
+            let root = build::firmware_dir();
+            self.panic_resolution = match panic_map::resolve(&self.panic_fingerprint_input, &root) {
+                Ok(matches) if matches.is_empty() => format!(
+                    "No source location matched {} under {}. Check that the source tree matches the ELF build.",
+                    self.panic_fingerprint_input.trim(), root.display()
+                ),
+                Ok(matches) => matches
+                    .iter()
+                    .map(panic_map::SourceLocation::display)
+                    .collect::<Vec<_>>()
+                    .join("\n"),
+                Err(error) => error,
+            };
+        }
+        if !self.panic_resolution.is_empty() {
+            ui.monospace(&self.panic_resolution);
+        }
+        ui.add_space(8.0);
         ui.label(
             "Errors and warnings encountered by the app. Use this to report bugs or\n\
              troubleshoot issues. The full activity log is in the Debug tab.",

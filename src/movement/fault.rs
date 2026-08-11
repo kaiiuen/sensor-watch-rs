@@ -70,6 +70,12 @@ pub enum ResetReason {
 /// Only the low byte of reg 4 is written so an existing panic-location
 /// fingerprint (stored in its upper 24 bits) is preserved.
 pub fn record_fault(fault: Fault) {
+    // Keep a RAM breadcrumb as well as the reset-surviving backup-register
+    // summary. This remains safe during early boot and panic handling.
+    crate::watch::event_log::record_untimed(
+        crate::watch::event_log::EventCode::Fault,
+        fault as u16,
+    );
     let reg = deepsleep::get_backup_data(REG_LAST_FAULT);
     let packed = (reg & !0xFF) | (fault as u32 & 0xFF);
     deepsleep::store_backup_data(packed, REG_LAST_FAULT);

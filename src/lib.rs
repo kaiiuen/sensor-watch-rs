@@ -57,6 +57,24 @@ fn arm_panic(_info: &core::panic::PanicInfo) -> ! {
     }
 }
 
+#[cfg(target_arch = "arm")]
+mod arm_alloc {
+    use core::alloc::{GlobalAlloc, Layout};
+
+    struct NullAllocator;
+
+    unsafe impl GlobalAlloc for NullAllocator {
+        unsafe fn alloc(&self, _layout: Layout) -> *mut u8 {
+            core::ptr::null_mut()
+        }
+
+        unsafe fn dealloc(&self, _ptr: *mut u8, _layout: Layout) {}
+    }
+
+    #[global_allocator]
+    static ARM_LIB_ALLOCATOR: NullAllocator = NullAllocator;
+}
+
 // ---------------------------------------------------------------------------
 // Host target: `watch` and `movement` at the crate root (faces use
 // `crate::watch::*` / `crate::movement::*`), pointing at the host seam versions.

@@ -6,6 +6,7 @@
 //! event-driven — it only processes a command when a full line has been
 //! received, so it never keeps the CPU awake polling.
 
+use crate::watch::event_log;
 use crate::watch::rtc::{self, DateTime};
 use crate::watch::uart;
 
@@ -59,7 +60,14 @@ impl Shell {
                 uart::puts("\r\n");
             }
             b"help" => {
-                uart::puts("CMDS: time, settime YYMMDDHHMMSS, drift N, panic\r\n");
+                uart::puts(
+                    "CMDS: time, settime YYMMDDHHMMSS, drift N, panic, events [clear]\\r\\n",
+                );
+            }
+            b"events" => dump_events(),
+            b"events clear" => {
+                event_log::clear();
+                uart::puts("OK\\r\\n");
             }
             b"panic" => {
                 let fp = crate::movement::fault::panic_fingerprint();
@@ -91,6 +99,36 @@ impl Shell {
             }
         }
     }
+}
+
+/// Dumps the retained structured events in a stable, machine-readable form.
+fn dump_events() {
+    event_log::for_each(|event| {
+        uart::puts("EV ");
+        put_hex(event.sequence, 8);
+        uart::puts(" ");
+        put_hex(event.timestamp, 8);
+        uart::puts(" ");
+        put_hex(event.code as u32, 2);
+        uart::puts(" ");
+        put_hex(event.data as u32, 4);
+        uart::puts("\\r\\n");
+    });
+}
+
+/// Writes a value as uppercase hexadecimal without allocating.
+fn put_hex(value: u32, digits: usize) {
+    let mut buf = [b'0'; 8];
+    for i in 0..digits.min(8) {
+        let shift = ((digits - 1 - i).min(7) * 4) as u32;
+        let nibble = ((value >> shift) & 0xF) as u8;
+        buf[i] = if nibble < 10 {
+            b'0' + nibble
+        } else {
+            b'A' + nibble - 10
+        };
+    }
+    uart::puts(core::str::from_utf8(&buf[..digits.min(8)]).unwrap_or(""));
 }
 
 /// Writes a DateTime as YYMMDDHHMMSS into a 12-byte buffer.

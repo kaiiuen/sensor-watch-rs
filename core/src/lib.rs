@@ -12,6 +12,7 @@ extern crate alloc;
 
 pub mod datetime;
 pub mod ecc;
+pub mod event_log;
 // The hardware seam: the `Hw` trait, reference mock, and the reusable
 // `Event`/`Button`/`Indicator` types used by face logic.
 pub mod mock_hw;

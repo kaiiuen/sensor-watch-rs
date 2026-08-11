@@ -41,6 +41,7 @@ pub mod clock;
 pub mod crc;
 pub mod deepsleep;
 pub mod ecc;
+pub mod event_log;
 pub mod extint;
 pub mod gpio;
 pub mod i2c;

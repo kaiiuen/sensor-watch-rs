@@ -47,12 +47,12 @@ critical-section = "1.2.0"
 # crate so that, on host builds, the ARM-bound register backends can forward to
 # the reusable `sensor_watch_core::mock_hw` trait/mock. On the
 # `thumbv6m-none-eabi` target this dependency is inert (hostmock is not enabled).
-sensor-watch-core = { path = "./core" }
+sensor-watch-core = { path = "./core", optional = true }
 
 [features]
 # Only available to the host (`cargo test` / `cargo build` / `cargo run`, NOT the
 # `thumbv6m-none-eabi` firmware target). Gates the mock HW dispatch in `watch`.
-hostmock = []
+hostmock = ["dep:sensor-watch-core"]
 # Host builds that link this lib into a `std` binary (e.g. the Studio app) enable
 # this so the lib compiles as `std` and lets `std` provide the `#[panic_handler]`
 # and `#[global_allocator]` lang items. Without it (ARM firmware, host `cargo
