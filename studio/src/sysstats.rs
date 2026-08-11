@@ -14,10 +14,11 @@ pub struct SysStats {
     // App (this process).
     /// App CPU usage as a percentage of one core (0-100).
     pub cpu_percent: f32,
-    /// App CPU frequency in MHz (best-effort; 0 if unknown).
-    pub cpu_freq_mhz: u64,
-    /// Number of threads the app is using.
-    pub threads: usize,
+    /// System CPU frequency in MHz, using the highest frequency exposed by
+    /// sysinfo (0 if unknown). This is not a process-specific speed.
+    pub system_cpu_freq_mhz: u64,
+    /// Number of threads the app is using, if sysinfo can provide it.
+    pub threads: Option<usize>,
     /// App memory usage in bytes.
     pub mem_bytes: u64,
     /// App virtual memory usage in bytes.
@@ -71,8 +72,10 @@ pub fn spawn_sampler(
                 stats.mem_bytes = proc.memory();
                 stats.virtual_mem_bytes = proc.virtual_memory();
                 stats.run_time_secs = proc.run_time();
-                // Thread count: fall back to 1 if tasks() is unavailable.
-                stats.threads = proc.tasks().map(|t| t.len()).unwrap_or(1);
+                // On some platforms, including Windows, sysinfo cannot expose
+                // the process task list. Preserve that distinction instead of
+                // presenting a fabricated count.
+                stats.threads = proc.tasks().map(|tasks| tasks.len());
 
                 let du = proc.disk_usage();
                 stats.disk_read_bytes = du.total_read_bytes;
@@ -83,9 +86,14 @@ pub fn spawn_sampler(
                 prev_disk_write = du.total_written_bytes;
             }
 
-            // CPU frequency: sysinfo only exposes the max/core frequency of the
-            // system, not the per-process value, so reporting it here would be
-            // misleading. Leave it at 0; the UI shows it as "N/A".
+            // sysinfo exposes per-CPU system frequencies, not a process speed.
+            // Use the highest reported value and let the UI identify it honestly.
+            stats.system_cpu_freq_mhz = sys
+                .cpus()
+                .iter()
+                .map(|cpu| cpu.frequency())
+                .max()
+                .unwrap_or(0);
 
             // Smooth the app CPU reading over a few samples.
             cpu_accum += stats.cpu_percent;

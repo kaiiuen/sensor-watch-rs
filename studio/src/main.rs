@@ -5058,18 +5058,22 @@ impl StudioApp {
             .spacing([24.0, 6.0])
             .num_columns(2)
             .show(ui, |ui| {
-                ui.label("CPU");
+                ui.label("Process CPU");
                 ui.monospace(format!("{:.1}%", self.sys_stats.cpu_percent));
                 ui.end_row();
-                ui.label("CPU speed");
-                if self.sys_stats.cpu_freq_mhz > 0 {
-                    ui.monospace(format!("{} MHz", self.sys_stats.cpu_freq_mhz));
+                ui.label("System CPU frequency");
+                if self.sys_stats.system_cpu_freq_mhz > 0 {
+                    ui.monospace(format!("{} MHz", self.sys_stats.system_cpu_freq_mhz));
                 } else {
-                    ui.monospace("N/A");
+                    ui.monospace("Unknown");
                 }
                 ui.end_row();
-                ui.label("Threads");
-                ui.monospace(format!("{}", self.sys_stats.threads));
+                ui.label("Process threads");
+                if let Some(threads) = self.sys_stats.threads {
+                    ui.monospace(format!("{}", threads));
+                } else {
+                    ui.monospace("Unavailable");
+                }
                 ui.end_row();
                 ui.label("Memory");
                 ui.monospace(fmt_bytes(self.sys_stats.mem_bytes));
