@@ -245,6 +245,7 @@ impl RealFace {
     }
 
     /// Advances the face by one second (a `Tick`), refreshing the display.
+    #[allow(dead_code)]
     pub fn tick(&mut self) {
         self.face.loop_(types::Event::Tick, &mut self.settings);
         self.snapshot_from_mock();
