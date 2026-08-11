@@ -883,12 +883,18 @@ impl eframe::App for StudioApp {
                 ui.label("Watch:");
                 ui.monospace(format!("{selected} faces selected"));
                 ui.separator();
-                ui.monospace(format!("~{} KB flash", self.estimate_flash_kb(selected)));
-                ui.separator();
-                ui.monospace(format!("~{} KB RAM", self.estimate_ram_kb(selected)));
+                ui.monospace(format!(
+                    "Estimate: ~{} KB flash",
+                    self.estimate_flash_kb(selected)
+                ));
                 ui.separator();
                 ui.monospace(format!(
-                    "~{} KB compiled",
+                    "Estimate: ~{} KB RAM",
+                    self.estimate_ram_kb(selected)
+                ));
+                ui.separator();
+                ui.monospace(format!(
+                    "Estimate: ~{} KB compiled",
                     self.estimate_compiled_kb(selected)
                 ));
                 ui.separator();
@@ -2228,16 +2234,19 @@ impl StudioApp {
                             ui.horizontal(|ui| {
                                 if ui
                                     .selectable_label(!self.watch_config.button_volume, "Soft")
+                                    .on_hover_text(volume_description(false))
                                     .clicked()
                                 {
                                     self.watch_config.button_volume = false;
                                 }
                                 if ui
                                     .selectable_label(self.watch_config.button_volume, "Loud")
+                                    .on_hover_text(volume_description(true))
                                     .clicked()
                                 {
                                     self.watch_config.button_volume = true;
                                 }
+                                ui.small(volume_description(self.watch_config.button_volume));
                             });
                             ui.end_row();
 
@@ -2246,16 +2255,19 @@ impl StudioApp {
                             ui.horizontal(|ui| {
                                 if ui
                                     .selectable_label(!self.watch_config.signal_volume, "Soft")
+                                    .on_hover_text(volume_description(false))
                                     .clicked()
                                 {
                                     self.watch_config.signal_volume = false;
                                 }
                                 if ui
                                     .selectable_label(self.watch_config.signal_volume, "Loud")
+                                    .on_hover_text(volume_description(true))
                                     .clicked()
                                 {
                                     self.watch_config.signal_volume = true;
                                 }
+                                ui.small(volume_description(self.watch_config.signal_volume));
                             });
                             ui.end_row();
 
@@ -2264,16 +2276,19 @@ impl StudioApp {
                             ui.horizontal(|ui| {
                                 if ui
                                     .selectable_label(!self.watch_config.alarm_volume, "Soft")
+                                    .on_hover_text(volume_description(false))
                                     .clicked()
                                 {
                                     self.watch_config.alarm_volume = false;
                                 }
                                 if ui
                                     .selectable_label(self.watch_config.alarm_volume, "Loud")
+                                    .on_hover_text(volume_description(true))
                                     .clicked()
                                 {
                                     self.watch_config.alarm_volume = true;
                                 }
+                                ui.small(volume_description(self.watch_config.alarm_volume));
                             });
                             ui.end_row();
 
@@ -2289,6 +2304,10 @@ impl StudioApp {
                                 );
                                 ui.label(format!("{:.1} V", self.watch_config.piezo_voltage));
                             });
+                            ui.end_row();
+                            ui.label("Sound level guide");
+                            ui.label("Hardware limit: 0.0–9.0 V. Soft is a gentle tap; Loud is a stronger knock. Actual dB varies with piezo, case, battery, and distance.");
+                            ui.end_row();
                             ui.end_row();
 
                             // Buzzer sound type.
@@ -2386,28 +2405,20 @@ impl StudioApp {
                             );
                             ui.end_row();
 
-                            // LED gradient hex.
-                            ui.label("Gradient color (hex)");
-                            ui.horizontal(|ui| {
-                                ui.text_edit_singleline(&mut self.watch_config.led_gradient_hex);
-                                if let Some(col) =
-                                    parse_hex_color(&self.watch_config.led_gradient_hex)
-                                {
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        egui::vec2(24.0, 16.0),
-                                        egui::Sense::hover(),
-                                    );
-                                    ui.painter().rect_filled(rect, 2.0, col);
-                                }
-                            });
+                            // LED gradient color.
+                            ui.label("Gradient color");
+                            color_picker_row(ui, &mut self.watch_config.led_gradient_hex, "gradient_color");
                             ui.end_row();
 
-                            // Night light red.
+                            // Night light color.
                             ui.label("Night light");
                             ui.checkbox(
                                 &mut self.watch_config.night_light_red,
-                                "Use red at night instead of day color",
+                                "Use the separate night color",
                             );
+                            ui.end_row();
+                            ui.label("Night color");
+                            color_picker_row(ui, &mut self.watch_config.night_light_color_hex, "night_light_color");
                             ui.end_row();
                         });
 
@@ -5115,6 +5126,45 @@ impl StudioApp {
         });
         ui.weak("The output dir is created automatically if it doesn't exist.");
 
+        ui.add_space(8.0);
+        egui::CollapsingHeader::new("Storage & output details")
+            .default_open(false)
+            .show(ui, |ui| {
+                ui.weak("Measured values are read from existing files only; no build or target directories are scanned.");
+                let output_path = std::path::Path::new(&self.output_dir);
+                ui.label(format!("Output directory: {}", output_path.display()));
+                match measure_directory(output_path) {
+                    Some((files, bytes)) => {
+                        ui.monospace(format!("Measured output files: {files} files, {}", fmt_bytes(bytes)));
+                    }
+                    None => {
+                        ui.weak("Measured output files: unavailable (directory does not exist or could not be read).");
+                    }
+                }
+                match self.last_uf2.as_ref().and_then(|path| std::fs::metadata(path).ok()) {
+                    Some(metadata) => ui.monospace(format!("Measured last UF2: {}", fmt_bytes(metadata.len()))),
+                    None => ui.weak("Measured last UF2: unavailable (no existing UF2 artifact)."),
+                };
+
+                let source_export = std::path::Path::new("export");
+                ui.label(format!("Source export: {}", source_export.display()));
+                match measure_directory(source_export) {
+                    Some((files, bytes)) => {
+                        ui.monospace(format!("Measured source export: {files} files, {}", fmt_bytes(bytes)));
+                    }
+                    None => {
+                        ui.weak("Measured source export: unavailable (no existing export artifact).");
+                    }
+                }
+
+                let settings_path = persist::settings_path();
+                ui.label(format!("Settings export: {}", settings_path.display()));
+                match std::fs::metadata(&settings_path) {
+                    Ok(metadata) => ui.monospace(format!("Measured settings export: {}", fmt_bytes(metadata.len()))),
+                    Err(_) => ui.weak("Measured settings export: unavailable (no existing settings file)."),
+                };
+            });
+
         ui.add_space(16.0);
         ui.separator();
         ui.heading("Settings Data");
@@ -5818,7 +5868,7 @@ impl StudioApp {
         None
     }
 
-    /// Rough estimate of the firmware flash size in KB for the selected faces.
+    /// Estimate of the firmware flash size in KB for the selected faces.
     /// The watch OS/framework baseline is ~40 KB; each face adds ~2 KB.
     fn estimate_flash_kb(&self, selected: usize) -> u32 {
         40 + (selected as u32) * 2
@@ -5979,6 +6029,40 @@ fn fetch_latest_commit() -> Result<String, String> {
         }
     }
     Err("Could not parse commit".to_string())
+}
+
+/// Returns a cautious, user-facing description of the two firmware volume steps.
+fn volume_description(loud: bool) -> &'static str {
+    if loud {
+        "Loud: stronger knock analogy; up to the configured 9.0 V drive limit. Estimated level only—dB is not measured here."
+    } else {
+        "Soft: gentle tap analogy; lower drive than Loud. Estimated voltage/level only—dB depends on the hardware and environment."
+    }
+}
+
+/// Shows a hex field, swatch, and editable RGB picker for a persisted color.
+fn color_picker_row(ui: &mut egui::Ui, hex: &mut String, id: &str) {
+    ui.horizontal(|ui| {
+        ui.text_edit_singleline(hex);
+        if let Some(col) = parse_hex_color(hex) {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(24.0, 16.0), egui::Sense::hover());
+            ui.painter().rect_filled(rect, 2.0, col);
+            let mut rgb = [
+                col.r() as f32 / 255.0,
+                col.g() as f32 / 255.0,
+                col.b() as f32 / 255.0,
+            ];
+            let picker = ui.push_id(id, |ui| ui.color_edit_button_rgb(&mut rgb));
+            if picker.inner.changed() {
+                *hex = format!(
+                    "#{:02x}{:02x}{:02x}",
+                    (rgb[0] * 255.0) as u8,
+                    (rgb[1] * 255.0) as u8,
+                    (rgb[2] * 255.0) as u8
+                );
+            }
+        }
+    });
 }
 
 /// Parses a hex color string like "#00FF88" into an egui color.

@@ -7,6 +7,10 @@
 
 use serde::{Deserialize, Serialize};
 
+fn default_night_light_color_hex() -> String {
+    "#FF0000".to_string()
+}
+
 /// Time zone offsets in minutes from UTC (mirrors the firmware table).
 /// The index is the `time_zone` setting value.
 pub const TIMEZONE_OFFSETS: [i16; 41] = [
@@ -64,8 +68,11 @@ pub struct WatchConfig {
     pub raise_to_wake: bool,
     /// Whether raise-to-wake lights the LED.
     pub raise_to_wake_light: bool,
-    /// Whether the light uses red at night instead of the day color.
+    /// Whether the light uses the separate night-light color instead of the day color.
     pub night_light_red: bool,
+    /// The independent night-light color as a hex string (e.g. "#FF0000").
+    #[serde(default = "default_night_light_color_hex")]
+    pub night_light_color_hex: String,
     /// The buzzer sound type (0=click, 1=beep, 2=double, 3=chime).
     pub buzzer_type: u8,
     /// Whether the light sensor auto-sleeps the watch when covered.
@@ -104,6 +111,7 @@ impl Default for WatchConfig {
             raise_to_wake: false,
             raise_to_wake_light: false,
             night_light_red: false,
+            night_light_color_hex: default_night_light_color_hex(),
             buzzer_type: 0,
             light_sensor_sleep: false,
             reset_keybind: false,
@@ -162,6 +170,7 @@ impl WatchConfig {
             raise_to_wake: false,
             raise_to_wake_light: false,
             night_light_red: false,
+            night_light_color_hex: default_night_light_color_hex(),
             buzzer_type: 0,
             light_sensor_sleep: false,
             reset_keybind: false,
