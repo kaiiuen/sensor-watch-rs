@@ -46,7 +46,7 @@ use sensor_watch::movement::{
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
 #[cfg(feature = "real-faces")]
-use sensor_watch_core::mock_hw::MockHw;
+use sensor_watch_core::mock_hw::{Hw, MockHw};
 
 #[cfg(feature = "real-faces")]
 use std::sync::{Mutex, MutexGuard};
@@ -99,6 +99,8 @@ pub struct RealFace {
     settings: types::Settings,
     /// The display snapshot of the last render (derived from `mock`).
     snapshot: RealFaceSnapshot,
+    /// Whether the face has received its initial activation.
+    activated: bool,
     /// Holds the global seam lock so this face's mock stays installed for its
     /// whole lifetime (see `SEAM_LOCK`).
     _seam_guard: MutexGuard<'static, ()>,
@@ -361,6 +363,7 @@ impl RealFace {
             mock,
             settings,
             snapshot: RealFaceSnapshot::default(),
+            activated: false,
             face_name: new_face_name(face_name),
             _seam_guard,
         })
@@ -395,7 +398,7 @@ impl RealFace {
             return false;
         }
 
-        self.mock.now = DateTime {
+        let next = DateTime {
             second: second as u8,
             minute: minute as u8,
             hour: hour as u8,
@@ -403,6 +406,16 @@ impl RealFace {
             month: month as u8,
             year: (year - reference_year) as u8,
         };
+        let changed = self.mock.now != next;
+        self.mock.now = next;
+        // A time edit must redraw an already-active face immediately, but must
+        // not re-activate it (which would reset face-specific state). The Tick
+        // also advances state exactly once for each changed simulated second;
+        // draw_watch therefore does not issue a second real-face tick.
+        if changed && self.activated {
+            self.face.loop_(types::Event::Tick, &mut self.settings);
+            self.snapshot_from_mock();
+        }
         true
     }
 
@@ -412,8 +425,16 @@ impl RealFace {
     /// agree with the watch settings in the app.
     pub fn activate(&mut self, time_mode_24: bool) {
         self.settings.set_clock_mode_24h(time_mode_24);
+        // Some firmware faces only set the positive indicator during activate,
+        // so clear both mode labels first to prevent a stale PM/H24 label when
+        // switching between 12-hour and 24-hour display modes.
+        self.mock
+            .clear_indicator(sensor_watch_core::mock_hw::Indicator::Pm);
+        self.mock
+            .clear_indicator(sensor_watch_core::mock_hw::Indicator::H24);
         self.face.activate(&self.settings);
         self.face.loop_(types::Event::Tick, &mut self.settings);
+        self.activated = true;
         self.snapshot_from_mock();
     }
 
@@ -801,6 +822,81 @@ mod tests {
             render_real_face("SIMPLE_CLOCK", y, mo, d, h, mi, s, 5, false, false, false).unwrap();
         assert!(snap.pm);
         assert!(!snap.h24);
+    }
+
+    #[test]
+    fn real_simple_clock_12h_renders_all_boundary_hours() {
+        let cases = [
+            (0, "FR061210\0\0", false),
+            (1, "FR060110\0\0", false),
+            (11, "FR061110\0\0", false),
+            (12, "FR061210\0\0", true),
+            (13, "FR060110\0\0", true),
+            (23, "FR061110\0\0", true),
+        ];
+        for (hour, expected, pm) in cases {
+            let snap = render_real_face(
+                "SIMPLE_CLOCK",
+                2023,
+                1,
+                6,
+                hour,
+                10,
+                0,
+                5,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+            let text: String = snap.chars.iter().collect();
+            assert_eq!(text, expected, "unexpected 12-hour display at {hour:02}:10");
+            assert_eq!(snap.pm, pm, "unexpected PM indicator at {hour:02}:10");
+            assert!(!snap.h24);
+        }
+    }
+
+    #[test]
+    fn real_simple_clock_24h_renders_midnight_noon_and_late_night() {
+        for hour in [0, 12, 23] {
+            let snap = render_real_face(
+                "SIMPLE_CLOCK",
+                2023,
+                1,
+                6,
+                hour,
+                10,
+                0,
+                5,
+                true,
+                false,
+                false,
+            )
+            .unwrap();
+            assert!(snap.h24);
+            assert!(!snap.pm);
+        }
+    }
+
+    #[test]
+    fn real_simple_clock_time_and_mode_changes_refresh_without_reactivation() {
+        let mut face = RealFace::new("SIMPLE_CLOCK").expect("face");
+        assert!(face.set_time(2023, 1, 6, 23, 10, 0));
+        face.activate(false);
+        assert!(face.snapshot().pm);
+
+        assert!(face.set_time(2023, 1, 6, 1, 10, 0));
+        let am = face.snapshot();
+        assert!(!am.pm);
+        assert_eq!(
+            am.chars,
+            ['F', 'R', '0', '6', '0', '1', '1', '0', '\0', '\0']
+        );
+
+        face.activate(true);
+        let h24 = face.snapshot();
+        assert!(h24.h24);
+        assert!(!h24.pm);
     }
 
     #[test]

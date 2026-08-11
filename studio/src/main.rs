@@ -4532,9 +4532,8 @@ impl StudioApp {
         while self.face_tick_accum >= 1.0 {
             self.face_tick_accum -= 1.0;
             self.face_engine.tick();
-            if let Some(real) = self.real_face.as_mut() {
-                real.tick();
-            }
+            // Real faces redraw from RealFace::set_time when the simulated RTC
+            // changes, so they do not receive a duplicate tick here.
             // Log the tick into the shell sim, debug output, and terminal so the
             // three live views stay in sync with the simulated watch.
             let (_, _, _, h, m, s, _) = self.watch.get_time();
