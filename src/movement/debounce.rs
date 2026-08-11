@@ -61,7 +61,7 @@ pub fn update(button: Button, raw_level: bool) -> Option<Event> {
 
         // If the raw reading matches the candidate, count it; otherwise reset.
         if raw_level == state.candidate_level {
-            state.sample_count += 1;
+            state.sample_count = state.sample_count.saturating_add(1);
         } else {
             state.candidate_level = raw_level;
             state.sample_count = 1;
@@ -113,7 +113,7 @@ pub fn check_long_press(button: Button, fast_ticks: u16) -> Option<Event> {
         };
         if state.stable_level
             && !state.long_reported
-            && fast_ticks - state.down_timestamp
+            && fast_ticks.wrapping_sub(state.down_timestamp)
                 >= crate::movement::types::MOVEMENT_LONG_PRESS_TICKS
         {
             state.long_reported = true;
@@ -121,7 +121,7 @@ pub fn check_long_press(button: Button, fast_ticks: u16) -> Option<Event> {
         }
         if state.stable_level
             && !state.really_long_reported
-            && fast_ticks - state.down_timestamp
+            && fast_ticks.wrapping_sub(state.down_timestamp)
                 >= crate::movement::types::MOVEMENT_REALLY_LONG_PRESS_TICKS
         {
             state.really_long_reported = true;

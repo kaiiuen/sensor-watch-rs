@@ -4,6 +4,7 @@
 //! init from the Sensor-Watch reference. This drives the 10-digit segment LCD
 //! plus the indicator segments and colon.
 
+use crate::watch::timeout::wait_until;
 use atsaml22j::slcd::RegisterBlock as Slcd;
 use atsaml22j::slcd::ctrla::{
     Biasselect, Dutyselect, Prescselect, Prfselect, Rrfselect, Wmodselect,
@@ -24,8 +25,8 @@ fn mclk() -> &'static atsaml22j::mclk::RegisterBlock {
 }
 
 /// Waits for the SLCD to finish synchronizing.
-fn sync() {
-    while slcd().syncbusy().read().bits() != 0 {}
+fn sync() -> bool {
+    wait_until(|| slcd().syncbusy().read().bits() == 0).is_ok()
 }
 
 /// The indicator segments available on the watch.
@@ -463,9 +464,10 @@ pub fn start_character_blink(character: u8, duration: u32) {
     } else {
         // SAFETY: computed overflow value is valid.
         unsafe {
-            slcd()
-                .fc0()
-                .write(|w| w.ovf().bits(((frames / 8) - 1) as u8));
+            slcd().fc0().write(|w| {
+                w.ovf()
+                    .bits(frames.saturating_div(8).saturating_sub(1) as u8)
+            });
         }
     }
     slcd().ctrld().modify(|_, w| w.fc0en().set_bit());
@@ -522,7 +524,10 @@ fn start_animation(segs: &[(u8, u8)], period: u32) {
     // Set the animation period using frame counter 1.
     slcd().ctrld().modify(|_, w| w.fc1en().clear_bit());
     sync();
-    let frames = period / (1000 / FRAME_FREQUENCY);
+    if period == 0 {
+        return;
+    }
+    let frames = (period / (1000 / FRAME_FREQUENCY)).max(1);
     if period <= FC_BYPASS_MAX_MS {
         // SAFETY: computed overflow value is valid.
         unsafe {
@@ -533,9 +538,10 @@ fn start_animation(segs: &[(u8, u8)], period: u32) {
     } else {
         // SAFETY: computed overflow value is valid.
         unsafe {
-            slcd()
-                .fc1()
-                .write(|w| w.ovf().bits(((frames / 8) - 1) as u8));
+            slcd().fc1().write(|w| {
+                w.ovf()
+                    .bits(frames.saturating_div(8).saturating_sub(1) as u8)
+            });
         }
     }
     slcd().ctrld().modify(|_, w| w.fc1en().set_bit());
@@ -547,6 +553,9 @@ fn start_animation(segs: &[(u8, u8)], period: u32) {
 
     let mut csrlen = 0;
     for &(com, seg) in segs {
+        if com > 2 || !(2..=17).contains(&seg) {
+            continue;
+        }
         let idx = (com as u32 * 2) + (seg as u32 - 2);
         if idx > csrlen {
             csrlen = idx;

@@ -68,7 +68,10 @@ fn address_for(row: u32, offset: u32, size: u32) -> Option<u32> {
 }
 
 fn valid_page_write(address: u32, size: u32) -> bool {
-    size <= PAGE_SIZE
+    size != 0
+        && size.is_multiple_of(2)
+        && address.is_multiple_of(2)
+        && size <= PAGE_SIZE
         && (address % PAGE_SIZE)
             .checked_add(size)
             .is_some_and(|end| end <= PAGE_SIZE)
@@ -87,8 +90,9 @@ pub fn read(row: u32, offset: u32, buffer: &mut [u8]) -> bool {
     if size == 0 {
         return true;
     }
-
-    sync();
+    if !sync() {
+        return false;
+    }
 
     let mut nvm_address = (address / 2) as usize;
     let mut i: usize;
@@ -131,11 +135,12 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
         Some(address) => address,
         None => return false,
     };
-    if !valid_page_write(address, size) || size == 0 {
+    if !valid_page_write(address, size) {
         return false;
     }
-
-    sync();
+    if !sync() {
+        return false;
+    }
 
     // Issue a page buffer clear command.
     // SAFETY: writing valid CTRLA command values.
@@ -145,7 +150,9 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
             w.cmdex().bits(0xA5)
         });
     }
-    sync();
+    if !sync() {
+        return false;
+    }
 
     let mut nvm_address = (address / 2) as usize;
     // SAFETY: writing to the NVM memory array and CTRLA is safe.
@@ -166,7 +173,9 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
             w.cmdex().bits(0xA5)
         });
     }
-    sync();
+    if !sync() {
+        return false;
+    }
 
     // Write-verify: read back the data and confirm it matches. If it does
     // not, the write failed (e.g. the row was not erased) and we report it.
@@ -191,7 +200,9 @@ pub fn erase(row: u32) -> bool {
         return false;
     }
 
-    sync();
+    if !sync() {
+        return false;
+    }
 
     // SAFETY: writing valid ADDR/CTRLA command values.
     unsafe {
@@ -202,7 +213,7 @@ pub fn erase(row: u32) -> bool {
         });
     }
 
-    true
+    sync()
 }
 
 /// Waits for any pending writes to complete.
@@ -293,7 +304,11 @@ pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
         let row = (last + WEAR_ROWS - i - 1) % WEAR_ROWS;
         let mut header = [0u8; 4];
         if read(row, 0, &mut header) && u32::from_le_bytes(header) == WEAR_MAGIC {
-            return read(row, offset + 4, buffer);
+            let data_offset = match offset.checked_add(4) {
+                Some(offset) => offset,
+                None => return false,
+            };
+            return read(row, data_offset, buffer);
         }
     }
     false

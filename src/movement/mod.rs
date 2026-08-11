@@ -947,6 +947,9 @@ pub fn play_signal() {
 ///
 /// A lower-priority note does not interrupt a higher-priority one.
 pub fn play_note(note: BuzzerNote, priority: u8) {
+    if note == BuzzerNote::Rest {
+        return;
+    }
     if crate::movement::fault::in_safe_state() {
         return;
     }
@@ -961,7 +964,11 @@ pub fn play_note(note: BuzzerNote, priority: u8) {
             _ => BuzzerPriority::Alarm,
         };
     }
-    let _ = buzzer::set_buzzer_period(crate::watch::buzzer::NOTE_PERIODS[note as usize] as u32);
+    if buzzer::set_buzzer_period(crate::watch::buzzer::NOTE_PERIODS[note as usize] as u32).is_err()
+    {
+        buzzer::set_buzzer_off();
+        return;
+    }
     buzzer::set_buzzer_on();
 }
 

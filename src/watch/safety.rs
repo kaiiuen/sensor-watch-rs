@@ -21,8 +21,10 @@ pub const fn valid_pin(port: u8, pin: u8) -> bool {
 pub const fn valid_pmux(value: u8) -> bool {
     value <= 7
 }
+/// Returns whether an address is usable for a normal 7-bit I2C target.
+/// The ranges reserved by the I2C specification are rejected.
 pub const fn valid_i2c_address(value: i16) -> bool {
-    value >= 0 && value <= 0x7f
+    value >= 0x08 && value <= 0x77
 }
 
 pub const fn is_leap_year(year: u16) -> bool {
@@ -47,4 +49,28 @@ pub const fn valid_datetime(
         _ => 31,
     };
     day >= 1 && day <= max
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reject_reserved_i2c_addresses() {
+        assert!(!valid_i2c_address(0x00));
+        assert!(!valid_i2c_address(0x07));
+        assert!(valid_i2c_address(0x08));
+        assert!(valid_i2c_address(0x77));
+        assert!(!valid_i2c_address(0x78));
+        assert!(!valid_i2c_address(0x7f));
+    }
+
+    #[test]
+    fn validate_display_and_calendar_boundaries() {
+        assert!(valid_display_position(9));
+        assert!(!valid_display_position(10));
+        assert!(valid_datetime(4, 2, 29, 23, 59, 59));
+        assert!(!valid_datetime(3, 2, 29, 0, 0, 0));
+        assert!(!valid_datetime(0, 4, 31, 0, 0, 0));
+    }
 }

@@ -67,7 +67,7 @@ fn valid_uart_pin(pin: Pin, tx: bool) -> bool {
 }
 
 fn valid_baud(baud: u32) -> bool {
-    (300..=250_000).contains(&baud)
+    (300..250_000).contains(&baud) && (65536u64 * 16 * baud as u64 / 4_000_000) < 65536
 }
 
 /// Returns a reference to the SERCOM3 USART register block.
@@ -122,6 +122,10 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
         usart().ctrla().write(|w| w.swrst().set_bit());
     }
     sync();
+    if !valid_baud(baud) {
+        disable_uart();
+        return;
+    }
 
     // Configure: USART mode (1), LSB-first (DORD), 8-bit chars.
     // SAFETY: writing valid CTRLA/CTRLB values.

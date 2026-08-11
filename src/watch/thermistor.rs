@@ -46,7 +46,7 @@ impl Thermistor {
             return Err(Error::Unavailable);
         }
         let raw = adc::get_analog_pin_level(PIN);
-        if raw == 0 || raw >= u16::MAX {
+        if raw == 0 || raw == u16::MAX {
             self.state = State::Unavailable;
             return Err(Error::OpenOrShort);
         }

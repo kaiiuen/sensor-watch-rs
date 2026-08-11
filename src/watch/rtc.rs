@@ -381,14 +381,18 @@ pub fn schedule_wakeup(callback: Callback, alarm_time: DateTime) {
 /// Schedules a wakeup a given number of seconds in the future.
 pub fn schedule_wakeup_in(callback: Callback, seconds: u32) {
     let now = get_date_time();
-    let mut target = now;
-    let mut s = now.second as u32 + seconds;
-    target.second = (s % 60) as u8;
-    s /= 60;
-    target.minute = (target.minute as u32 + s % 60) as u8;
-    s /= 60;
-    target.hour = (target.hour as u32 + s % 24) as u8;
-    schedule_wakeup(callback, target);
+    if !now.is_valid() {
+        return;
+    }
+    let timestamp = match crate::watch::utility::date_time_to_unix_time(now, 0).checked_add(seconds)
+    {
+        Some(timestamp) => timestamp,
+        None => return,
+    };
+    let target = crate::watch::utility::date_time_from_unix_time(timestamp, 0);
+    if target.is_valid() {
+        schedule_wakeup(callback, target);
+    }
 }
 
 /// The RTC interrupt handler.
@@ -405,7 +409,8 @@ pub extern "C" fn RTC() {
         // Handle the periodic (tick) callbacks, starting from the 1 Hz tick (PER7).
         for i in (0..8).rev() {
             if (interrupt_status & interrupt_enabled) & (1 << i) != 0 {
-                if let Some(cb) = unsafe { TICK_CALLBACKS[i] } {
+                let callback = critical_section::with(|_| unsafe { TICK_CALLBACKS[i] });
+                if let Some(cb) = callback {
                     cb();
                 }
                 // SAFETY: writing a valid interrupt-flag clear bitmask.
@@ -417,17 +422,20 @@ pub extern "C" fn RTC() {
         let reason = rtc().tampid().read().bits();
         if reason & 0x04 != 0 {
             // TAMPID2 = BTN_ALARM
-            if let Some(cb) = unsafe { BTN_ALARM_CALLBACK } {
+            let callback = critical_section::with(|_| unsafe { BTN_ALARM_CALLBACK });
+            if let Some(cb) = callback {
                 cb();
             }
         } else if reason & 0x02 != 0 {
             // TAMPID1 = A2
-            if let Some(cb) = unsafe { A2_CALLBACK } {
+            let callback = critical_section::with(|_| unsafe { A2_CALLBACK });
+            if let Some(cb) = callback {
                 cb();
             }
         } else if reason & 0x01 != 0 {
             // TAMPID0 = A4
-            if let Some(cb) = unsafe { A4_CALLBACK } {
+            let callback = critical_section::with(|_| unsafe { A4_CALLBACK });
+            if let Some(cb) = callback {
                 cb();
             }
         }
@@ -439,7 +447,8 @@ pub extern "C" fn RTC() {
         }
     } else if (interrupt_status & interrupt_enabled) & 0x0100 != 0 {
         // Alarm0.
-        if let Some(cb) = unsafe { ALARM_CALLBACK } {
+        let callback = critical_section::with(|_| unsafe { ALARM_CALLBACK });
+        if let Some(cb) = callback {
             cb();
         }
         // SAFETY: writing a valid interrupt-flag clear bitmask.

@@ -347,6 +347,9 @@ pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
 }
 
 fn validate_sequence(sequence: *const i8) -> bool {
+    if sequence.is_null() {
+        return false;
+    }
     for pair in 0..128usize {
         let note = unsafe { *sequence.add(pair * 2) };
         let duration = unsafe { *sequence.add(pair * 2 + 1) };
@@ -354,7 +357,8 @@ fn validate_sequence(sequence: *const i8) -> bool {
             return true;
         }
         if note < 0 {
-            if duration <= 0 {
+            let rewind = note.unsigned_abs() as usize;
+            if rewind == 0 || rewind > pair || duration <= 0 {
                 return false;
             }
         } else if note as usize >= NOTE_PERIODS.len() || duration <= 0 {

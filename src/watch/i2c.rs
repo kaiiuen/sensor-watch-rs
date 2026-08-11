@@ -21,7 +21,7 @@ const SDA: Pin = Pin(1, 30);
 const SCL: Pin = Pin(1, 31);
 
 fn valid_i2c_address(addr: i16) -> bool {
-    (0x08..=0x77).contains(&addr)
+    crate::watch::safety::valid_i2c_address(addr)
 }
 
 /// Returns a reference to the SERCOM1 I2C master register block.
@@ -212,6 +212,7 @@ pub fn write8_checked(addr: i16, reg: u8, data: u8) -> Result<(), I2cError> {
     unsafe { i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1)) };
     for byte in [reg, data] {
         if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+            recover_bus();
             return Err(I2cError::Timeout);
         }
         unsafe { i2cm().data().write(|w| w.bits(byte)) };
@@ -234,6 +235,7 @@ pub fn write16_checked(addr: i16, reg: u8, data: u16) -> Result<(), I2cError> {
     unsafe { i2cm().addr().write(|w| w.bits(((addr as u32) & 0x7F) << 1)) };
     for byte in [reg, (data >> 8) as u8, data as u8] {
         if wait_until(|| i2cm().intflag().read().mb().bit_is_set()).is_err() {
+            recover_bus();
             return Err(I2cError::Timeout);
         }
         unsafe { i2cm().data().write(|w| w.bits(byte)) };
