@@ -13,6 +13,29 @@ use super::presets::PresetManager;
 use super::theme::Theme;
 use super::watch_config::WatchConfig;
 
+/// Versioned, persistence-safe Studio representation of RTC calibration.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct RtcCalibrationSettings {
+    pub version: u8,
+    pub base_ppm: f32,
+    pub temperature_coefficient_ppm_per_c: f32,
+    pub reference_temperature_c: f32,
+}
+
+impl Default for RtcCalibrationSettings {
+    fn default() -> Self { Self { version: 0, base_ppm: 0.0, temperature_coefficient_ppm_per_c: 0.0, reference_temperature_c: 25.0 } }
+}
+
+impl RtcCalibrationSettings {
+    pub fn enabled(&self) -> bool { self.version == sensor_watch_core::rtc_calibration::CALIBRATION_VERSION }
+    pub fn clamp_values(&mut self) {
+        let c = sensor_watch_core::rtc_calibration::RtcCalibration::new(self.base_ppm, self.temperature_coefficient_ppm_per_c, self.reference_temperature_c);
+        self.base_ppm = c.base_ppm; self.temperature_coefficient_ppm_per_c = c.temperature_coefficient_ppm_per_c; self.reference_temperature_c = c.reference_temperature_c;
+        if self.enabled() { self.version = sensor_watch_core::rtc_calibration::CALIBRATION_VERSION; }
+    }
+}
+
 /// The serializable app configuration.
 ///
 /// Every field carries a `#[serde(default)]` so that a JSON file from an older
@@ -57,6 +80,9 @@ pub struct AppSettings {
     /// sessions so the user can recall the calibration without re-measuring.
     #[serde(default)]
     pub drift_ppm: f64,
+    /// Optional temperature-compensated RTC calibration. Version 0 is disabled.
+    #[serde(default)]
+    pub rtc_calibration: RtcCalibrationSettings,
     /// The maximum number of lines kept in each output/terminal/debug log.
     /// Oldest lines are dropped past this so the logs never grow without bound.
     #[serde(default = "default_line_limit")]
@@ -87,6 +113,7 @@ impl AppSettings {
         output_dir: String,
         first_run: bool,
         drift_ppm: f64,
+        rtc_calibration: &RtcCalibrationSettings,
         line_limit: usize,
         component_profiles: &[BuildProfile],
         active_component_profile: usize,
@@ -107,6 +134,7 @@ impl AppSettings {
             output_dir,
             first_run,
             drift_ppm,
+            rtc_calibration: rtc_calibration.clone(),
             line_limit,
             component_profiles: component_profiles.to_vec(),
             active_component_profile,
@@ -125,6 +153,14 @@ impl AppSettings {
         }
         if !self.drift_ppm.is_finite() || self.drift_ppm.abs() > 1000.0 {
             return Err("drift correction must be finite and within +/-1000 ppm".into());
+        }
+        let mut calibration = self.rtc_calibration.clone();
+        calibration.clamp_values();
+        if calibration.enabled() != (self.rtc_calibration.version == sensor_watch_core::rtc_calibration::CALIBRATION_VERSION)
+            || calibration.base_ppm != self.rtc_calibration.base_ppm
+            || calibration.temperature_coefficient_ppm_per_c != self.rtc_calibration.temperature_coefficient_ppm_per_c
+            || calibration.reference_temperature_c != self.rtc_calibration.reference_temperature_c {
+            return Err("RTC calibration contains out-of-range values".into());
         }
         if self.line_limit == 0 || self.line_limit > 10_000 {
             return Err("line limit must be between 1 and 10000".into());
@@ -169,6 +205,7 @@ impl Default for AppSettings {
             output_dir: default_output_dir(),
             first_run: false,
             drift_ppm: 0.0,
+            rtc_calibration: RtcCalibrationSettings::default(),
             line_limit: default_line_limit(),
             component_profiles: Vec::new(),
             active_component_profile: 0,

@@ -6,5 +6,6 @@ description = "Pure logic for the Sensor-Watch firmware, host-testable"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+libm = "0.2"
 
 [dev-dependencies]
