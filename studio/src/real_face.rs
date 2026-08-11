@@ -375,15 +375,35 @@ impl RealFace {
         hour: u32,
         minute: u32,
         second: u32,
-    ) {
+    ) -> bool {
+        let reference_year = sensor_watch_core::datetime::WATCH_RTC_REFERENCE_YEAR as u32;
+        let max_year = reference_year + 63;
+        let days_in_month = match month {
+            1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+            4 | 6 | 9 | 11 => 30,
+            2 if year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) => 29,
+            2 => 28,
+            _ => 0,
+        };
+        if !(reference_year..=max_year).contains(&year)
+            || !(1..=12).contains(&month)
+            || !(1..=days_in_month).contains(&day)
+            || hour >= 24
+            || minute >= 60
+            || second >= 60
+        {
+            return false;
+        }
+
         self.mock.now = DateTime {
             second: second as u8,
             minute: minute as u8,
             hour: hour as u8,
             day: day as u8,
             month: month as u8,
-            year: (year - sensor_watch_core::datetime::WATCH_RTC_REFERENCE_YEAR as u32) as u8,
+            year: (year - reference_year) as u8,
         };
+        true
     }
 
     /// Ready the face the way the firmware does at power-up: tell the face it's
@@ -665,8 +685,11 @@ impl RealFace {
     pub fn new(_face_name: &str) -> Option<RealFace> {
         None
     }
-    pub fn set_time(&mut self, _y: u32, _mo: u32, _d: u32, _h: u32, _mi: u32, _s: u32) {}
+    pub fn set_time(&mut self, _y: u32, _mo: u32, _d: u32, _h: u32, _mi: u32, _s: u32) -> bool {
+        false
+    }
     pub fn activate(&mut self, _time_mode_24: bool) {}
+    pub fn tick(&mut self) {}
     pub fn press(&mut self, _light: bool, _alarm: bool) {}
     pub fn snapshot(&self) -> RealFaceSnapshot {
         RealFaceSnapshot::default()
@@ -718,7 +741,9 @@ pub fn render_real_face(
     press_alarm: bool,
 ) -> Option<RealFaceSnapshot> {
     let mut face = RealFace::new(face_name)?;
-    face.set_time(year, month, day, hour, minute, second);
+    if !face.set_time(year, month, day, hour, minute, second) {
+        return None;
+    }
     face.activate(time_mode_24);
     face.press(press_light, press_alarm);
     Some(face.snapshot())
@@ -794,6 +819,48 @@ mod tests {
             false
         )
         .is_none());
+    }
+
+    #[test]
+    fn real_faces_can_switch_and_recreate() {
+        let mut first = RealFace::new("SIMPLE_CLOCK").expect("first face");
+        first.set_time(2023, 1, 6, 15, 4, 0);
+        first.activate(true);
+        drop(first);
+
+        let mut second = RealFace::new("ALARM").expect("second face");
+        assert_eq!(second.face_name(), "ALARM");
+        assert!(second.set_time(2023, 1, 6, 15, 4, 0));
+        second.activate(true);
+        drop(second);
+
+        assert!(RealFace::new("SIMPLE_CLOCK").is_some());
+    }
+
+    #[test]
+    fn repeated_ticks_keep_the_face_alive() {
+        let mut face = RealFace::new("SIMPLE_CLOCK").expect("face");
+        assert!(face.set_time(2023, 1, 6, 15, 4, 0));
+        face.activate(true);
+        let before = face.snapshot();
+        face.tick();
+        let after_one = face.snapshot();
+        face.tick();
+        let after_two = face.snapshot();
+        assert!(before.colon || after_one.colon || after_two.colon);
+    }
+
+    #[test]
+    fn invalid_dates_are_rejected_without_wrapping() {
+        let mut face = RealFace::new("SIMPLE_CLOCK").expect("face");
+        assert!(!face.set_time(2019, 1, 1, 0, 0, 0));
+        assert!(!face.set_time(2084, 1, 1, 0, 0, 0));
+        assert!(!face.set_time(2023, 0, 1, 0, 0, 0));
+        assert!(!face.set_time(2023, 13, 1, 0, 0, 0));
+        assert!(!face.set_time(2023, 2, 29, 0, 0, 0));
+        assert!(!face.set_time(2023, 1, 32, 0, 0, 0));
+        assert!(!face.set_time(2023, 1, 1, 24, 0, 0));
+        assert!(face.set_time(2024, 2, 29, 23, 59, 59));
     }
 
     #[test]
