@@ -5884,17 +5884,41 @@ impl StudioApp {
         }
     }
 
-    /// Rough estimate of the firmware RAM usage in KB for the selected faces.
+    /// Estimate of the firmware RAM usage in KB for the selected faces.
     /// The OS baseline is ~4 KB; each face adds ~0.4 KB.
     fn estimate_ram_kb(&self, selected: usize) -> u32 {
         4 + (selected as u32) / 2
     }
 
-    /// Rough estimate of the compiled .uf2 size in KB for the selected faces.
+    /// Estimate of the compiled .uf2 size in KB for the selected faces.
     fn estimate_compiled_kb(&self, selected: usize) -> u32 {
         // UF2 adds ~512-byte headers; estimate flash + 10% overhead.
         self.estimate_flash_kb(selected) + self.estimate_flash_kb(selected) / 10
     }
+}
+
+/// Measures regular files below a directory without entering unrelated paths.
+/// Returns `None` when the directory is absent or cannot be read.
+fn measure_directory(root: &std::path::Path) -> Option<(usize, u64)> {
+    if !root.is_dir() {
+        return None;
+    }
+    let mut files = 0usize;
+    let mut bytes = 0u64;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+            } else if let Ok(metadata) = entry.metadata() {
+                files += 1;
+                bytes = bytes.saturating_add(metadata.len());
+            }
+        }
+    }
+    Some((files, bytes))
 }
 
 /// Counts the source files, lines, characters, and bytes in the project's Rust
