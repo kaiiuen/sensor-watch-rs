@@ -287,19 +287,26 @@ static mut COMP_CALLBACKS: [CompCallback; N_COMP_CB] = [const {
 /// Arms the earliest pending compare callback via the one-shot alarm.
 fn schedule_next_compare() {
     unsafe {
-        let now = get_date_time().to_reg();
-        let mut earliest: Option<u32> = None;
+        let now = get_date_time();
+        let now_timestamp = crate::watch::utility::date_time_to_unix_time(now, 0);
+        let mut earliest: Option<(u32, u32)> = None;
         for slot in COMP_CALLBACKS.iter() {
-            if slot.enabled
-                && slot.target >= now
-                && (earliest.is_none() || slot.target < earliest.unwrap())
+            if !slot.enabled {
+                continue;
+            }
+            let target = DateTime::from_reg(slot.target);
+            if !target.is_valid() {
+                continue;
+            }
+            let target_timestamp = crate::watch::utility::date_time_to_unix_time(target, 0);
+            if target_timestamp >= now_timestamp
+                && (earliest.is_none() || target_timestamp < earliest.unwrap().0)
             {
-                earliest = Some(slot.target);
+                earliest = Some((target_timestamp, slot.target));
             }
         }
-        if let Some(target) = earliest {
-            let dt = DateTime::from_reg(target);
-            schedule_wakeup(compare_tick, dt);
+        if let Some((_, target)) = earliest {
+            schedule_wakeup(compare_tick, DateTime::from_reg(target));
         }
     }
 }
@@ -355,9 +362,16 @@ pub fn disable_comp_callback_no_schedule(index: usize) {
 /// Called from the one-shot alarm that armed the earliest slot.
 fn compare_tick() {
     unsafe {
-        let now = get_date_time().to_reg();
+        let now = get_date_time();
+        let now_timestamp = crate::watch::utility::date_time_to_unix_time(now, 0);
         for slot in COMP_CALLBACKS.iter_mut() {
-            if slot.enabled && slot.target <= now {
+            let target = DateTime::from_reg(slot.target);
+            let target_timestamp = if target.is_valid() {
+                crate::watch::utility::date_time_to_unix_time(target, 0)
+            } else {
+                u32::MAX
+            };
+            if slot.enabled && target_timestamp <= now_timestamp {
                 slot.enabled = false;
                 if let Some(cb) = slot.callback {
                     cb();

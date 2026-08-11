@@ -29,7 +29,10 @@
 //! binary `src/main.rs`; nothing here installs a main/entry, so this lib can link
 //! into a host test harness.
 
-#![cfg_attr(not(feature = "std"), no_std)]
+#![cfg_attr(
+    all(not(feature = "std"), any(target_arch = "arm", feature = "hostmock")),
+    no_std
+)]
 // Host + ARM both keep this lib target warning-free; the HAL exposes a broad API
 // surface not all of which is reachable from the lib.
 #![allow(dead_code)]

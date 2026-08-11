@@ -744,8 +744,37 @@ static mut FACE_RETAIN: [&dyn WatchFace; MOVEMENT_NUM_FACES] = [
 /// Scheduled background tasks per face (packed RTC time).
 pub static mut SCHEDULED_TASKS: [u32; MOVEMENT_NUM_FACES] = [0; MOVEMENT_NUM_FACES];
 
-/// The pending event that woke the CPU.
-pub static mut PENDING_EVENT: Event = Event::Tick;
+/// Bounded interrupt-to-main event FIFO. Events are retained in arrival order so
+/// a button/tap cannot be lost when another interrupt runs before the main loop.
+const EVENT_QUEUE_CAPACITY: usize = 8;
+static mut EVENT_QUEUE: [Option<Event>; EVENT_QUEUE_CAPACITY] = [None; EVENT_QUEUE_CAPACITY];
+static mut EVENT_QUEUE_HEAD: usize = 0;
+static mut EVENT_QUEUE_LEN: usize = 0;
+
+fn post_event(event: Event) {
+    critical_section::with(|_| unsafe {
+        if EVENT_QUEUE_LEN == EVENT_QUEUE_CAPACITY {
+            // Keep the newest input rather than replaying stale UI events.
+            EVENT_QUEUE_HEAD = (EVENT_QUEUE_HEAD + 1) % EVENT_QUEUE_CAPACITY;
+            EVENT_QUEUE_LEN -= 1;
+        }
+        let index = (EVENT_QUEUE_HEAD + EVENT_QUEUE_LEN) % EVENT_QUEUE_CAPACITY;
+        EVENT_QUEUE[index] = Some(event);
+        EVENT_QUEUE_LEN += 1;
+    });
+}
+
+fn take_event() -> Event {
+    critical_section::with(|_| unsafe {
+        if EVENT_QUEUE_LEN == 0 {
+            return Event::Tick;
+        }
+        let event = EVENT_QUEUE[EVENT_QUEUE_HEAD].take().unwrap_or(Event::Tick);
+        EVENT_QUEUE_HEAD = (EVENT_QUEUE_HEAD + 1) % EVENT_QUEUE_CAPACITY;
+        EVENT_QUEUE_LEN -= 1;
+        event
+    })
+}
 
 /// A fast-tick counter (128 Hz) used for long-press detection.
 pub static mut FAST_TICKS: u16 = 0;
@@ -1331,9 +1360,7 @@ pub fn disable_timeout(index: TimeoutIndex) {
 fn compare_timeout_dispatcher() {
     // The RTC compare queue already fired the slot's callback; map it to an
     // event. All indexed timeouts converge to a generic wakeup.
-    unsafe {
-        PENDING_EVENT = Event::BackgroundTask;
-    }
+    post_event(Event::BackgroundTask);
 }
 
 /// Stores the current settings to flash.
@@ -1450,9 +1477,9 @@ pub fn disable_tap_detection_if_available() -> bool {
 pub fn handle_accelerometer_event() {
     let int_src = watch::lis2dw::get_interrupt_source();
     if int_src & watch::lis2dw::INTERRUPT_SRC_DOUBLE_TAP != 0 {
-        unsafe { PENDING_EVENT = Event::DoubleTap };
+        post_event(Event::DoubleTap);
     } else if int_src & watch::lis2dw::INTERRUPT_SRC_SINGLE_TAP != 0 {
-        unsafe { PENDING_EVENT = Event::SingleTap };
+        post_event(Event::SingleTap);
     }
 }
 
@@ -1544,11 +1571,9 @@ fn arm_minute_wake() {
 /// The recurring minute tick: advances the clock and re-arms for the next
 /// minute.
 pub fn cb_minute_tick() {
-    unsafe {
-        PENDING_EVENT = Event::Tick;
-        fault::check_heartbeat();
-        arm_minute_wake();
-    }
+    fault::check_heartbeat();
+    post_event(Event::Tick);
+    arm_minute_wake();
 }
 
 /// App setup: called when entering the foreground.
@@ -1761,7 +1786,7 @@ pub fn app_loop() {
         }
 
         // React to the single pending event.
-        let event = PENDING_EVENT;
+        let event = take_event();
         if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
         }
@@ -1776,8 +1801,7 @@ pub fn app_loop() {
         // on to drain the battery while the CPU sleeps.
         release_peripherals();
 
-        // After reacting, always return to STANDBY. The CPU never stays awake.
-        PENDING_EVENT = Event::Tick;
+        // Events posted during dispatch remain queued for the next wake.
     }
 }
 
@@ -1802,54 +1826,48 @@ fn release_peripherals() {
 // --- Interrupt callbacks ---
 
 fn cb_light_btn_interrupt() {
-    unsafe {
-        // Any button edge wakes the CPU; resume the fast tick so long-press
-        // and debounce sampling run while the user is interacting.
-        resume_fast_tick();
-        // The 128 Hz fast tick samples the button pins and feeds the debouncer
-        // continuously (see cb_fast_tick), so a clean press is detected even
-        // without multiple edges. This edge interrupt wakes the CPU and runs an
-        // immediate sample so the response feels immediate.
-        if let Some(ev) = debounce::update(
-            Button::Light,
-            watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
-        ) {
-            if is_press(&ev) {
-                stats::press_light();
-                crate::movement::fault::ping_fault_on_light();
-            }
-            PENDING_EVENT = ev;
+    // Any button edge wakes the CPU; resume the fast tick so long-press
+    // and debounce sampling run while the user is interacting.
+    resume_fast_tick();
+    // The 128 Hz fast tick samples the button pins and feeds the debouncer
+    // continuously (see cb_fast_tick), so a clean press is detected even
+    // without multiple edges. This edge interrupt wakes the CPU and runs an
+    // immediate sample so the response feels immediate.
+    if let Some(ev) = debounce::update(
+        Button::Light,
+        watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
+    ) {
+        if is_press(&ev) {
+            stats::press_light();
+            crate::movement::fault::ping_fault_on_light();
         }
+        post_event(ev);
     }
 }
 
 fn cb_mode_btn_interrupt() {
-    unsafe {
-        resume_fast_tick();
-        if let Some(ev) = debounce::update(
-            Button::Mode,
-            watch::gpio::get_pin_level(watch::extint::BTN_MODE),
-        ) {
-            if is_press(&ev) {
-                stats::press_mode();
-            }
-            PENDING_EVENT = ev;
+    resume_fast_tick();
+    if let Some(ev) = debounce::update(
+        Button::Mode,
+        watch::gpio::get_pin_level(watch::extint::BTN_MODE),
+    ) {
+        if is_press(&ev) {
+            stats::press_mode();
         }
+        post_event(ev);
     }
 }
 
 fn cb_alarm_btn_interrupt() {
-    unsafe {
-        resume_fast_tick();
-        if let Some(ev) = debounce::update(
-            Button::Alarm,
-            watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
-        ) {
-            if is_press(&ev) {
-                stats::press_alarm();
-            }
-            PENDING_EVENT = ev;
+    resume_fast_tick();
+    if let Some(ev) = debounce::update(
+        Button::Alarm,
+        watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
+    ) {
+        if is_press(&ev) {
+            stats::press_alarm();
         }
+        post_event(ev);
     }
 }
 
@@ -1858,17 +1876,15 @@ fn cb_alarm_fired() {
         // Ask the main loop to run the per-minute all-face background pass in
         // main context, and wake with a background event for the active face.
         RUN_BACKGROUND_TASKS = true;
-        PENDING_EVENT = Event::BackgroundTask;
+        post_event(Event::BackgroundTask);
     }
 }
 
 /// The 1 Hz tick callback: wakes the CPU to render the current face.
 pub fn cb_tick() {
-    unsafe {
-        // Monitor the RTC heartbeat (detect a frozen clock).
-        fault::check_heartbeat();
-        PENDING_EVENT = Event::Tick;
-    }
+    // Monitor the RTC heartbeat (detect a frozen clock).
+    fault::check_heartbeat();
+    post_event(Event::Tick);
 }
 
 /// The 128 Hz fast tick: tracks time for long-press detection.
@@ -1882,7 +1898,7 @@ pub fn cb_fast_tick() {
         sample_buttons();
         for button in [Button::Light, Button::Mode, Button::Alarm] {
             if let Some(ev) = debounce::check_long_press(button, FAST_TICKS) {
-                PENDING_EVENT = ev;
+                post_event(ev);
                 resume_fast_tick();
             }
         }
@@ -1928,35 +1944,33 @@ pub fn suspend_fast_tick() {
 
 /// Reads the current button levels and feeds them to the debouncer.
 fn sample_buttons() {
-    unsafe {
-        if let Some(ev) = debounce::update(
-            Button::Light,
-            watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
-        ) {
-            if is_press(&ev) {
-                stats::press_light();
-                crate::movement::fault::ping_fault_on_light();
-            }
-            PENDING_EVENT = ev;
+    if let Some(ev) = debounce::update(
+        Button::Light,
+        watch::gpio::get_pin_level(watch::extint::BTN_LIGHT),
+    ) {
+        if is_press(&ev) {
+            stats::press_light();
+            crate::movement::fault::ping_fault_on_light();
         }
-        if let Some(ev) = debounce::update(
-            Button::Mode,
-            watch::gpio::get_pin_level(watch::extint::BTN_MODE),
-        ) {
-            if is_press(&ev) {
-                stats::press_mode();
-            }
-            PENDING_EVENT = ev;
+        post_event(ev);
+    }
+    if let Some(ev) = debounce::update(
+        Button::Mode,
+        watch::gpio::get_pin_level(watch::extint::BTN_MODE),
+    ) {
+        if is_press(&ev) {
+            stats::press_mode();
         }
-        if let Some(ev) = debounce::update(
-            Button::Alarm,
-            watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
-        ) {
-            if is_press(&ev) {
-                stats::press_alarm();
-            }
-            PENDING_EVENT = ev;
+        post_event(ev);
+    }
+    if let Some(ev) = debounce::update(
+        Button::Alarm,
+        watch::gpio::get_pin_level(watch::extint::BTN_ALARM),
+    ) {
+        if is_press(&ev) {
+            stats::press_alarm();
         }
+        post_event(ev);
     }
 }
 
