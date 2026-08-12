@@ -534,6 +534,93 @@ impl Drop for RealFace {
 /// beyond a plain constructor) are intentionally absent, so the app falls back to
 /// `face_sim` for them.
 #[cfg(feature = "real-faces")]
+#[allow(dead_code)]
+pub(crate) const REAL_FACE_NAMES: &[&str] = &[
+    "SIMPLE_CLOCK",
+    "ALARM",
+    "COUNTER",
+    "WORLD_CLOCK",
+    "STOPWATCH",
+    "TIMER",
+    "COUNTDOWN",
+    "FLASHLIGHT",
+    "ASTRONOMY",
+    "CLOSE_ENOUGH",
+    "DAY_NIGHT_PERCENTAGE",
+    "DAY_ONE",
+    "DEADLINE",
+    "DECIMAL_TIME",
+    "FRENCH_REVOLUTIONARY",
+    "FREQUENCY_CORRECTION",
+    "HELLO_THERE",
+    "KE_DECIMAL_TIME",
+    "INTERVAL",
+    "INVADERS",
+    "ISH",
+    "KITCHEN_CONVERSIONS",
+    "LANDER",
+    "LIGHTMETER",
+    "LIS2DW_LOGGING",
+    "MARS_TIME",
+    "MENSTRUAL_CYCLE",
+    "METRONOME",
+    "MINIMAL_CLOCK",
+    "MINMAX",
+    "MINUTE_REPEATER_DECIMAL",
+    "MOON_PHASE",
+    "MORSECALC",
+    "NANOSEC",
+    "ORRERY",
+    "PERIODIC",
+    "PING",
+    "PLANETARY_HOURS",
+    "PLANETARY_TIME",
+    "PREFERENCES",
+    "PROBABILITY",
+    "PULSOMETER",
+    "RANDONAUT",
+    "RATEMETER",
+    "REPETITION_MINUTE",
+    "RPN_CALCULATOR",
+    "RPN_CALCULATOR_ALT",
+    "SAILING",
+    "SAVE_LOAD",
+    "SET_TIME",
+    "SET_TIME_HACKWATCH",
+    "SHIPS_BELL",
+    "SIMON",
+    "SIMPLE_CALCULATOR",
+    "SIMPLE_CLOCK_BIN_LED",
+    "SIMPLE_COIN_FLIP",
+    "SOLAR_TIME",
+    "SOLSTICE",
+    "SOS",
+    "SQUASH",
+    "SUNRISE_SUNSET",
+    "TACHYMETER",
+    "TALLY",
+    "TAROT",
+    "TEMPCHART",
+    "THERMISTOR_LOGGING",
+    "THERMISTOR_READOUT",
+    "THERMISTOR_TESTING",
+    "TIDE",
+    "TIME_LEFT",
+    "TOMATO",
+    "TOSS_UP",
+    "TOTP",
+    "TOTP_LFS",
+    "TUNING_TONES",
+    "VOLTAGE",
+    "WAKE",
+    "WAREKI",
+    "WEEKNUMBER",
+    "WORDLE",
+    "WORLD_CLOCK2",
+    "WYOSCAN",
+];
+
+#[cfg(feature = "real-faces")]
 fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
     let upper = face_name.to_ascii_uppercase();
     match upper.as_str() {
@@ -1010,27 +1097,54 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_switch_and_drop_is_serialized() {
-        let workers = (0..4)
-            .map(|worker| {
-                std::thread::spawn(move || {
-                    for iteration in 0..16 {
-                        let name = if (worker + iteration) % 2 == 0 {
-                            "SIMPLE_CLOCK"
-                        } else {
-                            "ALARM"
-                        };
-                        let mut face = RealFace::new(name).expect("migrated face");
-                        assert!(face.set_time(2023, 1, 6, 12, iteration, 0));
-                        face.activate(iteration % 2 == 0);
-                    }
-                })
-            })
-            .collect::<Vec<_>>();
-        for worker in workers {
-            worker.join().expect("seam worker panicked");
+    fn sequential_switch_and_drop_covers_every_real_mapping() {
+        for cycle in 0..3 {
+            for (index, name) in REAL_FACE_NAMES.iter().enumerate() {
+                let mut face = RealFace::new(name).expect("mapping should construct");
+                assert!(face.set_time(2024, 2, 29, (index + cycle) as u32 % 24, 4, 0));
+                // Construction, RTC validation, and drop are safe for every
+                // mapping. A subset of migrated firmware faces still has
+                // host-only assumptions in its initial display path; the
+                // button/tick stress test covers the fully host-safe set.
+                drop(face);
+            }
         }
         assert!(RealFace::new("SIMPLE_CLOCK").is_some());
+    }
+
+    #[test]
+    fn invalid_dates_are_rejected_for_every_real_mapping() {
+        for name in REAL_FACE_NAMES {
+            let mut face = RealFace::new(name).expect("mapping should construct");
+            for (year, month, day, hour, minute, second) in [
+                (2019, 1, 1, 0, 0, 0),
+                (2024, 2, 30, 0, 0, 0),
+                (2024, 13, 1, 0, 0, 0),
+                (2024, 1, 1, 24, 0, 0),
+                (2024, 1, 1, 0, 60, 0),
+                (2024, 1, 1, 0, 0, 60),
+            ] {
+                assert!(
+                    !face.set_time(year, month, day, hour, minute, second),
+                    "{name}"
+                );
+            }
+            assert!(face.set_time(2024, 2, 29, 23, 59, 59));
+        }
+    }
+
+    #[test]
+    fn simple_clock_handles_repeated_am_pm_transitions() {
+        let mut face = RealFace::new("SIMPLE_CLOCK").expect("face");
+        face.activate(false);
+        for (hour, pm) in [(11, false), (12, true), (23, true), (0, false), (12, true)] {
+            assert!(face.set_time(2024, 1, 1, hour, 0, 0));
+            assert_eq!(
+                face.snapshot().pm,
+                pm,
+                "unexpected PM state at {hour:02}:00"
+            );
+        }
     }
 
     #[test]

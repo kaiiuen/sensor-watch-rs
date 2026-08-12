@@ -42,7 +42,10 @@ impl FaceDisplay {
     /// Sets the characters from a string, starting at `pos`, blanking the rest.
     pub fn set_string(&mut self, s: &str, pos: usize) {
         self.chars = [' '; 10];
-        for (i, c) in s.chars().take(10 - pos).enumerate() {
+        if pos >= self.chars.len() {
+            return;
+        }
+        for (i, c) in s.chars().take(self.chars.len() - pos).enumerate() {
             self.chars[pos + i] = c;
         }
     }
@@ -735,6 +738,30 @@ mod tests {
             second: 0,
             weekday: 1,
         }
+    }
+
+    #[test]
+    fn set_string_at_display_end_is_safe() {
+        let mut display = FaceDisplay::default();
+        display.set_string("X", 10);
+        assert_eq!(display.chars, [' '; 10]);
+    }
+
+    #[test]
+    fn set_string_past_display_end_is_safe() {
+        let mut display = FaceDisplay::default();
+        display.set_string("X", usize::MAX);
+        assert_eq!(display.chars, [' '; 10]);
+    }
+
+    #[test]
+    fn set_string_truncates_at_display_end() {
+        let mut display = FaceDisplay::default();
+        display.set_string("ABCDE", 8);
+        assert_eq!(
+            display.chars,
+            [' ', ' ', ' ', ' ', ' ', ' ', ' ', ' ', 'A', 'B']
+        );
     }
 
     #[test]

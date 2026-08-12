@@ -155,11 +155,14 @@ impl CasioF91W {
         // Normal time display.
         let t = self.now();
         let (weekday, day, hours, minutes, seconds) = self.date_time_parts(t);
+        let is_pm = hours >= 12;
         let hours = self.display_hour(hours);
 
         d.dots = true;
         d.time_mode_24 = self.time_mode == TimeMode::H24;
-        d.time_mode_12 = self.time_mode == TimeMode::H12;
+        // The F-91W's physical 12-hour marker is the PM indicator. It must
+        // remain off during AM even though the watch is in 12-hour mode.
+        d.time_mode_12 = self.time_mode == TimeMode::H12 && is_pm;
         d.mode_2 = weekday.chars().nth(0).unwrap_or(' ');
         d.mode_1 = weekday.chars().nth(1).unwrap_or(' ');
         d.day_2 = if day > 9 {
@@ -239,6 +242,36 @@ mod tests {
         assert_eq!(watch.display_hour(12), 12);
         assert_eq!(watch.display_hour(13), 1);
         assert_eq!(watch.display_hour(23), 11);
+    }
+
+    #[test]
+    fn twelve_hour_simulator_only_shows_pm_after_noon() {
+        let mut watch = CasioF91W::new();
+        watch.time_mode = TimeMode::H12;
+
+        watch.set_datetime(2025, 1, 1, 11, 30);
+        watch.update_display();
+        assert_eq!(watch.display.hour_2, '1');
+        assert_eq!(watch.display.hour_1, '1');
+        assert!(!watch.display.time_mode_12);
+
+        watch.set_datetime(2025, 1, 1, 12, 0);
+        watch.update_display();
+        assert_eq!(watch.display.hour_2, '1');
+        assert_eq!(watch.display.hour_1, '2');
+        assert!(watch.display.time_mode_12);
+
+        watch.set_datetime(2025, 1, 1, 0, 0);
+        watch.update_display();
+        assert_eq!(watch.display.hour_2, '1');
+        assert_eq!(watch.display.hour_1, '2');
+        assert!(!watch.display.time_mode_12);
+
+        watch.set_datetime(2025, 1, 1, 23, 0);
+        watch.update_display();
+        assert_eq!(watch.display.hour_2, '1');
+        assert_eq!(watch.display.hour_1, '1');
+        assert!(watch.display.time_mode_12);
     }
 }
 
