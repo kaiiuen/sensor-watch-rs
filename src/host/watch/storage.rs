@@ -54,7 +54,12 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
         return false;
     };
     let area = unsafe { &mut AREA };
-    area[start..end].copy_from_slice(buffer);
+    // Flash programming can only change a 1 bit to 0 until the row is erased.
+    // Mirroring that rule keeps host faces from passing tests that would fail on
+    // the SAM L22 NVM controller.
+    for (stored, &requested) in area[start..end].iter_mut().zip(buffer) {
+        *stored &= requested;
+    }
     true
 }
 
@@ -111,5 +116,15 @@ mod tests {
         assert!(read(31, 254, &mut readback));
         assert_eq!(readback, [1, 2]);
         assert!(!write(31, 255, &[1, 2]));
+    }
+
+    #[test]
+    fn flash_write_cannot_set_bits_without_erase() {
+        assert!(erase(30));
+        assert!(write(30, 0, &[0x0F]));
+        assert!(write(30, 0, &[0xF0]));
+        let mut readback = [0];
+        assert!(read(30, 0, &mut readback));
+        assert_eq!(readback, [0x00]);
     }
 }

@@ -4,8 +4,8 @@
 //! SAM L22's 8 kilobyte EEPROM emulation area (RWW EEPROM).
 
 use crate::watch::timeout::wait_until;
-use atsaml22j::nvmctrl::ctrla::Cmdselect;
 use atsaml22j::nvmctrl::RegisterBlock as Nvmctrl;
+use atsaml22j::nvmctrl::ctrla::Cmdselect;
 
 /// RWW EEPROM area constants.
 const RWWEE_ADDR_START: u32 = 0x0040_0000;
@@ -256,6 +256,30 @@ struct WearEntry {
     data_offset: u32,
 }
 
+/// Returns whether `candidate` is newer than `current` in serial-number space.
+/// This keeps the newest entry correct when the 32-bit generation wraps.
+fn generation_is_newer(candidate: u32, current: u32) -> bool {
+    candidate != current && candidate.wrapping_sub(current) < 0x8000_0000
+}
+
+/// Validates the complete entry before any destructive erase occurs.
+fn valid_wear_entry(offset: u32, len: usize) -> bool {
+    let data_offset = match offset.checked_add(WEAR_HEADER_SIZE) {
+        Some(offset) => offset,
+        None => return false,
+    };
+    let data_size = match u32::try_from(len) {
+        Ok(size) => size,
+        Err(_) => return false,
+    };
+    let base = RWWEE_ADDR_START;
+    let header_address = base;
+    let Some(data_address) = base.checked_add(data_offset) else {
+        return false;
+    };
+    valid_page_write(header_address, WEAR_HEADER_SIZE) && valid_page_write(data_address, data_size)
+}
+
 /// Finds the newest valid row and its format. Four-byte headers from older
 /// firmware are accepted as generation zero so an upgrade does not lose the
 /// last saved settings.
@@ -280,7 +304,7 @@ fn find_last_entry() -> Option<WearEntry> {
         } else {
             (0, 4)
         };
-        if newest.is_none_or(|entry: WearEntry| generation > entry.generation) {
+        if newest.is_none_or(|entry: WearEntry| generation_is_newer(generation, entry.generation)) {
             newest = Some(WearEntry {
                 row,
                 generation,
@@ -299,6 +323,12 @@ fn find_last_entry() -> Option<WearEntry> {
 /// recovered on boot by scanning for the valid magic, giving crash recovery
 /// without consuming a backup register.
 pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
+    // Validate both page writes before erasing the destination row. A malformed
+    // request must never destroy the previously committed entry.
+    if !valid_wear_entry(offset, buffer.len()) {
+        return false;
+    }
+
     // Recover the cursor before the first write after reset. Without this, a
     // reboot always erased row zero and could destroy the newest entry.
     let row = unsafe {
@@ -320,10 +350,7 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     if !write(row, 0, &header) {
         return false;
     }
-    let data_offset = match offset.checked_add(WEAR_HEADER_SIZE) {
-        Some(offset) => offset,
-        None => return false,
-    };
+    let data_offset = offset + WEAR_HEADER_SIZE;
     if !write(row, data_offset, buffer) {
         return false;
     }

@@ -249,16 +249,16 @@ pub fn get_vcc_voltage() -> u16 {
         });
     }
 
-    let samplenum = adc().avgctrl().read().samplenum().bits();
     // The battery rail is measured as a scaled internal reference against the
-    // decaying VDD line, so the raw value rises as the battery weakens. Apply
-    // the inverse scaling: V = 1.0 V * ADC_Max / ADC_Raw, then convert to mV.
+    // decaying VDD line, so the raw value rises as the battery weakens. The ADC
+    // is configured for 16-bit resolution; AVGCTRL's SAMPLENUM changes the
+    // averaging behavior, not the result's full-scale range.
     let raw = raw_val as u32;
     if raw == 0 {
         return 0;
     }
-    let max = 1024u32 * (1 << samplenum);
-    ((1000u32 * max) / raw) as u16
+    const ADC_FULL_SCALE: u32 = u16::MAX as u32;
+    ((1000u32 * ADC_FULL_SCALE) / raw) as u16
 }
 
 /// Disables the analog circuitry on the selected pin.
