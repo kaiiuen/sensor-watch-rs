@@ -127,8 +127,9 @@ impl SerialTransport {
 
     pub fn command(&mut self, command: &str) -> Result<String, TransportError> {
         let frame = encode_command(command)?;
-        write_all_with_timeout(&mut self.port, &frame, self.timeout)?;
-        read_frame(&mut self.port, self.timeout)
+        let timeout = self.timeout();
+        write_all_with_timeout(&mut self.port, &frame, timeout)?;
+        read_frame(&mut self.port, timeout)
     }
 }
 

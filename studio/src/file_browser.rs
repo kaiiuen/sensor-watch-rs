@@ -242,7 +242,16 @@ impl FileBrowser {
                         if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
                             continue;
                         }
-                        let label = format!("{} {}", if entry.is_dir { "📁" } else { "📄" }, name);
+                        let size = entry
+                            .size
+                            .map(|size| format!(" ({})", format_size(size)))
+                            .unwrap_or_default();
+                        let label = format!(
+                            "{} {}{}",
+                            if entry.is_dir { "📁" } else { "📄" },
+                            name,
+                            size
+                        );
                         if ui
                             .selectable_label(self.selected.as_ref() == Some(&entry.path), label)
                             .clicked()

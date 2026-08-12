@@ -17,6 +17,7 @@ impl AuthenticationHook for PreviewAuthentication {
     }
 }
 
+#[allow(dead_code)]
 pub fn preview_time_sync(sequence: u32, unix_seconds: u64) -> String {
     let mut payload = [0u8; 8];
     payload.copy_from_slice(&unix_seconds.to_be_bytes());

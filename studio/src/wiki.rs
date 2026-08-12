@@ -451,3 +451,53 @@ so it is only used by faces that opt in to motion sensing.",
 
     pages
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_declared_and_inline_link_targets_a_page() {
+        let wiki = Wiki::new();
+        for page in &wiki.pages {
+            for link in &page.links {
+                assert!(
+                    wiki.page(link).is_some(),
+                    "{} links to missing page {link}",
+                    page.title
+                );
+            }
+            let mut body = page.body.as_str();
+            while let Some(start) = body.find("[[") {
+                let target = &body[start + 2..];
+                let Some(end) = target.find("]]") else {
+                    panic!("unterminated link in {}", page.title)
+                };
+                let title = &target[..end];
+                assert!(
+                    wiki.page(title).is_some(),
+                    "{} links to missing page {title}",
+                    page.title
+                );
+                body = &target[end + 2..];
+            }
+        }
+    }
+
+    #[test]
+    fn navigation_ignores_unknown_pages_and_backtracks_in_order() {
+        let mut wiki = Wiki::new();
+        wiki.navigate("not a page");
+        assert_eq!(wiki.current, "Wiki Home");
+        assert!(wiki.history.is_empty());
+
+        wiki.navigate("UF2");
+        wiki.navigate("Bootloader");
+        assert_eq!(wiki.history, vec!["Wiki Home", "UF2"]);
+        wiki.back();
+        assert_eq!(wiki.current, "UF2");
+        wiki.back();
+        assert_eq!(wiki.current, "Wiki Home");
+        assert!(wiki.history.is_empty());
+    }
+}

@@ -118,6 +118,7 @@ impl BlockEditor {
         self.blocks_ui(ui, rust_source);
     }
 
+    #[allow(dead_code)]
     pub fn show(&mut self, ui: &mut egui::Ui, rust_source: &mut String) {
         ui.heading("Editor");
         ui.label("Blocks are a safe starter subset, not the complete firmware API.");

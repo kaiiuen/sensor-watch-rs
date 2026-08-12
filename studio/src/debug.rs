@@ -134,3 +134,36 @@ impl Default for DebugLog {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_limit_drops_oldest_entries_and_never_allows_zero() {
+        let mut log = DebugLog::new();
+        log.set_limit(3);
+        for message in ["one", "two", "three", "four"] {
+            log.log(message);
+        }
+        assert_eq!(
+            log.entries()
+                .iter()
+                .map(|entry| entry.message.as_str())
+                .collect::<Vec<_>>(),
+            ["two", "three", "four"]
+        );
+
+        log.set_limit(0);
+        log.log("five");
+        assert_eq!(log.entries().len(), 1);
+        assert_eq!(log.entries()[0].message, "five");
+    }
+
+    #[test]
+    fn tick_detection_is_case_insensitive_and_does_not_misclassify_unrelated_text() {
+        assert!(is_tick_or_process("PROCESS completed"));
+        assert!(is_tick_or_process("face tick"));
+        assert!(!is_tick_or_process("build completed"));
+    }
+}
