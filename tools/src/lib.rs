@@ -217,16 +217,22 @@ fn write_text_new(path: &Path, text: &str) -> ToolResult<()> {
         .and_then(|mut f| f.write_all(text.as_bytes()))
         .map_err(|e| e.to_string())
 }
-pub fn write_manifest(path: &Path, m: &Manifest) -> ToolResult<()> {
-    write_json(path, &Value::Object(m.clone()))?;
-    let sig = path.with_extension(format!(
+fn signature_path(path: &Path) -> PathBuf {
+    path.with_extension(format!(
         "{}sig",
         path.extension()
             .and_then(|x| x.to_str())
             .map(|x| format!("{x}."))
             .unwrap_or_default()
-    ));
-    write_text_new(&sig, &(manifest_value(m, "signature") + "\n"))
+    ))
+}
+
+pub fn write_manifest(path: &Path, m: &Manifest) -> ToolResult<()> {
+    write_json(path, &Value::Object(m.clone()))?;
+    write_text_new(
+        &signature_path(path),
+        &(manifest_value(m, "signature") + "\n"),
+    )
 }
 pub fn write_binary(path: &Path, data: &[u8]) -> ToolResult<()> {
     if path.is_symlink() {
@@ -275,6 +281,12 @@ pub fn verify_uf2(
         || manifest_value(&m, "signature") != sign_manifest(&m)
     {
         return Err("manifest signature is invalid".into());
+    }
+    let sidecar = read_file(&signature_path(&mpath), 128)?;
+    if std::str::from_utf8(&sidecar).map(str::trim).ok()
+        != Some(manifest_value(&m, "signature").as_str())
+    {
+        return Err("manifest signature sidecar is invalid".into());
     }
     let actual = create_manifest(path, Some(manifest_value(&m, "generation_id")), None)?;
     trusted_match(&actual, trusted)?;

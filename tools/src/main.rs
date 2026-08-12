@@ -162,6 +162,25 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn verification_rejects_a_tampered_signature_sidecar() {
+        let root = temp_dir("sidecar");
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("good.uf2");
+        fs::write(&artifact, fixture()).unwrap();
+        let manifest_path = root.join("good.uf2.json");
+        let manifest = tools::create_manifest(&artifact, None, None).unwrap();
+        tools::write_manifest(&manifest_path, &manifest).unwrap();
+        let sidecar = manifest_path.with_extension("json.sig");
+        fs::write(&sidecar, b"sha256:tampered\n").unwrap();
+        assert!(
+            tools::verify_uf2(&artifact, Some(&manifest_path), None)
+                .unwrap_err()
+                .contains("sidecar")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn existing_rollback_destination_is_not_overwritten() {
         let root = temp_dir("rollback");
         fs::create_dir_all(&root).unwrap();
