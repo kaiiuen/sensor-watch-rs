@@ -303,6 +303,7 @@ impl<S, A> Receiver<S, A> {
                 self.object = None;
                 self.total_len = 0;
                 self.next_offset = 0;
+                self.next_sequence = 0;
                 Ok(())
             }
             Command::Abort => {
@@ -310,6 +311,7 @@ impl<S, A> Receiver<S, A> {
                 self.object = None;
                 self.total_len = 0;
                 self.next_offset = 0;
+                self.next_sequence = 0;
                 Err(ReceiveError::State)
             }
             _ => Err(ReceiveError::State),
@@ -456,6 +458,45 @@ mod tests {
         r.receive(&c).unwrap();
         assert_eq!(&r.store.data[..3], b"abc");
         assert!(r.store.committed);
+
+        // A completed transfer starts a fresh sequence space. Requiring the
+        // caller to continue the old sequence would make the receiver state
+        // depend on the previous transfer and could strand the store.
+        let next = Frame::new(
+            Command::WriteData,
+            ObjectId::Settings,
+            0,
+            0,
+            1,
+            b"z",
+            [0; 8],
+        )
+        .unwrap()
+        .encode();
+        assert!(r.receive(&next).is_ok());
+    }
+    #[test]
+    fn abort_resets_sequence_for_the_next_transfer() {
+        let mut r = Receiver::new(Store::default(), Auth);
+        let write = Frame::new(
+            Command::WriteData,
+            ObjectId::Settings,
+            0,
+            0,
+            1,
+            b"x",
+            [0; 8],
+        )
+        .unwrap()
+        .encode();
+        let abort = Frame::new(Command::Abort, ObjectId::Settings, 1, 0, 0, &[], [0; 8])
+            .unwrap()
+            .encode();
+        assert!(r.receive(&write).is_ok());
+        assert_eq!(r.receive(&abort), Err(ReceiveError::State));
+        assert!(!r.store.committed);
+        assert!(r.store.aborted);
+        assert!(r.receive(&write).is_ok());
     }
     #[test]
     fn rejects_unknown_object_and_unauthenticated_frames() {

@@ -4,8 +4,8 @@
 //! SAM L22's 8 kilobyte EEPROM emulation area (RWW EEPROM).
 
 use crate::watch::timeout::wait_until;
-use atsaml22j::nvmctrl::RegisterBlock as Nvmctrl;
 use atsaml22j::nvmctrl::ctrla::Cmdselect;
+use atsaml22j::nvmctrl::RegisterBlock as Nvmctrl;
 
 /// RWW EEPROM area constants.
 const RWWEE_ADDR_START: u32 = 0x0040_0000;
@@ -234,9 +234,12 @@ pub fn sync() -> bool {
 /// extending the life of the EEPROM emulation area.
 const WEAR_ROWS: u32 = 8;
 
-/// A magic value written at the start of each wear-leveled row to mark it as
-/// the most recent valid entry.
+/// A magic value written at the start of each wear-leveled row to identify a
+/// committed entry.
 const WEAR_MAGIC: u32 = 0x574C_0001; // "WL" + version
+/// New entries store a generation and its complement after the magic. The
+/// complement distinguishes the new header from legacy row data at offset 4.
+const WEAR_HEADER_SIZE: u32 = 12;
 
 /// The current wear-leveling row index, kept in RAM.
 ///
@@ -246,17 +249,46 @@ const WEAR_MAGIC: u32 = 0x574C_0001; // "WL" + version
 /// boot it is recovered by scanning the rows for the valid magic header.
 static mut WEAR_ROW: u32 = 0;
 
-/// Finds the most recent valid row (matching the magic) by scanning, and
-/// initializes the RAM cursor. Returns the row index (0 if none found).
-fn find_last_row() -> u32 {
-    for i in 0..WEAR_ROWS {
-        let row = (WEAR_ROWS - i - 1) % WEAR_ROWS;
-        let mut header = [0u8; 4];
-        if read(row, 0, &mut header) && u32::from_le_bytes(header) == WEAR_MAGIC {
-            return row;
+#[derive(Clone, Copy)]
+struct WearEntry {
+    row: u32,
+    generation: u32,
+    data_offset: u32,
+}
+
+/// Finds the newest valid row and its format. Four-byte headers from older
+/// firmware are accepted as generation zero so an upgrade does not lose the
+/// last saved settings.
+fn find_last_entry() -> Option<WearEntry> {
+    let mut newest = None;
+    for row in 0..WEAR_ROWS {
+        let mut header = [0u8; 12];
+        if !read(row, 0, &mut header[..4])
+            || u32::from_le_bytes(header[..4].try_into().unwrap()) != WEAR_MAGIC
+        {
+            continue;
+        }
+        let (generation, data_offset) = if read(row, 4, &mut header[4..])
+            && u32::from_le_bytes(header[4..8].try_into().unwrap())
+                ^ u32::from_le_bytes(header[8..12].try_into().unwrap())
+                == u32::MAX
+        {
+            (
+                u32::from_le_bytes(header[4..8].try_into().unwrap()),
+                WEAR_HEADER_SIZE,
+            )
+        } else {
+            (0, 4)
+        };
+        if newest.is_none_or(|entry: WearEntry| generation > entry.generation) {
+            newest = Some(WearEntry {
+                row,
+                generation,
+                data_offset,
+            });
         }
     }
-    0
+    newest
 }
 
 /// Writes data with log-structured wear leveling.
@@ -267,18 +299,28 @@ fn find_last_row() -> u32 {
 /// recovered on boot by scanning for the valid magic, giving crash recovery
 /// without consuming a backup register.
 pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
-    let row = unsafe { WEAR_ROW % WEAR_ROWS };
+    // Recover the cursor before the first write after reset. Without this, a
+    // reboot always erased row zero and could destroy the newest entry.
+    let row = unsafe {
+        if WEAR_ROW == 0 {
+            WEAR_ROW = find_last_entry().map_or(0, |entry| (entry.row + 1) % WEAR_ROWS);
+        }
+        WEAR_ROW % WEAR_ROWS
+    };
+    let generation = find_last_entry().map_or(1, |entry| entry.generation.wrapping_add(1));
 
-    // Erase the target row, then write the magic header and the data.
+    // Erase the target row, then write the generation-bearing header and data.
     if !erase(row) {
         return false;
     }
-    let mut header = [0u8; 4];
-    header.copy_from_slice(&WEAR_MAGIC.to_le_bytes());
+    let mut header = [0u8; 12];
+    header[..4].copy_from_slice(&WEAR_MAGIC.to_le_bytes());
+    header[4..8].copy_from_slice(&generation.to_le_bytes());
+    header[8..].copy_from_slice(&(!generation).to_le_bytes());
     if !write(row, 0, &header) {
         return false;
     }
-    let data_offset = match offset.checked_add(4) {
+    let data_offset = match offset.checked_add(WEAR_HEADER_SIZE) {
         Some(offset) => offset,
         None => return false,
     };
@@ -296,22 +338,14 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
 /// Scans the rows for the most recent valid entry (matching the magic header)
 /// and reads the data from it. Returns true if a valid entry was found.
 pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
-    // Scan all rows for the most recent valid entry (highest row index with a
-    // valid magic, wrapping around from the last written row).
-    let last = find_last_row();
-    for i in 0..WEAR_ROWS {
-        // Search backwards from the last-written row.
-        let row = (last + WEAR_ROWS - i - 1) % WEAR_ROWS;
-        let mut header = [0u8; 4];
-        if read(row, 0, &mut header) && u32::from_le_bytes(header) == WEAR_MAGIC {
-            let data_offset = match offset.checked_add(4) {
-                Some(offset) => offset,
-                None => return false,
-            };
-            return read(row, data_offset, buffer);
-        }
-    }
-    false
+    let Some(entry) = find_last_entry() else {
+        return false;
+    };
+    let data_offset = match offset.checked_add(entry.data_offset) {
+        Some(offset) => offset,
+        None => return false,
+    };
+    read(entry.row, data_offset, buffer)
 }
 
 /// Writes a 32-bit word with SECDED ECC protection.
