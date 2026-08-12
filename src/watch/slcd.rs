@@ -68,7 +68,7 @@ const CHARACTER_SET: [u8; 95] = [
     0b00111001, // '('
     0b00001111, // ')'
     0b11000000, // '*' (the + sign for use in position 0)
-    0b01110000, // '+' (segments E, F and G; looks like ┣╸)
+    0b01110000, // '+' (segments E, F and G; looks like a left bar)
     0b00000100, // ','
     0b01000000, // '-'
     0b01000000, // '.' (same as -, semantically most useful)

@@ -2578,7 +2578,7 @@ impl StudioApp {
                             });
                             ui.end_row();
                             ui.label("Sound level guide");
-                            ui.label("Hardware limit: 0.0–9.0 V. Soft is a gentle tap; Loud is a stronger knock. Actual dB varies with piezo, case, battery, and distance.");
+                            ui.label("Hardware limit: 0.0-9.0 V. Soft is a gentle tap; Loud is a stronger knock. Actual dB varies with piezo, case, battery, and distance.");
                             ui.end_row();
                             ui.end_row();
 
@@ -3209,7 +3209,7 @@ impl StudioApp {
 
                 ui.add_space(12.0);
                 ui.separator();
-                ui.strong("Step 2 — Set the clock at the next minute boundary");
+                ui.strong("Step 2 - Set the clock at the next minute boundary");
                 if let Some(ts) = self.ntp_time {
                     let boundary = (ts / 60 + 1) * 60;
                     let b = boundary as i64;
@@ -3233,7 +3233,7 @@ impl StudioApp {
 
                 ui.add_space(12.0);
                 ui.separator();
-                ui.strong("Optional — minute-boundary cue");
+                ui.strong("Optional - minute-boundary cue");
                 ui.label(
                     "Arm a software cue for the exact next minute boundary. This is only a\n\
                      timing aid; Studio does not connect to or write the watch.",
@@ -3272,7 +3272,7 @@ impl StudioApp {
 
                 ui.add_space(12.0);
                 ui.separator();
-                ui.strong("Step 3 — Measure drift");
+                ui.strong("Step 3 - Measure drift");
                 ui.label(
                     "Fetch NTP before each sample. Record the start, wait at least one\n\
                      minute (hours or days is better), fetch again, then record the end.",
@@ -3533,7 +3533,7 @@ impl StudioApp {
         });
         ui.colored_label(
             egui::Color32::from_rgb(220, 180, 80),
-            "SIMULATED CHECKS ONLY — this report never queries physical hardware. Use Shell Access for explicit UART commands.",
+            "SIMULATED CHECKS ONLY - this report never queries physical hardware. Use Shell Access for explicit UART commands.",
         );
         ui.separator();
 
@@ -3562,7 +3562,7 @@ impl StudioApp {
             ui.label("Ticks:");
             self.tick_filter_ui(ui, "diagnostics_tick_filter");
             ui.weak(format!(
-                "{} / 200 lines · auto-scroll",
+                "{} / 200 lines - auto-scroll",
                 self.diagnostics.log.len()
             ));
             if ui.small_button("Clear").clicked() {
@@ -3722,7 +3722,7 @@ impl StudioApp {
             9,
             diagnostics::Status::Pass,
             format!(
-                "board {} · UF2 {}",
+                "board {} - UF2 {}",
                 self.board.label(),
                 if self.last_uf2.is_some() {
                     "available"
@@ -3825,7 +3825,7 @@ impl StudioApp {
         ui.heading("Probe / Test");
         ui.colored_label(
             egui::Color32::from_rgb(230, 170, 70),
-            "Advanced physical probe — USB is UF2 mass storage only; it cannot expose sensors or runtime hardware.",
+            "Advanced physical probe - USB is UF2 mass storage only; it cannot expose sensors or runtime hardware.",
         );
         ui.label("Simulated mode is not a physical result. The action below never sends mutation commands.");
         ui.horizontal(|ui| {
@@ -3889,7 +3889,7 @@ impl StudioApp {
                         };
                         ui.colored_label(
                             color,
-                            format!("[{}] {} — {}", test.status.label(), test.name, test.reason),
+                            format!("[{}] {} - {}", test.status.label(), test.name, test.reason),
                         );
                     }
                     ui.separator();
@@ -3966,7 +3966,7 @@ impl StudioApp {
                         ui.selectable_value(
                             &mut self.selected_serial_port,
                             Some(port.name.clone()),
-                            format!("{} — {}", port.name, port.description),
+                            format!("{} - {}", port.name, port.description),
                         );
                     }
                 });
@@ -5782,7 +5782,7 @@ impl StudioApp {
             ui.separator();
             ui.heading("Developer / Advanced mode");
             ui.label("Normal mode keeps protocol, register, diagnostics, and developer tools out of the way.");
-            if ui.button("Enable Advanced mode…").clicked() {
+            if ui.button("Enable Advanced mode...").clicked() {
                 self.advanced_mode_confirm = true;
             }
             return;
@@ -6237,7 +6237,7 @@ impl StudioApp {
         ui.separator();
         ui.strong("Tick log");
         ui.weak(format!(
-            "{} / {} lines · auto-scroll",
+            "{} / {} lines - auto-scroll",
             self.tick_log.entries().len(),
             self.line_limit
         ));
@@ -6260,7 +6260,7 @@ impl StudioApp {
         let mut line = line.into();
         if line.chars().count() > MAX_ENTRY_CHARS {
             line = line.chars().take(MAX_ENTRY_CHARS).collect();
-            line.push('…');
+            line.push_str("...");
         }
         self.terminal_history.push(line);
         const MAX_TERMINAL_ENTRIES: usize = 500;
@@ -7223,9 +7223,9 @@ fn fetch_latest_commit() -> Result<String, String> {
 /// Returns a cautious, user-facing description of the two firmware volume steps.
 fn volume_description(loud: bool) -> &'static str {
     if loud {
-        "Loud: stronger knock analogy; up to the configured 9.0 V drive limit. Estimated level only—dB is not measured here."
+        "Loud: stronger knock analogy; up to the configured 9.0 V drive limit. Estimated level only - dB is not measured here."
     } else {
-        "Soft: gentle tap analogy; lower drive than Loud. Estimated voltage/level only—dB depends on the hardware and environment."
+        "Soft: gentle tap analogy; lower drive than Loud. Estimated voltage/level only - dB depends on the hardware and environment."
     }
 }
 

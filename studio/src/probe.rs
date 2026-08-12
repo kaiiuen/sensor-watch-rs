@@ -70,7 +70,7 @@ impl ProbeReport {
         );
         for test in &self.tests {
             out.push_str(&format!(
-                "[{}] {} — {}\n",
+                "[{}] {} - {}\n",
                 test.status.label(),
                 test.name,
                 test.reason
