@@ -61,7 +61,8 @@ pub fn generate_face(name: &str, template: &Template, description: &str) -> Stri
 
 /// Validates the user-controlled face name used to construct a source path.
 pub fn validate_face_name(name: &str) -> Result<(), String> {
-    if name.is_empty()
+    if name.eq_ignore_ascii_case("mod")
+        || name.is_empty()
         || name.len() > 64
         || !name.is_ascii()
         || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
@@ -82,6 +83,11 @@ fn checked_face_path(name: &str) -> Result<std::path::PathBuf, String> {
     let path = root.join(format!("{name}.rs"));
     if !path.starts_with(&root) {
         return Err("face path escapes the movement directory".into());
+    }
+    if let Ok(canonical_path) = path.canonicalize() {
+        if !canonical_path.starts_with(&root) {
+            return Err("face path escapes the movement directory".into());
+        }
     }
     if let Ok(metadata) = std::fs::symlink_metadata(&path) {
         if metadata.file_type().is_symlink() || !metadata.is_file() {
@@ -131,15 +137,26 @@ pub fn delete_face(name: &str) -> Result<(), String> {
 /// not guarantee, and editing numeric consts is risky. If the declaration is
 /// already present, this is treated as success.
 pub fn register_face(name: &str) -> Result<(), String> {
-    // Validate the name so we only ever write a well-formed module identifier.
-    if name.is_empty()
-        || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-        || name.starts_with(|c: char| c.is_ascii_digit())
-    {
-        return Err(format!("invalid face name {name:?}"));
+    validate_face_name(name)?;
+    let movement = crate::build::firmware_dir().join("src/movement");
+    let root = movement
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve face directory: {e}"))?;
+    let path = root.join("mod.rs");
+    if !path.starts_with(&root) {
+        return Err("movement module path escapes the movement directory".into());
     }
-
-    let path = crate::build::firmware_dir().join("src/movement/mod.rs");
+    if let Ok(canonical_path) = path.canonicalize() {
+        if !canonical_path.starts_with(&root) {
+            return Err("movement module path escapes the movement directory".into());
+        }
+    }
+    if std::fs::symlink_metadata(&path)
+        .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+        .unwrap_or(false)
+    {
+        return Err("movement module must be a regular file, not a symlink or directory".into());
+    }
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let declaration = format!("pub mod {name};");
 

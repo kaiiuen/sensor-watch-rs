@@ -7138,11 +7138,38 @@ fn main() -> eframe::Result<()> {
 /// Recursively copies a directory, skipping links and generated trees.
 fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
     let src = src.canonicalize()?;
-    if let Ok(dst_real) = dst.canonicalize() {
-        if dst_real == src || dst_real.starts_with(&src) {
+    let dst_real = match dst.canonicalize() {
+        Ok(path) => path,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let parent = dst
+                .parent()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "export destination has no parent",
+                    )
+                })?
+                .canonicalize()?;
+            parent.join(dst.file_name().ok_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "export destination has no name",
+                )
+            })?)
+        }
+        Err(error) => return Err(error),
+    };
+    if dst_real == src || dst_real.starts_with(&src) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "export destination is inside the source tree",
+        ));
+    }
+    if let Ok(metadata) = std::fs::symlink_metadata(dst) {
+        if metadata.file_type().is_symlink() || !metadata.is_dir() {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
-                "export destination is inside the source tree",
+                "export destination must be a real directory",
             ));
         }
     }
@@ -7152,7 +7179,7 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()>
         let path = entry.path();
         let metadata = std::fs::symlink_metadata(&path)?;
         let name = entry.file_name();
-        if name == "target" || name == ".git" || name == "export" {
+        if name == "target" || name == ".git" || name == "export" || is_secret_export_path(&name) {
             continue;
         }
         if metadata.file_type().is_symlink() {
@@ -7174,6 +7201,22 @@ fn copy_dir(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()>
         }
     }
     Ok(())
+}
+
+fn is_secret_export_path(name: &std::ffi::OsStr) -> bool {
+    let name = name.to_string_lossy().to_ascii_lowercase();
+    name == ".env"
+        || name.starts_with(".env.")
+        || name == ".aws"
+        || name == ".ssh"
+        || name == "secret"
+        || name == "secrets"
+        || name == "id_rsa"
+        || name == "id_ed25519"
+        || name.ends_with(".pem")
+        || name.ends_with(".key")
+        || name.ends_with(".p12")
+        || name.ends_with(".pfx")
 }
 
 /// Copies text to the system clipboard (best-effort).
