@@ -184,7 +184,9 @@ The `core` crate holds pure logic that is host-testable:
 
 ```
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
-# Current checkout: 66 tests pass in the core crate.
+cargo test -p sensor-watch-studio --target x86_64-pc-windows-msvc
+cargo test -p sensor-watch-tools --target x86_64-pc-windows-msvc
+# Current checkout: 66 core + 70 Studio + 5 tools tests pass (141 total).
 ```
 
 Lint and format:
@@ -195,8 +197,9 @@ cargo clippy -p sensor-watch-core --target x86_64-pc-windows-msvc -- -D warnings
 cargo fmt --check
 
 The firmware clippy job is informational in CI; the core clippy job is the
-warnings-as-errors gate. The Studio package test target builds with four existing dead-code warnings.
-This is separate from the passing core test command above.
+warnings-as-errors gate. The Studio package test target passes with one existing dead-code warning.
+The tools package has five passing host tests. These results are separate from
+embedded hardware validation.
 ```
 
 ## Status
@@ -242,21 +245,19 @@ This is separate from the passing core test command above.
 
 ## Status and validation snapshot
 
-- The source tree currently contains 224 `#[test]` attributes across core,
-  firmware host seams, and Studio. This is a source count, not a passing test
-  result.
-- The core host suite currently passes 66 tests. The firmware library target
-  runs 0 tests.
-- The Studio package test target builds with four dead-code warnings; no Studio
-  test result is claimed here.
+- The current host validation passes 66 core tests, 70 Studio tests, and 5
+  tools tests, for 141 passing tests total.
+- The firmware library target runs 0 tests. The passing host suites do not
+  validate physical hardware.
+- The Studio package test target reports one existing dead-code warning.
 - No complete repository warning total is claimed here because the full
   workspace does not reach a clean build.
 
-This snapshot is for commit `747dbf8` (2026-08-12). Recent work added the
-all-in-one Studio CLI on top of the reusable Rust tools library. UART-jig
-transport, protocol-only optical and transfer foundations, panic-map and
-host-side recovery validation, and default-enabled Studio real-face coverage
-remain software/host capabilities; no on-silicon validation has been run.
+This snapshot is for commit `841fb408` (2026-08-12). The all-in-one Studio CLI
+is available on top of the reusable Rust tools library. UART-jig transport,
+protocol-only optical and transfer foundations, panic-map and host-side recovery
+validation, and default-enabled Studio real-face coverage remain software/host
+capabilities; no on-silicon validation has been run.
 
 ## Documentation
 
@@ -270,6 +271,10 @@ See [`docs/`](docs/README.md) for the full documentation set:
 | [TESTING.md](docs/TESTING.md) | Hardware test plan: power, RTC accuracy, flash wear, faces, faults, peripherals |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Build, test, and how to add a watch face |
 | [BACKBURNER.md](docs/BACKBURNER.md) | Ideas captured for later |
+| [HARDWARE_ACCESS.md](docs/HARDWARE_ACCESS.md) | UART jig, SWD probe, and USB file-transfer limits |
+| [DEVELOPER_DEBUGGING.md](docs/DEVELOPER_DEBUGGING.md) | SWD and probe-rs debugging |
+| [USB_CDC.md](docs/USB_CDC.md) | Native USB CDC status and limitations |
+| [RECOVERY.md](docs/RECOVERY.md) | Host-side UF2 validation and rollback staging |
 
 ## License
 

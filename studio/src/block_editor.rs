@@ -251,11 +251,6 @@ impl BlockEditor {
             }
         }
     }
-
-    #[cfg(test)]
-    fn blocks(&self) -> &[Block] {
-        &self.blocks
-    }
 }
 
 pub fn generate_source(blocks: &[Block]) -> String {
