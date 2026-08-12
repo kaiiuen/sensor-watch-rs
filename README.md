@@ -134,19 +134,19 @@ Prerequisites:
 Build (debug):
 
 ```
-cargo build --target thumbv6m-none-eabi
+cargo build -p sensor-watch --target thumbv6m-none-eabi
 ```
 
 Build (release, optimized):
 
 ```
-cargo build --release --target thumbv6m-none-eabi
+cargo build -p sensor-watch --release --target thumbv6m-none-eabi
 ```
 
 For optional SWD/RTT structured logging, opt in explicitly:
 
 ```
-cargo build --release --target thumbv6m-none-eabi -p sensor-watch --features defmt-log
+cargo build -p sensor-watch --release --target thumbv6m-none-eabi --features defmt-log
 ```
 
 `defmt-log` is ARM-only and uses `defmt-rtt`; it is absent from the default
@@ -186,7 +186,7 @@ The `core` crate holds pure logic that is host-testable:
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-studio --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-tools --target x86_64-pc-windows-msvc
-# Current checkout: 66 core + 70 Studio + 5 tools tests pass (141 total).
+# Current checkout: 67 core + 70 Studio + 6 tools tests pass (143 total).
 ```
 
 Lint and format:
@@ -245,15 +245,16 @@ embedded hardware validation.
 
 ## Status and validation snapshot
 
-- The current host validation passes 66 core tests, 70 Studio tests, and 5
-  tools tests, for 141 passing tests total.
+- The current host validation passes 67 core tests, 70 Studio tests, and 6
+  tools tests, for 143 passing tests total.
 - The firmware library target runs 0 tests. The passing host suites do not
   validate physical hardware.
-- The Studio package test target reports one existing dead-code warning.
+- The Studio and tools package test targets pass their host suites; these
+  results are separate from embedded hardware validation.
 - No complete repository warning total is claimed here because the full
   workspace does not reach a clean build.
 
-This snapshot is for commit `841fb408` (2026-08-12). The all-in-one Studio CLI
+This snapshot is for commit `0230f32` (2026-08-12). The all-in-one Studio CLI
 is available on top of the reusable Rust tools library. UART-jig transport,
 protocol-only optical and transfer foundations, panic-map and host-side recovery
 validation, and default-enabled Studio real-face coverage remain software/host

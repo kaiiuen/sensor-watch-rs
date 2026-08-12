@@ -730,7 +730,7 @@ The project has a CI pipeline (GitHub Actions) that runs on every push:
 - **Studio** - build the GUI companion app
 - **UF2** - assemble the firmware `.uf2` artifact
 
-The core crate currently has 66 passing host tests covering date math, settings
+The core crate currently has 67 passing host tests covering date math, settings
 bit-packing, DateTime pack/unpack, UF2 encoding, ECC, event logging, transfer
 validation, optical protocol validation, and other pure logic. These tests
 caught a real `is_leap` bug. Passing host tests do not validate physical hardware.
