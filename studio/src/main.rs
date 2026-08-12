@@ -1046,9 +1046,8 @@ impl eframe::App for StudioApp {
                         }
                         if ui.small_button("Export").clicked() {
                             let text = self.terminal_history.join("\n");
-                            let path = std::path::Path::new("terminal.log");
-                            match std::fs::write(path, text) {
-                                Ok(()) => {
+                            match self.export_text_file("terminal.log", text) {
+                                Ok(path) => {
                                     self.status =
                                         format!("Terminal exported to {}", path.display());
                                 }
@@ -1324,6 +1323,20 @@ impl eframe::App for StudioApp {
 }
 
 impl StudioApp {
+    fn export_text_file(
+        &self,
+        filename: &str,
+        contents: impl AsRef<[u8]>,
+    ) -> Result<std::path::PathBuf, String> {
+        let directory = std::path::PathBuf::from(&self.output_dir);
+        std::fs::create_dir_all(&directory)
+            .map_err(|error| format!("could not create export directory: {error}"))?;
+        let path = directory.join(filename);
+        std::fs::write(&path, contents)
+            .map_err(|error| format!("could not write {}: {error}", path.display()))?;
+        Ok(path)
+    }
+
     /// Draws the top-level tabs without allowing a narrow window to create a
     /// second, full-width horizontal scrollbar. Estimated widths are based on
     /// the localized label so rows remain stable while the window is resized.
@@ -3521,9 +3534,8 @@ impl StudioApp {
                 if report.is_empty() {
                     self.status = "Run diagnostics before exporting a report".to_string();
                 } else {
-                    let path = std::path::Path::new("diagnostics-report.txt");
-                    match std::fs::write(path, report) {
-                        Ok(()) => {
+                    match self.export_text_file("diagnostics-report.txt", report) {
+                        Ok(path) => {
                             self.status = format!("Diagnostics exported to {}", path.display())
                         }
                         Err(error) => self.status = format!("Diagnostics export failed: {error}"),
@@ -3799,10 +3811,8 @@ impl StudioApp {
     fn send_shell_command(&mut self, cmd: &str) {
         if self.transport_mode == transport::TransportMode::UartJig {
             let Some(uart) = self.uart.as_mut() else {
-                self.transport_mode = transport::TransportMode::Simulated;
-                self.shell_log
-                    .log("UART unavailable; returned to Simulated mode");
-                self.run_shell_command(cmd);
+                self.shell_log.log("UART unavailable; command was not sent");
+                self.status = "UART unavailable; command was not sent".to_string();
                 return;
             };
             self.shell_log
@@ -3865,9 +3875,8 @@ impl StudioApp {
             }
             if ui.button("Export report").clicked() {
                 if let Some(report) = &self.probe_report {
-                    let path = std::path::Path::new("probe-report.txt");
-                    match std::fs::write(path, report.text()) {
-                        Ok(()) => self.status = format!("Probe report exported to {}", path.display()),
+                    match self.export_text_file("probe-report.txt", report.text()) {
+                        Ok(path) => self.status = format!("Probe report exported to {}", path.display()),
                         Err(error) => self.status = format!("Could not export probe report: {error}"),
                     }
                 } else {
@@ -4192,9 +4201,8 @@ impl StudioApp {
                     .map(|e| e.message.clone())
                     .collect::<Vec<_>>()
                     .join("\n");
-                let path = std::path::Path::new("debug.log");
-                match std::fs::write(path, text) {
-                    Ok(()) => {
+                match self.export_text_file("debug.log", text) {
+                    Ok(path) => {
                         self.status = format!("Log exported to {}", path.display());
                         self.log.log(format!("Log exported to {}", path.display()));
                     }

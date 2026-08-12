@@ -257,7 +257,15 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
             };
         }
     }
-    if let Err(e) = std::fs::write(&tmp, &uf2_data) {
+    let write_temp = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut file| {
+            use std::io::Write;
+            file.write_all(&uf2_data)
+        });
+    if let Err(e) = write_temp {
         return BuildResult {
             success: false,
             message: format!("failed to write UF2 temp file: {e}"),

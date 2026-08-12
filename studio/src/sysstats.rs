@@ -5,7 +5,7 @@
 //! blocks the UI. GPU is not available on Windows via sysinfo, so it is shown
 //! as N/A.
 
-use std::sync::mpsc;
+use std::sync::mpsc::{self, TrySendError};
 use std::time::Duration;
 
 /// A snapshot of the app's and system's resource usage.
@@ -47,11 +47,22 @@ pub fn format_process_threads(threads: Option<usize>) -> String {
 #[cfg(test)]
 mod tests {
     use super::format_process_threads;
+    use std::sync::mpsc::TrySendError;
 
     #[test]
     fn formats_unavailable_process_threads() {
         assert_eq!(format_process_threads(None), "unavailable on this platform");
         assert_eq!(format_process_threads(Some(12)), "12");
+    }
+
+    #[test]
+    fn sampler_channel_has_bounded_backlog() {
+        let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+        tx.try_send(super::SysStats::default()).unwrap();
+        assert!(matches!(
+            tx.try_send(super::SysStats::default()),
+            Err(TrySendError::Full(_))
+        ));
     }
 }
 
@@ -61,7 +72,9 @@ mod tests {
 pub fn spawn_sampler(
     rate_ms: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) -> mpsc::Receiver<SysStats> {
-    let (tx, rx) = mpsc::channel();
+    // Resource samples are replaceable; never let a stalled UI accumulate an
+    // unbounded backlog while it is not polling the receiver.
+    let (tx, rx) = mpsc::sync_channel(1);
     std::thread::spawn(move || {
         let mut sys = sysinfo::System::new_all();
         sys.refresh_all();
@@ -115,8 +128,11 @@ pub fn spawn_sampler(
                 samples = 0;
             }
 
-            if tx.send(stats).is_err() {
-                break;
+            // If the UI has not consumed the previous sample yet, drop this
+            // stale snapshot and keep the worker available for the next one.
+            match tx.try_send(stats) {
+                Ok(()) | Err(TrySendError::Full(_)) => {}
+                Err(TrySendError::Disconnected(_)) => break,
             }
             let ms = rate_ms.load(std::sync::atomic::Ordering::Relaxed).max(50);
             std::thread::sleep(Duration::from_millis(ms));
