@@ -240,6 +240,10 @@ struct StudioApp {
     stats_rate_shared: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// The UI text size (0=small, 1=normal, 2=big).
     text_size: u8,
+    /// Preferred top-level tab-bar row count.
+    tab_layout: settings::TabLayoutMode,
+    /// Tab-bar overflow handling.
+    tab_overflow: settings::TabOverflowBehavior,
     /// Persisted panel widths for the Watch Faces layout.
     catalog_width: f32,
     preset_height: f32,
@@ -529,6 +533,8 @@ impl Default for StudioApp {
             stats_rate_shared: stats_rate_shared.clone(),
             sys_rx: sysstats::spawn_sampler(stats_rate_shared),
             text_size: 1,
+            tab_layout: settings::TabLayoutMode::default(),
+            tab_overflow: settings::TabOverflowBehavior::default(),
             catalog_width: 0.0,
             preset_height: 0.0,
             last_window_size: egui::Vec2::ZERO,
@@ -918,60 +924,7 @@ impl eframe::App for StudioApp {
                     }
                     ui.separator();
                 }
-                // The tab bar scrolls horizontally so it never clips when the
-                // window is narrow.
-                egui::ScrollArea::horizontal().show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        for panel in [
-                            Panel::Dashboard,
-                            Panel::Faces,
-                            Panel::Editor,
-                            Panel::Simulator,
-                            Panel::BuildFlash,
-                            Panel::Calibration,
-                            Panel::Modules,
-                            Panel::Shell,
-                            Panel::Diagnostics,
-                            Panel::Debug,
-                            Panel::Bugs,
-                            Panel::FileBrowser,
-                            Panel::Tutorials,
-                            Panel::Wiki,
-                            Panel::Settings,
-                            Panel::Probe,
-                        ] {
-                            if !self.advanced_mode
-                                && matches!(
-                                    panel,
-                                    Panel::Modules
-                                        | Panel::Shell
-                                        | Panel::Diagnostics
-                                        | Panel::Debug
-                                        | Panel::Bugs
-                                        | Panel::FileBrowser
-                                        | Panel::Probe
-                                )
-                            {
-                                continue;
-                            }
-                            if ui
-                                .selectable_label(
-                                    self.current_panel == panel,
-                                    panel.label(self.language),
-                                )
-                                .clicked()
-                            {
-                                if self.current_panel != panel {
-                                    self.log.log(format!(
-                                        "Switched to panel {}",
-                                        panel.label(self.language)
-                                    ));
-                                }
-                                self.current_panel = panel;
-                            }
-                        }
-                    });
-                });
+                self.tab_bar(ui);
                 // Update notification.
                 if let Some(commit) = &self.latest_commit {
                     ui.separator();
@@ -1371,6 +1324,119 @@ impl eframe::App for StudioApp {
 }
 
 impl StudioApp {
+    /// Draws the top-level tabs without allowing a narrow window to create a
+    /// second, full-width horizontal scrollbar. Estimated widths are based on
+    /// the localized label so rows remain stable while the window is resized.
+    fn tab_bar(&mut self, ui: &mut egui::Ui) {
+        let panels = [
+            Panel::Dashboard,
+            Panel::Faces,
+            Panel::Editor,
+            Panel::Simulator,
+            Panel::BuildFlash,
+            Panel::Calibration,
+            Panel::Modules,
+            Panel::Shell,
+            Panel::Diagnostics,
+            Panel::Debug,
+            Panel::Bugs,
+            Panel::FileBrowser,
+            Panel::Tutorials,
+            Panel::Wiki,
+            Panel::Settings,
+            Panel::Probe,
+        ];
+        let visible: Vec<Panel> = panels
+            .into_iter()
+            .filter(|panel| {
+                self.advanced_mode
+                    || !matches!(
+                        panel,
+                        Panel::Modules
+                            | Panel::Shell
+                            | Panel::Diagnostics
+                            | Panel::Debug
+                            | Panel::Bugs
+                            | Panel::FileBrowser
+                            | Panel::Probe
+                    )
+            })
+            .collect();
+
+        let labels: Vec<String> = visible
+            .iter()
+            .map(|panel| panel.label(self.language).to_string())
+            .collect();
+        let widths: Vec<f32> = labels
+            .iter()
+            .map(|label| (label.chars().count() as f32 * 7.5 + 30.0).max(54.0))
+            .collect();
+        let available = ui.available_width().max(1.0);
+        let total: f32 = widths.iter().sum();
+        let natural_rows = if total <= available {
+            1
+        } else if self.advanced_mode && total > available * 2.0 {
+            3
+        } else {
+            2
+        };
+        let preferred_rows = match self.tab_layout {
+            settings::TabLayoutMode::Auto => natural_rows,
+            settings::TabLayoutMode::OneRow => 1,
+            settings::TabLayoutMode::TwoRows => 2,
+            settings::TabLayoutMode::ThreeRows => 3,
+        };
+
+        if self.tab_overflow == settings::TabOverflowBehavior::HorizontalScroll {
+            egui::ScrollArea::horizontal()
+                .id_source("nav_tabs_scroll")
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| self.draw_tab_buttons(ui, &visible));
+                });
+            return;
+        }
+
+        // A one-row preference still falls back to wrapping when required;
+        // clipping is never preferable to honoring the selected tab.
+        let row_count = preferred_rows.max(natural_rows).max(1);
+        let mut rows: Vec<Vec<Panel>> = vec![Vec::new(); row_count];
+        let mut row_widths = vec![0.0; row_count];
+        let mut row = 0usize;
+        for (index, panel) in visible.iter().enumerate() {
+            if row_widths[row] > 0.0 && row_widths[row] + widths[index] > available {
+                row += 1;
+                if row == rows.len() {
+                    rows.push(Vec::new());
+                    row_widths.push(0.0);
+                }
+            }
+            rows[row].push(*panel);
+            row_widths[row] += widths[index];
+        }
+        for panels in rows.into_iter().filter(|panels| !panels.is_empty()) {
+            ui.horizontal(|ui| self.draw_tab_buttons(ui, &panels));
+        }
+    }
+
+    fn draw_tab_buttons(&mut self, ui: &mut egui::Ui, panels: &[Panel]) {
+        for panel in panels {
+            self.draw_tab_button(ui, *panel);
+        }
+    }
+
+    fn draw_tab_button(&mut self, ui: &mut egui::Ui, panel: Panel) {
+        if ui
+            .selectable_label(self.current_panel == panel, panel.label(self.language))
+            .clicked()
+        {
+            if self.current_panel != panel {
+                self.log
+                    .log(format!("Switched to panel {}", panel.label(self.language)));
+            }
+            self.current_panel = panel;
+        }
+    }
+
     /// The dashboard: an overview of the project, health, and NTP time.
     fn dashboard(&mut self, ui: &mut egui::Ui) {
         // The dashboard is long; wrap it in a scroll area so it never clips.
@@ -5626,6 +5692,50 @@ impl StudioApp {
                 });
                 ui.end_row();
 
+                // Top-level tab layout.
+                ui.label(tr(self.language, Key::TabLayout))
+                    .on_hover_text("Choose how many rows the top navigation prefers. Auto adapts to window width and mode.");
+                let mut tab_settings_changed = false;
+                ui.horizontal(|ui| {
+                    for (mode, key) in [
+                        (settings::TabLayoutMode::Auto, Key::TabLayoutAuto),
+                        (settings::TabLayoutMode::OneRow, Key::TabLayoutOneRow),
+                        (settings::TabLayoutMode::TwoRows, Key::TabLayoutTwoRows),
+                        (settings::TabLayoutMode::ThreeRows, Key::TabLayoutThreeRows),
+                    ] {
+                        if ui
+                            .selectable_label(self.tab_layout == mode, tr(self.language, key))
+                            .clicked()
+                        {
+                            self.tab_layout = mode;
+                            tab_settings_changed = true;
+                        }
+                    }
+                });
+                ui.end_row();
+
+                // Tab overflow behavior.
+                ui.label(tr(self.language, Key::TabOverflow))
+                    .on_hover_text("Wrapping keeps every tab reachable without a second horizontal scrollbar. Horizontal scrolling is opt-in.");
+                ui.horizontal(|ui| {
+                    for (behavior, key) in [
+                        (settings::TabOverflowBehavior::Wrap, Key::TabOverflowWrap),
+                        (settings::TabOverflowBehavior::HorizontalScroll, Key::TabOverflowScroll),
+                    ] {
+                        if ui
+                            .selectable_label(self.tab_overflow == behavior, tr(self.language, key))
+                            .clicked()
+                        {
+                            self.tab_overflow = behavior;
+                            tab_settings_changed = true;
+                        }
+                    }
+                });
+                ui.end_row();
+                if tab_settings_changed {
+                    self.save_settings_internal();
+                }
+
                 // Text size.
                 ui.label("Text size");
                 ui.horizontal(|ui| {
@@ -6228,6 +6338,8 @@ impl StudioApp {
             self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
+            self.tab_layout,
+            self.tab_overflow,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -6275,6 +6387,8 @@ impl StudioApp {
             self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
+            self.tab_layout,
+            self.tab_overflow,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -6329,6 +6443,8 @@ impl StudioApp {
             self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
+            self.tab_layout,
+            self.tab_overflow,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -6366,6 +6482,8 @@ impl StudioApp {
             self.tick_verbosity.setting_name().to_string(),
             &self.component_profiles,
             self.component_profile,
+            self.tab_layout,
+            self.tab_overflow,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -6430,6 +6548,8 @@ impl StudioApp {
         self.sim_scale = s.sim_scale;
         self.watch_config = s.watch_config;
         self.text_size = s.text_size;
+        self.tab_layout = s.tab_layout;
+        self.tab_overflow = s.tab_overflow;
         self.catalog_width = s.catalog_width;
         self.preset_height = s.preset_height;
         self.modules = s.modules;

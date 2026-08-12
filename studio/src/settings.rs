@@ -14,6 +14,36 @@ use super::presets::PresetManager;
 use super::theme::Theme;
 use super::watch_config::WatchConfig;
 
+/// Preferred number of rows for the top-level tab bar.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabLayoutMode {
+    Auto,
+    OneRow,
+    TwoRows,
+    ThreeRows,
+}
+
+impl Default for TabLayoutMode {
+    fn default() -> Self {
+        Self::Auto
+    }
+}
+
+/// How the tab bar handles tabs that do not fit on one line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TabOverflowBehavior {
+    Wrap,
+    HorizontalScroll,
+}
+
+impl Default for TabOverflowBehavior {
+    fn default() -> Self {
+        Self::Wrap
+    }
+}
+
 const MAX_SETTINGS_JSON_BYTES: usize = 256 * 1024;
 const MAX_NTP_SERVERS: usize = 64;
 const MAX_SETTINGS_TEXT_BYTES: usize = 256;
@@ -124,6 +154,12 @@ pub struct AppSettings {
     /// Whether advanced protocol, register, and diagnostic controls are visible.
     #[serde(default)]
     pub advanced_mode: bool,
+    /// Preferred top-level tab-bar row count.
+    #[serde(default)]
+    pub tab_layout: TabLayoutMode,
+    /// Tab-bar overflow handling.
+    #[serde(default)]
+    pub tab_overflow: TabOverflowBehavior,
 }
 
 impl AppSettings {
@@ -149,6 +185,8 @@ impl AppSettings {
         tick_verbosity: String,
         component_profiles: &[BuildProfile],
         active_component_profile: usize,
+        tab_layout: TabLayoutMode,
+        tab_overflow: TabOverflowBehavior,
     ) -> Self {
         AppSettings {
             schema_version: 1,
@@ -173,6 +211,8 @@ impl AppSettings {
             active_component_profile,
             board: default_board(),
             advanced_mode: false,
+            tab_layout,
+            tab_overflow,
         }
     }
 
@@ -338,6 +378,8 @@ impl Default for AppSettings {
             active_component_profile: 0,
             board: default_board(),
             advanced_mode: false,
+            tab_layout: TabLayoutMode::default(),
+            tab_overflow: TabOverflowBehavior::default(),
         }
     }
 }
