@@ -189,6 +189,19 @@ mod tests {
         assert_eq!(fs::read(&destination).unwrap(), b"do not replace");
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn conversion_refuses_existing_output() {
+        let root = temp_dir("no-overwrite");
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("firmware.bin");
+        let output = root.join("firmware.uf2");
+        fs::write(&input, b"firmware").unwrap();
+        fs::write(&output, b"do not replace").unwrap();
+        assert!(tools::convert_uf2(&input, &output).is_err());
+        assert_eq!(fs::read(&output).unwrap(), b"do not replace");
+        fs::remove_dir_all(root).unwrap();
+    }
     #[test]
     fn manifest_scope_is_host_side_only() {
         let root = temp_dir("scope");

@@ -235,19 +235,20 @@ pub fn write_manifest(path: &Path, m: &Manifest) -> ToolResult<()> {
     )
 }
 pub fn write_binary(path: &Path, data: &[u8]) -> ToolResult<()> {
-    if path.is_symlink() {
+    if let Ok(metadata) = fs::symlink_metadata(path)
+        && (metadata.file_type().is_symlink() || !metadata.is_file())
+    {
         return Err(format!(
-            "refusing symlinked output path: {}",
+            "refusing non-regular output path: {}",
             path.display()
         ));
     }
     fs::OpenOptions::new()
         .write(true)
-        .create(true)
-        .truncate(true)
+        .create_new(true)
         .open(path)
         .and_then(|mut f| f.write_all(data))
-        .map_err(|e| format!("cannot write {}: {e}", path.display()))
+        .map_err(|e| format!("cannot create {}: {e}", path.display()))
 }
 fn load_manifest(path: &Path) -> ToolResult<Manifest> {
     let data = read_file(path, 512 * 1024)?;
@@ -326,7 +327,8 @@ pub fn backup_uf2(src: &Path, dst: &Path) -> ToolResult<Manifest> {
     if let Some(p) = dst.parent() {
         fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
-    fs::copy(src, dst).map_err(|e| e.to_string())?;
+    let data = read_file(src, MAX_UF2_BYTES)?;
+    write_binary(dst, &data)?;
     write_manifest(&dst.with_extension("uf2.json"), &m)?;
     Ok(m)
 }
@@ -338,7 +340,8 @@ pub fn rollback_uf2(src: &Path, dst: &Path, trusted: &str) -> ToolResult<Manifes
     if let Some(p) = dst.parent() {
         fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
-    fs::copy(src, dst).map_err(|e| e.to_string())?;
+    let data = read_file(src, MAX_UF2_BYTES)?;
+    write_binary(dst, &data)?;
     inspect_uf2(dst)?;
     Ok(m)
 }
@@ -455,6 +458,7 @@ pub fn build_firmware() -> ToolResult<BuildResult> {
     if encoded.is_empty() {
         return Err("cannot convert firmware binary to UF2".into());
     }
+    remove_regular_file(&uf2_path)?;
     write_binary(&uf2_path, &encoded)?;
     let manifest_path = uf2_path.with_extension("uf2.json");
     let signature_path = manifest_path.with_extension("json.sig");
