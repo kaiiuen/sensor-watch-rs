@@ -7036,7 +7036,7 @@ fn fmt_bytes(bytes: u64) -> String {
 
 fn print_cli_help() {
     println!(
-        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Build firmware and write the UF2 artifact\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
+        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Refuse unconfigured firmware builds until Studio inputs are wired\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
     );
 }
 
@@ -7069,6 +7069,7 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         }
         "build" => {
             ensure_cli_no_extra(&mut args)?;
+            build::validate_configuration_inputs().map_err(str::to_string)?;
             let result = sensor_watch_tools::build_firmware()?;
             println!("built {}", result.uf2_path.display());
             Ok(())

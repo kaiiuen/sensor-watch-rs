@@ -88,8 +88,8 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Settings** - language (English, Simplified Chinese, Traditional Chinese), theme, text size
   (small/normal/big), configurable **log line limit**, app resource usage
   (app-only, adjustable update rate), settings save/export/import, source
-  export, integrity (SHA-256 + release checksum verification), credits with
-  code statistics, and license.
+  export, integrity (SHA-256 + release checksum verification), community credits
+  (see [`docs/CREDITS.md`](../docs/CREDITS.md)), code statistics, and license.
 
 ## Advanced and Probe/Test safety
 

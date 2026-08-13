@@ -271,10 +271,12 @@ See [`docs/`](docs/README.md) for the full documentation set:
 | [POWER.md](docs/POWER.md) | Power-management deep-dive |
 | [TESTING.md](docs/TESTING.md) | Hardware test plan: power, RTC accuracy, flash wear, faces, faults, peripherals |
 | [CONTRIBUTING.md](docs/CONTRIBUTING.md) | Build, test, and how to add a watch face |
-| [BACKBURNER.md](docs/BACKBURNER.md) | Ideas captured for later |
+| [BACKBURNER.md](docs/BACKBURNER.md) | Unfinished work reserved for future implementation |
 | [HARDWARE_ACCESS.md](docs/HARDWARE_ACCESS.md) | UART jig, SWD probe, and USB file-transfer limits |
 | [DEVELOPER_DEBUGGING.md](docs/DEVELOPER_DEBUGGING.md) | SWD and probe-rs debugging |
 | [USB_CDC.md](docs/USB_CDC.md) | Native USB CDC status and limitations |
+| [CREDITS.md](docs/CREDITS.md) | Upstream and community credits |
+| [COMMUNITY_ROADMAP.md](docs/COMMUNITY_ROADMAP.md) | Community feature and integration roadmap |
 | [RECOVERY.md](docs/RECOVERY.md) | Host-side UF2 validation and rollback staging |
 
 ## License

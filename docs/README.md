@@ -17,6 +17,8 @@ rewrite in Rust.
 | [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) | Optional on-silicon debugging via SWD / probe-rs for developers with bench hardware. |
 | [USB_CDC.md](USB_CDC.md) | Native CDC status: feasible in principle, but currently scaffolding only. |
 | [RECOVERY.md](RECOVERY.md) | Host-side UF2 validation, backup, and rollback staging; no device-side dual boot. |
+| [CREDITS.md](CREDITS.md) | Upstream, community, tooling, hardware, and contributor attribution. |
+| [COMMUNITY_ROADMAP.md](COMMUNITY_ROADMAP.md) | Full community feature inventory and implementation classification. |
 
 ## Companion app
 
