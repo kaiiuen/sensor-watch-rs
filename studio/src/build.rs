@@ -41,32 +41,66 @@ fn acquire_build_lock(root: &Path) -> Result<BuildLock, String> {
         })
 }
 
-/// Resolves the firmware project directory.
-///
-/// The app can be run from anywhere (e.g. double-clicking the exe in
-/// `target/release/`), so we resolve the firmware project relative to the
-/// executable's location rather than the current working directory. We walk up
-/// from the exe until we find a directory containing `Cargo.toml` with the
-/// `sensor-watch` package (the workspace root).
-pub fn firmware_dir() -> PathBuf {
-    // Start from the directory containing the executable.
-    let mut dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."));
+fn is_workspace_root(path: &Path) -> bool {
+    let manifest = path.join("Cargo.toml");
+    let Ok(metadata) = std::fs::symlink_metadata(&manifest) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return false;
+    }
+    let Ok(contents) = std::fs::read_to_string(&manifest) else {
+        return false;
+    };
+    contents.contains("[workspace]")
+        && contents.contains("[package]")
+        && contents
+            .lines()
+            .any(|line| line.trim() == "name = \"sensor-watch\"")
+}
 
-    // Walk up looking for the workspace root (contains Cargo.toml).
-    loop {
-        let cargo = dir.join("Cargo.toml");
-        if cargo.exists() {
-            return dir;
-        }
-        if !dir.pop() {
-            break;
+fn canonical_workspace_root(path: &Path) -> Option<PathBuf> {
+    let root = path.canonicalize().ok()?;
+    is_workspace_root(&root).then_some(root)
+}
+
+fn compiled_workspace_root() -> Option<PathBuf> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    canonical_workspace_root(manifest_dir.parent().unwrap_or(manifest_dir))
+}
+
+fn trusted_runtime_root(candidate: &Path, trusted: &Path) -> Option<PathBuf> {
+    let root = canonical_workspace_root(candidate)?;
+    (root == trusted).then_some(root)
+}
+
+/// Resolves the firmware workspace without trusting an arbitrary ancestor.
+///
+/// The app can be run from anywhere (e.g. double-clicking an exe copied out of
+/// `target/release/`). Runtime candidates are accepted only when they resolve
+/// to the workspace this binary was compiled from. This prevents an unrelated
+/// ancestor `Cargo.toml` from redirecting firmware builds or source discovery.
+pub fn firmware_dir() -> PathBuf {
+    let Some(trusted) = compiled_workspace_root() else {
+        return PathBuf::from(".");
+    };
+
+    if let Ok(executable) = std::env::current_exe() {
+        if let Some(mut dir) = executable.parent().map(Path::to_path_buf) {
+            loop {
+                if let Some(root) = trusted_runtime_root(&dir, &trusted) {
+                    return root;
+                }
+                if !dir.pop() {
+                    break;
+                }
+            }
         }
     }
-    // Fall back to the CWD.
-    PathBuf::from(".")
+
+    // A copied executable must not select a similarly named project found at
+    // runtime. Use only the workspace this binary was compiled from.
+    trusted
 }
 
 /// The embedded target triple.
@@ -550,6 +584,65 @@ fn ensure_regular_or_absent(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "sensor-watch-studio-workspace-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn workspace_manifest_is_identified_by_package_and_workspace() {
+        let root = temp_root("valid");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"sensor-watch\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            canonical_workspace_root(&root),
+            Some(root.canonicalize().unwrap())
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unrelated_ancestor_manifest_is_not_accepted() {
+        let root = temp_root("unrelated");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"other-project\"\n",
+        )
+        .unwrap();
+        assert!(canonical_workspace_root(&root).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn different_valid_workspace_is_not_trusted() {
+        let root = temp_root("untrusted");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"sensor-watch\"\n",
+        )
+        .unwrap();
+        let trusted = compiled_workspace_root().unwrap();
+        assert!(trusted_runtime_root(&root, &trusted).is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn firmware_dir_resolves_the_compiled_workspace() {
+        assert_eq!(firmware_dir(), compiled_workspace_root().unwrap());
+    }
 
     #[test]
     fn configured_builds_are_rejected_before_side_effects() {
