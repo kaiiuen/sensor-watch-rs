@@ -281,6 +281,15 @@ fn valid_wear_entry(offset: u32, len: usize, header_size: u32) -> bool {
         Ok(size) => size,
         Err(_) => return false,
     };
+    // The header and payload share one wear-levelled row. Checking their
+    // absolute page addresses is not enough: an offset at the next row could
+    // still be a valid page write while escaping the row that was erased.
+    if data_offset
+        .checked_add(data_size)
+        .is_none_or(|end| end > ROW_SIZE)
+    {
+        return false;
+    }
     let base = RWWEE_ADDR_START;
     let header_address = base;
     let Some(data_address) = base.checked_add(data_offset) else {
@@ -493,4 +502,31 @@ pub fn ecc_read(row: u32, offset: u32) -> (u32, bool) {
         | ((buf[3] as u64) << 24)
         | ((buf[4] as u64) << 32);
     crate::watch::ecc::decode(code)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wear_entry_must_fit_inside_one_row() {
+        assert!(valid_wear_entry(0, 1, LEGACY_WEAR_HEADER_SIZE));
+        assert!(!valid_wear_entry(ROW_SIZE, 1, LEGACY_WEAR_HEADER_SIZE));
+        assert!(!valid_wear_entry(
+            ROW_SIZE - LEGACY_WEAR_HEADER_SIZE,
+            1,
+            LEGACY_WEAR_HEADER_SIZE
+        ));
+        assert!(valid_wear_entry(
+            ROW_SIZE - LEGACY_WEAR_HEADER_SIZE - 1,
+            1,
+            LEGACY_WEAR_HEADER_SIZE
+        ));
+    }
+
+    #[test]
+    fn wear_entry_rejects_offset_and_length_overflow() {
+        assert!(!valid_wear_entry(u32::MAX, 1, LEGACY_WEAR_HEADER_SIZE));
+        assert!(!valid_wear_entry(0, usize::MAX, LEGACY_WEAR_HEADER_SIZE));
+    }
 }
