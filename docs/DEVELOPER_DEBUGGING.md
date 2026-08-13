@@ -22,7 +22,7 @@ a real backtrace on a fault, you need the **SWD** interface
   Raspberry Pi Pico / picoprobe, a DAPLink, or a commercial CMSIS-DAP), or a
   J-Link. It must support the Microchip SAM L22 / Cortex-M0+.
 - **Wired to the SWD pads**: SWDIO, SWCLK, and GND. (Some debug headers also
-  expose SWO and a reset line; `--connect-under-reset` is used in our scripts to
+  expose SWO and a reset line, `--connect-under-reset` is used in our scripts to
   handle targets that are hard to halt otherwise.)
 - **probe-rs** installed: `cargo install probe-rs-tools` (provides the
   `probe-rs` binary). Install **arm-none-eabi-gdb** too if you want to drive GDB
@@ -58,7 +58,7 @@ probe-rs download --chip ATSAML22J18A --format elf \
 The scripts check that the ELF exists and that `probe-rs` is on your `PATH`.
 
 > **Caveat:** the firmware links at `0x0000_2000` (it sits after the USB
-> bootloader; see `memory.x`). probe-rs flashes at the ELF's declared load
+> bootloader, see `memory.x`). probe-rs flashes at the ELF's declared load
 > addresses, so this correctly writes only the application region and leaves
 > the bootloader intact - just as `build.sh`'s `.uf2` does.
 
@@ -148,7 +148,7 @@ firmware version. Multiple matches are shown when the 24-bit truncation is
 ambiguous. The resolver is host-side only and does not require hardware.
 
 The ELF's DWARF symbols remain the authoritative option for instruction-level
-debugging and backtraces over SWD; the resolver is intended for the stored panic
+debugging and backtraces over SWD, the resolver is intended for the stored panic
 fingerprint reported by the UART shell.
 
 ## Quick feedback loop with the UART shell
@@ -192,7 +192,7 @@ untimed fallback during early boot/panic), stable event code, and small payload.
 Faults are recorded automatically alongside the persistent fault summary.
 
 The optional `defmt-log` Cargo feature mirrors each event to an RTT backend for
-an SWD probe. It also emits fault codes, reset reasons, and panic fingerprints;
+an SWD probe. It also emits fault codes, reset reasons, and panic fingerprints.
 the persistent backup-register summary and the event ring remain in place as
 fallbacks. Enable it only for an ARM firmware build:
 
@@ -214,7 +214,7 @@ events clear
 ```
 
 The fields are sequence, timestamp, event code, and payload, all hexadecimal.
-This is deliberately a local breadcrumb buffer rather than a persistent log;
+This is deliberately a local breadcrumb buffer rather than a persistent log.
 reset clears it. RTT/defmt is a separate live stream and is not a replacement
 for the fallback ring or the reset-surviving fault/fingerprint registers.
 
@@ -237,7 +237,7 @@ no attempt was made.
 
 - Optional, purely additive dev tooling: `sensor-watch-tools`, `scripts/flash.sh`, `scripts/flash.ps1`,
   `.vscode/launch.json`, and this document.
-- Normal `.uf2` USB flashing and the `studio` app are untouched; `build.sh` and
+- Normal `.uf2` USB flashing and the `studio` app are untouched, `build.sh` and
   the flash scripts remain thin compatibility launchers.
 - To debug on silicon you need: an SWD probe + probe-rs, plus (for VSCode) the
   extension(s) of your choice.

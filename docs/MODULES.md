@@ -13,7 +13,7 @@ it's used. It complements `ARCHITECTURE.md` (the high-level overview).
 | `main()` | fn | The reset handler. Runs the boot sequence, then the event loop. |
 | `copy_ramfunc()` | fn | Copies the `.ramfunc` section from flash to RAM at boot. |
 | `#![no_std]` | attr | No standard library (bare-metal). |
-| `#![no_main]` | attr | No `main` symbol from std; we define our own entry. |
+| `#![no_main]` | attr | No `main` symbol from std, we define our own entry. |
 | `#![allow(static_mut_refs)]` | attr | Allows access to `static mut` (used for global state). |
 
 **Boot sequence rationale:** each step depends on the previous. RAM-copy ->
@@ -30,7 +30,7 @@ BOD33 -> framework -> faces -> tick -> loop.
 | `delay()` | fn | A crude blocking delay for the blink. |
 
 **Why reset-on-panic:** a sealed wearable must recover on its own. Blinking
-first gives a visible fault indicator; resetting recovers. The release profile
+first gives a visible fault indicator, resetting recovers. The release profile
 uses `panic = "abort"` to keep the binary small.
 
 ---
@@ -246,7 +246,7 @@ until bench tests in `docs/TESTING.md` pass.
 | `sync()` | fn | Wait for pending writes. |
 | `wear_leveled_write()` | fn | Write with wear leveling (rotates rows). |
 
-**Why wear leveling:** flash has limited write cycles; rotating extends life.
+**Why wear leveling:** flash has limited write cycles, rotating extends life.
 **Why `.ramfunc`:** avoids the read-while-write bus stall.
 
 ---
@@ -429,7 +429,7 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 | `update()` | fn | Feed a raw pin reading, get a debounced event. |
 | `check_long_press()` | fn | Detect long/really-long presses on the fast tick. |
 
-**Why:** mechanical buttons bounce; debouncing filters spurious edges.
+**Why:** mechanical buttons bounce, debouncing filters spurious edges.
 
 ---
 

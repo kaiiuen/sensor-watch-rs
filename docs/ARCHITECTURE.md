@@ -152,7 +152,7 @@ build is roughly **210-230 KB**, so most of the region is used. Each watch face
 adds roughly 1-3 KB, leaving modest headroom for a few more faces, not dozens.
 Adding faces beyond the current count should be validated against the linker
 region on every build. Studio currently wires 91 of those faces into its
-default-enabled `real-faces` host seam; the remaining 20 faces use the simulated
+default-enabled `real-faces` host seam, the remaining 20 faces use the simulated
 engine in Studio.
 
 ### RAM (32 KB)
@@ -184,7 +184,7 @@ The reset handler in `src/main.rs` runs in this exact order:
 3. movement::fault::check_boot_throttle()- detect a brown-out reboot loop
 4. wdt::init()                         - initialize the watchdog before
                                             boot-time clock waits
-5. watch::crc::check_firmware_integrity() - CRC-32 integrity check; on failure
+5. watch::crc::check_firmware_integrity() - CRC-32 integrity check, on failure
                                             record a CorruptImage fault and keep
                                             booting best-effort (non-bricking)
 6. watch::init()                         - hardware init in dependency order:
@@ -206,7 +206,7 @@ The reset handler in `src/main.rs` runs in this exact order:
 ```
 
 The order matters: each step depends on the previous. Interrupt priorities must
-be set before any interrupt is enabled; the RTC needs the clock; the watchdog
+be set before any interrupt is enabled, the RTC needs the clock, the watchdog
 needs to be started after the system is ready.
 
 ---
@@ -346,7 +346,7 @@ Uses SERCOM3 in USART mode. Provides `enable_uart()`, `puts()`, `getc()`.
 
 Provides read/write/erase access to the 8 KB RWW EEPROM emulation area. Includes:
 
-- `read()` / `write()` / `erase()` - raw access; `write()` and `erase()` run from
+- `read()` / `write()` / `erase()` - raw access, `write()` and `erase()` run from
   RAM (`.ramfunc`) to avoid the read-while-write bus stall
 - **Write-verify** - reads back after write to confirm success
 - **Wear leveling** - `wear_leveled_write()` rotates writes across 8 rows so no
@@ -388,7 +388,7 @@ hangs, guaranteeing the watch always recovers.
 
 Computes a CRC-32 over the firmware text region to detect flash bit-rot. A
 mismatch is recorded as the distinct `Fault::CorruptImage` diagnostic and the
-firmware continues best-effort; this is not a recovery image, rollback selector,
+firmware continues best-effort, this is not a recovery image, rollback selector,
 or true dual-boot implementation. Replacement requires a validated host UF2
 artifact and the existing ROM/UF2 bootloader path.
 
@@ -402,10 +402,10 @@ flash bit-rot is corrected on read rather than silently corrupting data.
 
 A minimal command interpreter over the debug UART. Provides `time`,
 `settime YYMMDDHHMMSS`, `drift`/`drift N`, `optical`, `panic`, `events`,
-`events clear`, and `help` commands. The optical implementation is protocol-only;
+`events clear`, and `help` commands. The optical implementation is protocol-only.
  it does not provide optical receiver hardware integration. RX is nonblocking with
  a bounded ring and bounded line/error responses. The optional `shell-auth` feature locks mutating
-commands until board code confirms physical presence; the default preserves the
+commands until board code confirms physical presence, the default preserves the
 UART-jig transport used by Studio.
 
 ### 6.21 `watch/memory.rs` - Memory usage
@@ -421,7 +421,7 @@ durations, 12-hour conversion, thermistor temperature.
 ### 6.23 `watch/utz.rs` / `watch/zones.rs` - DST-aware timezones
 
 Port of the `utz` micro timezone library. `utz.rs` provides the DST rule
-engine (day-of-week math, rule unpacking, offset calculation); `zones.rs`
+engine (day-of-week math, rule unpacking, offset calculation), `zones.rs`
 holds the 46-zone table with their offsets and DST rules. The movement layer
 uses these to compute the correct local time across daylight-saving
 transitions.
@@ -436,7 +436,7 @@ uses this to offer tap detection and accelerometer wake to faces.
 ### 6.25 `watch/rtc.rs` - compare-callback queue
 
 A software analog of the Second Movement hardware compare-callback queue.
-Up to 8 indexed slots (`N_COMP_CB`) each hold a target time and callback; the
+Up to 8 indexed slots (`N_COMP_CB`) each hold a target time and callback, the
 earliest pending slot is armed via the existing one-shot alarm. Faces can
 schedule indexed timeouts (button, LED, resign, sleep, minute) without
 keeping the CPU awake.
@@ -539,14 +539,14 @@ face to display after a reset):
 
 | Code | Fault | Meaning |
 |------|-------|---------|
-| 1 | WatchdogReset | A hang occurred; the hardware watchdog reset the watch |
-| 2 | Panic | A software panic (bug); recorded before the reset |
+| 1 | WatchdogReset | A hang occurred, the hardware watchdog reset the watch |
+| 2 | Panic | A software panic (bug), recorded before the reset |
 | 3 | WakeTooLong | A wake event took too long to process |
 | 4 | InvalidState | An invalid event or state was encountered |
 | 5 | BatteryLow | The battery is critically low |
 | 6 | RtcLostTime | The RTC lost time (crystal issue or frozen clock) |
 | 7 | CorruptImage | The firmware image failed its CRC integrity check |
-| 8 | ClockFailure | The 32 kHz crystal failed; RTC on the internal oscillator |
+| 8 | ClockFailure | The 32 kHz crystal failed, RTC on the internal oscillator |
 
 **Why:** when something goes wrong, the watch tells the user via LED codes
 instead of silently failing. Faults are stored in **fixed** backup registers
@@ -589,7 +589,7 @@ heap). They are pure state machines: they react to one event and return.
 There are **111 registered faces** (`MOVEMENT_NUM_FACES = 111`), covering all faces
 from the original reference repo plus the Second Movement faces. Highlights:
 
-- `simple_clock.rs` - the main clock (weekday, day, time; seconds toggle)
+- `simple_clock.rs` - the main clock (weekday, day, time, seconds toggle)
 - `countdown.rs` - a countdown timer (scheduled via RTC alarm)
 - `alarm.rs` - alarms with day/hour/minute/pitch/beeps settings
 - `counter.rs` - a tally counter (0-99)
@@ -644,7 +644,7 @@ freezing forever. The release profile sets `panic = "abort"` to strip unwind
 tables and keep the binary small.
 
 **Why reset-on-panic:** a sealed, air-gapped wearable must recover on its own. A
-frozen watch is useless; a resetting watch recovers.
+frozen watch is useless, a resetting watch recovers.
 
 ---
 
@@ -682,7 +682,7 @@ if the main loop stops completing, the WDT resets the chip.
 
 ### 10.6 Why wear-leveled, write-verified storage?
 
-Flash has limited write cycles. Wear leveling spreads writes across rows;
+Flash has limited write cycles. Wear leveling spreads writes across rows.
 write-verify confirms each write succeeded. This protects persistent settings.
 
 ### 10.7 Why RAM for state, flash only for settings?

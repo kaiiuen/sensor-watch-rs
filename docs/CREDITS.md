@@ -7,7 +7,7 @@ protocols, testing, documentation, and ideas that informed this project.
 
 ## Upstream projects and maintainers
 
-- **Joey Castillo / `joeycastillo`** - Sensor Watch author and maintainer;
+- **Joey Castillo / `joeycastillo`** - Sensor Watch author and maintainer.
   Movement architecture, watch library, simulator, hardware design, display
   work, power investigations, documentation, review, and project coordination.
 - **Second Movement contributors** - UTC/UTZ timekeeping, DST, custom LCDs,

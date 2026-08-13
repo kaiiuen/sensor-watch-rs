@@ -22,7 +22,7 @@ The reason is how this SAM L22 board is booted:
 So there is no way to get a "USB serial console" out of the existing bootloader.
 The current firmware does not implement CDC. A future application-mode CDC
 implementation is technically feasible, but requires the missing SAM L22 USB
-transfer-SRAM HAL/PAC coverage and a reviewed device stack; see
+transfer-SRAM HAL/PAC coverage and a reviewed device stack, see
 [USB_CDC.md](USB_CDC.md). The UF2 bootloader remains file-transfer-only.
 
 ## What this means in practice
@@ -61,9 +61,9 @@ that the adapter is not supplying unintended power. Keep the USB cable path
 separate from the UART signal path: the USB connector remains a UF2
 file-transfer drive, not the shell connection.
 
-The console is a small event-driven interpreter; RX is nonblocking and buffered
+The console is a small event-driven interpreter, RX is nonblocking and buffered
 in a bounded ring. An overrun returns `ERR rx-overflow`, and lines longer than 32
-bytes return `ERR line-too-long` rather than being truncated; see `src/watch/shell.rs` for
+bytes return `ERR line-too-long` rather than being truncated, see `src/watch/shell.rs` for
 the code and `src/watch/uart.rs` for the driver.
 
 ### Shell commands
@@ -91,11 +91,11 @@ These change state and require extra care:
 
 Confirm the target and intended values before sending a mutating command. Do
 not use a mutating command as a connectivity test. A shell response of `OK`
-means the command was accepted by the firmware; it is not a complete
+means the command was accepted by the firmware, it is not a complete
 verification of the physical sensor, display, or other hardware.
 
 - `time` - report the current RTC time as `TIME YYMMDDHHMMSS`.
-- `settime YYMMDDHHMMSS` - set the clock; replies `OK` on success.
+- `settime YYMMDDHHMMSS` - set the clock, replies `OK` on success.
 - `drift` - read the signed frequency-correction value.
 - `drift N` - set the signed correction (`N` is -127..127).
 - `optical` - report OPT3001/optical-sensor status.
@@ -109,7 +109,7 @@ and drift values must be signed decimal values in the hardware range. Mutating
 commands are locked by default in every firmware build. Board code must
 call `Shell::set_mutation_authorized` only after a physical-presence check (such
 as a held service button) or another reviewed authentication decision. Tests and
-development tools may use the same explicit hook; a connected UART jig alone
+development tools may use the same explicit hook, a connected UART jig alone
 must not unlock mutations.
 
 This is how clock setting and drift correction can be driven from a PC, for
@@ -117,7 +117,7 @@ example by the companion app during calibration. Studio's **Shell Access**
 panel exposes this as an explicit **UART Jig** mode: refresh host ports, select
 the adapter, connect, and then send commands. The default **Simulated** mode
 continues to operate entirely on the in-app watch model. A port-open, write, or
-read timeout is shown as an error; it is never reported as a watch response.
+read timeout is shown as an error, it is never reported as a watch response.
 
 The Studio **Probe/Test** workflow is represented by the current **Diagnostics**
 panel. Its full diagnostic run is offline and simulated, even when a UART jig
@@ -168,11 +168,11 @@ talking to the running shell.
 ## Summary
 
 - The UF2 USB path is file-transfer-only today. Native application CDC is not
-  implemented; its feasibility and missing HAL/stack work are tracked in
+  implemented, its feasibility and missing HAL/stack work are tracked in
   `docs/USB_CDC.md`. Studio does not pretend that the UF2 drive is a serial port.
 - Two real access paths exist: a UART jig (3 debug pads, 9600 baud, the shell
   with `time` / `settime` / `drift N` / `help`) and an SWD probe.
 - Both require hardware and soldering, so this stays a backburner / hardware
-  item; it is not needed for normal use of the watch.
+  item, it is not needed for normal use of the watch.
 - See [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) for the SWD/probe-rs
   flash, debugger attach, and panic-fingerprint workflow.

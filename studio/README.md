@@ -3,7 +3,7 @@
 A **GUI companion app** for the Sensor-Watch firmware. This is the end-goal
 product: an editor, debugger, simulator, and assembler. The Studio UI currently
 refuses its UF2 build because the selected preset/faces, board, and component
-profile are not yet wired into firmware build inputs; this prevents a stock
+profile are not yet wired into firmware build inputs, this prevents a stock
 artifact from being misrepresented as configured firmware.
 
 Built with **egui/eframe** (pure Rust, cross-platform GUI).
@@ -24,7 +24,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   (clock mode, sound/buzzer, LED/backlight, power/motion, timezone with a
   country dropdown). Right-clicking a face opens a **context menu** with
   preview / view code / test-before-adding actions. The catalog and active
-  preset are stacked on the left and watch settings on the right; panel sizes
+  preset are stacked on the left and watch settings on the right, panel sizes
   are persisted and reset proportionally when the window is resized.
 - **Editor** - a self-IDE for creating, editing, or deleting watch faces from
   templates, with a collapsible "How to make a watch face" guide and a
@@ -32,7 +32,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   **Blocks** mode uses the small visual starter API. **Advanced** mode exposes
   the full Rust source and is intended for experienced users who understand the
   firmware API, build constraints, and hardware impact. Normal mode is the
-  recommended path for beginners; Advanced mode does not make source changes
+  recommended path for beginners, Advanced mode does not make source changes
   safe or physically validated.
 - **Simulator** - 1:1 F-91W replica (SVG) with clickable button hotspots, a
   **date/time controller**, and face cycling through the active preset. Faces
@@ -44,7 +44,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   diagnostics are simulated unless a UART jig is connected. With Studio's
   default `real-faces` feature, the simulator runs **93 real firmware faces**
   through the `real_face.rs` host seam (see below) instead of the hand-written
-  engine; the remaining **18 faces** use `face_sim`. Host seam coverage does not
+  engine, the remaining **18 faces** use `face_sim`. Host seam coverage does not
   constitute physical hardware testing.
 - **Build & Flash** - combined panel: review the target board and component
   profile, then request a firmware build. The build is currently refused because
@@ -55,21 +55,21 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Calibration** - guided clock calibration (generates a `settime` command for
   the next minute boundary), a **beep-on-minute-rollover** helper, and guided
   drift calibration (parts-per-million). The hardware path requires UART Jig
-  mode; the default simulated path does not change a watch.
+  mode, the default simulated path does not change a watch.
 - **Shell Access** - explicit **Simulated** mode (the default, using the existing
   in-app watch model) or **UART Jig** mode. UART mode discovers host serial
   ports, opens a selected port at **9600 8-N-1**, and exchanges CR/LF-framed
   shell commands with bounded read/write timeouts. It is for the debug pads
-  (A4 TX, A2 RX, GND), not the watch's UF2 USB port; USB CDC is not assumed.
+  (A4 TX, A2 RX, GND), not the watch's UF2 USB port, USB CDC is not assumed.
   A missing port can mean the jig is disconnected, off, miswired, or not passed
   through to the host. It does not prove that the board lacks UART.
 - **Modules** - register custom hardware modules for modded boards (e.g. a BLE
   board instead of the accelerometer). Each module targets a HAL file in
-  `src/watch/`; modules are persisted and can be enabled/disabled/removed.
+  `src/watch/`, modules are persisted and can be enabled/disabled/removed.
   Component profiles are implemented in Studio as persisted configuration and
   planning-estimate UI, but they do not yet alter firmware build flags or pin
   mappings. The UF2 build refuses to proceed while that limitation remains.
-  Thermistor and OPT3001 readings still require matching hardware;
+  Thermistor and OPT3001 readings still require matching hardware.
   simulator diagnostics do not create sensor measurements.
 - **Diagnostics / Probe-Test** - offline simulator and shell diagnostics. A
   connected UART is shown separately, but the diagnostic report does not query
@@ -96,7 +96,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 Studio's normal mode is beginner-safe in the sense that it uses the simulator,
 Blocks editor, and normal UF2 workflow. It does not claim that simulated output
 is a physical test. Advanced mode is for experienced users and includes direct
-Rust editing and access to hardware-oriented workflows; review every command
+Rust editing and access to hardware-oriented workflows, review every command
 and target before using it.
 
 The watch USB bootloader drive exposes UF2/file-transfer information only. It
@@ -124,7 +124,7 @@ Probe/Test results must use distinct labels:
 
 A simulated PASS is a software result only. It must not be reported as a
 physical hardware PASS. A disconnected or unavailable UART is NOT AVAILABLE,
-not FAIL; an unrun test is NOT TESTED.
+not FAIL, an unrun test is NOT TESTED.
 
 ## Terminal
 
@@ -169,7 +169,7 @@ cargo run -p sensor-watch-studio -- flash [ELF]
 ```
 
 These commands operate on the host. `flash` requires a probe-rs-compatible SWD
-probe; the CLI does not add USB CDC, modify the UF2 bootloader, or provide
+probe, the CLI does not add USB CDC, modify the UF2 bootloader, or provide
 device-side rollback. With no command, Firmware Studio starts its GUI.
 
 The binary is `target/release/sensor-watch-studio`. It is fully self-contained

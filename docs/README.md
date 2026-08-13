@@ -16,7 +16,7 @@ rewrite in Rust.
 | [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) | How to talk to the board: the USB-is-file-transfer-only constraint, the ROM UF2 bootloader, the UART jig, and the SWD probe. |
 | [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) | Optional on-silicon debugging via SWD / probe-rs for developers with bench hardware. |
 | [USB_CDC.md](USB_CDC.md) | Native CDC status: feasible in principle, but currently scaffolding only. |
-| [RECOVERY.md](RECOVERY.md) | Host-side UF2 validation, backup, and rollback staging; no device-side dual boot. |
+| [RECOVERY.md](RECOVERY.md) | Host-side UF2 validation, backup, and rollback staging, no device-side dual boot. |
 | [CREDITS.md](CREDITS.md) | Upstream, community, tooling, hardware, and contributor attribution. |
 | [COMMUNITY_ROADMAP.md](COMMUNITY_ROADMAP.md) | Full community feature inventory and implementation classification. |
 
@@ -32,7 +32,7 @@ its panels, features, and dependencies.
   peripheral (RTC, LCD, GPIO, buttons, LED, buzzer, ADC, I2C, SPI, UART,
   storage, deep-sleep, watchdog, CRC, memory, LIS2DW, utility).
 - **`src/movement/`** - the watchface framework and the faces. The dispatcher
-  (`mod.rs`) reacts to events; each face implements the `WatchFace` trait.
+  (`mod.rs`) reacts to events, each face implements the `WatchFace` trait.
 - **`core/`** - pure logic (date math, settings bit-packing, UF2 encoding) that
   is host-testable.
 - **`src/main.rs`** - the entry point and boot sequence.

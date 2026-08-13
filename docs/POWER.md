@@ -171,7 +171,7 @@ this - a reaction is a handful of register writes.
 
 - Static state: ~300 bytes
 - Stack: placed at the bottom of RAM via flip-link (a stack overflow triggers
-  an immediate hard fault rather than silent corruption); no fixed 8 KB carve-out
+  an immediate hard fault rather than silent corruption), no fixed 8 KB carve-out
 - Heap: none
 
 RAM is not a constraint. All face state lives in RAM (state survives face

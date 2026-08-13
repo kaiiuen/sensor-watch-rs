@@ -66,7 +66,7 @@ traceability, while only genuinely unfinished items belong in the Backburner.
   samples, bounded FIFO reads, and a power budget.
 - Add a 113-city location preset selector.
 - Add prayer-times calculations as a separate optional face/module.
-- Add a true audio/frequency tuner only if an input source is available; the
+- Add a true audio/frequency tuner only if an input source is available, the
   standard watch piezo is not a safe microphone input.
 - Add quick timer, activity export, battery-voltage history, and improved
   diagnostics where they fit the current storage budget.

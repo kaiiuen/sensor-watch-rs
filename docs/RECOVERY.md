@@ -17,7 +17,7 @@ The ROM/UF2 bootloader remains the device-side recovery mechanism.
    The manifest records the board, SAM L22 family ID, application address,
    size, block count, payload CRC-32, UF2 SHA-256, payload SHA-256, and a
    generation ID. The adjacent `.sig` is a tamper-evident SHA-256 signature of
-   the manifest fields. It is not a public-key signature; obtain release
+   the manifest fields. It is not a public-key signature, obtain release
    manifests through a trusted channel. Existing manifest or signature files
    are never overwritten.
 3. Preserve a known-good copy before distributing or replacing it:
@@ -46,14 +46,14 @@ cargo run -p sensor-watch-tools -- rollback \
 Rollback requires the adjacent or explicitly supplied manifest, revalidates the
 artifact, copies through a temporary file, and verifies the destination. It
 refuses an existing destination rather than replacing it. It only stages a
-file; it does not flash hardware.
+file, it does not flash hardware.
 Drag the staged file to the watch's USB bootloader drive. Never rename an
 unvalidated file to `CURRENT.UF2` manually.
 
 Every deployment path validates UF2 magic, block order, target address, board
 family, payload size, and end magic before copying. Malformed, oversized,
 wrong-family, wrong-board, or CRC-mismatched artifacts must be rejected. A
-checksum fetched from the network is optional; when offline, Studio reports
+checksum fetched from the network is optional, when offline, Studio reports
 that release checksum status is **unverified**, while local manifest and UF2
 checks remain available.
 

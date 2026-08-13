@@ -51,7 +51,7 @@ The current host suites pass 96 firmware host-seam tests, 67 core tests, 78
 Studio tests, and 10 tools tests, for 251 tests total. The core suite covers date
 math, settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging,
 transfer validation, optical protocol validation, and other pure logic.
-Passing host tests provide confidence in software and mock seams; they do not
+Passing host tests provide confidence in software and mock seams, they do not
 validate physical hardware.
 
 ## Building a UF2
@@ -67,13 +67,13 @@ host tool builds the release firmware, extracts the raw binary with `rust-objcop
 (or `arm-none-eabi-objcopy`), converts it to UF2, and writes the recovery
 manifest. `build.sh` remains a compatibility launcher. The same build, UF2,
 verification, recovery-staging, and probe-flash operations are available through
-`cargo run -p sensor-watch-studio -- help`; with no command that binary starts the
+`cargo run -p sensor-watch-studio -- help`, with no command that binary starts the
 GUI.
 
 The `build` CLI resolves the workspace from the executable location, with the
 tool crate's manifest as a verified fallback, so it does not depend on the
 caller's current directory. Studio still refuses configured builds until preset,
-board, and component selections are wired into firmware inputs; this fail-closed
+board, and component selections are wired into firmware inputs, this fail-closed
 policy is checked before any build tool is run.
 
 ## Linting
@@ -100,7 +100,7 @@ cargo fmt --check
 A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
 
 - Build (thumbv6m)
-- Clippy (informational for firmware; `-D warnings` for core)
+- Clippy (informational for firmware, `-D warnings` for core)
 - Firmware host-seam tests (`hostmock` + `std`)
 - Core and tooling host tests
 - Format check
@@ -142,7 +142,7 @@ sensor-watch-rs/
 ### Example skeleton
 
 ```rust
-use crate::movement::types::{Event, Settings, WatchFace};
+use crate::movement::types::{Event, Settings, WatchFace}.
 
 pub struct MyFace {
     // state fields

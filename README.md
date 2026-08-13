@@ -25,7 +25,7 @@ sensor-watch-rs/                <- THIS project (firmware + companion app)
 ```
 
 The original C sources (`Sensor-Watch` and `Second Movement`) are kept as
-references for behavior, register maps, and documentation; we do not modify
+references for behavior, register maps, and documentation, we do not modify
 them. The Rust rewrite merges features from **Second Movement** (persistent
 settings, primary/secondary faces, DST-aware timezones, buzzer priorities,
 accelerometer support, and many new faces).
@@ -69,7 +69,7 @@ graph TD
 
 The firmware is a sealed, air-gapped system: the CPU wakes only to react to a
 single event, then returns to STANDBY. The Studio app is the companion simulator
-and configuration front end; its UF2 build is fail-closed until selections are
+and configuration front end, its UF2 build is fail-closed until selections are
 wired into firmware inputs.
 
 ## Firmware Studio (companion app)
@@ -91,7 +91,7 @@ turn simulated checks into physical hardware validation.
 
 For physical access, the USB bootloader drive exposes UF2/file-transfer
 information only. A UART shell requires a 3.3 V UART jig on A4/A2/GND at
-9600 8-N-1; a missing host serial port does not prove that the board lacks UART.
+9600 8-N-1, a missing host serial port does not prove that the board lacks UART.
 See [`docs/HARDWARE_ACCESS.md`](docs/HARDWARE_ACCESS.md) for wiring, command
 safety, and PASS/FAIL/NOT AVAILABLE/NOT TESTED reporting.
 
@@ -151,7 +151,7 @@ For optional SWD/RTT structured logging, opt in explicitly:
 cargo build -p sensor-watch --release --target thumbv6m-none-eabi --features defmt-log
 ```
 
-`defmt-log` is ARM-only and uses `defmt-rtt`; it is absent from the default
+`defmt-log` is ARM-only and uses `defmt-rtt`, it is absent from the default
 feature set and does not change the normal firmware dependency or size path.
 See [`docs/DEVELOPER_DEBUGGING.md`](docs/DEVELOPER_DEBUGGING.md) for probe use.
 
@@ -170,7 +170,7 @@ cargo run -p sensor-watch-studio -- help
 
 With no command, Studio starts the GUI. The CLI is host-side tooling: it does not
 turn the UF2 USB drive into a serial link or provide device-side recovery. The
-`flash` command uses a probe-rs-compatible SWD probe; normal UF2 flashing remains
+`flash` command uses a probe-rs-compatible SWD probe, normal UF2 flashing remains
 drag-and-drop or the GUI Build & Flash panel.
 
 `build.sh` remains a compatibility launcher. The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`.
@@ -188,7 +188,7 @@ The `core` crate holds pure logic that is host-testable:
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-studio --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-tools --target x86_64-pc-windows-msvc
-# Test counts vary as coverage evolves; run the commands to get the current totals.
+# Test counts vary as coverage evolves, run the commands to get the current totals.
 ```
 
 Lint and format:
@@ -198,7 +198,7 @@ cargo clippy --target thumbv6m-none-eabi -p sensor-watch
 cargo clippy -p sensor-watch-core --target x86_64-pc-windows-msvc -- -D warnings
 cargo fmt --check
 
-The firmware clippy job is informational in CI; the core clippy job is the
+The firmware clippy job is informational in CI, the core clippy job is the
 warnings-as-errors gate. These results are separate from embedded hardware
 validation.
 ```
@@ -232,24 +232,24 @@ validation.
       not implemented.
 - [x] Guided clock and drift calibration in Studio. A real watch still needs the
       UART jig path for command execution.
-- [x] Optical command framing and validation exist as a protocol-only core module;
+- [x] Optical command framing and validation exist as a protocol-only core module.
       no optical receiver integration is claimed.
 - [x] 93 real firmware faces are wired into the Studio host seam, which is
       enabled by default by Studio's `real-faces` feature. The remaining 18
-      firmware faces use the simulated engine; this is host coverage, not
+      firmware faces use the simulated engine, this is host coverage, not
       hardware coverage.
 - [ ] Firmware component profiles for board-wide hardware presets. Studio has
       persisted profile/configuration UI and planning estimates, but profiles do
       not yet change firmware build flags or pin mappings.
-- [ ] Native USB CDC transfers (compile-safe scaffolding only; enabling it returns
-      `UsbError::Unsupported`; see `docs/USB_CDC.md`).
+- [ ] Native USB CDC transfers (compile-safe scaffolding only, enabling it returns
+      `UsbError::Unsupported`, see `docs/USB_CDC.md`).
 
 ## Status and validation snapshot
 
 - The current workspace validation passes 96 firmware host-seam tests, 67 core
   tests, 78 Studio tests, and 10 tools tests, for 251 passing tests total.
 - The passing host suites and ARM build do not validate physical hardware.
-- The Studio and tools package test targets pass their host suites; these
+- The Studio and tools package test targets pass their host suites, these
   results are separate from embedded hardware validation.
 - No complete repository warning total is claimed here because the full
   workspace does not reach a clean build.
@@ -257,7 +257,7 @@ validation.
 The all-in-one Studio CLI is available on top of the reusable Rust tools
 library. UART-jig transport, protocol-only optical and transfer foundations,
 panic-map and host-side recovery validation, and default-enabled Studio
-real-face coverage remain software/host capabilities; no on-silicon validation
+real-face coverage remain software/host capabilities, no on-silicon validation
 has been run.
 
 ## Documentation
@@ -282,5 +282,5 @@ See [`docs/`](docs/README.md) for the full documentation set:
 ## License
 
 MIT OR Apache-2.0 (this rewrite). The reference C projects have their own
-licenses; see `sensor-watch-reference/LICENSE.md` and
+licenses, see `sensor-watch-reference/LICENSE.md` and
 `second-movement-reference/LICENSE.md`.
