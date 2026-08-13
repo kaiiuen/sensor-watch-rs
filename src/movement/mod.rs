@@ -83,8 +83,8 @@ pub mod sailing;
 pub mod save_load;
 pub mod set_time;
 pub mod set_time_hackwatch;
-pub mod shell_auth;
 pub mod settings_face;
+pub mod shell_auth;
 pub mod ships_bell;
 pub mod simon;
 pub mod simple_calculator;
@@ -818,8 +818,7 @@ fn take_background_task_request() -> bool {
 pub static mut TAP_DETECTION_ACTIVE: bool = false;
 
 /// The physical-presence window for mutating shell commands.
-pub static mut SHELL_AUTH: shell_auth::ShellAuthorization =
-    shell_auth::ShellAuthorization::new();
+pub static mut SHELL_AUTH: shell_auth::ShellAuthorization = shell_auth::ShellAuthorization::new();
 
 /// The serial command shell.
 pub static mut SHELL: watch::shell::Shell = watch::shell::Shell::new_static();

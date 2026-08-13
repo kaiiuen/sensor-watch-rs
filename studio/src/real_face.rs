@@ -33,18 +33,18 @@
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{
     alarm, astronomy, beats, beeps, blinky, breathing, character_set, chirpy_demo, close_enough,
-    countdown, counter, databank, day_night_percentage, day_one, days_since, deadline, decimal_time,
-    demo, discgolf, dual_timer, finetune, flashlight, french_revolutionary, frequency_correction, habit,
-    hello_there, interval, invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter,
-    lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
-    minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
-    planetary_hours, planetary_time, preferences, probability, pulsometer, randonaut, ratemeter,
-    repetition_minute, rpn_calculator, rpn_calculator_alt, sailing, save_load, set_time,
-    set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock, simple_clock_bin_led,
-    simple_coin_flip, solar_time, solstice, sos, squash, stopwatch, sunrise_sunset, tachymeter,
-    tally, tarot, tempchart, thermistor_logging, thermistor_readout, thermistor_testing, tide,
-    time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki,
-    weeknumber, wordle, world_clock, world_clock2, wyoscan,
+    countdown, counter, databank, day_night_percentage, day_one, days_since, deadline,
+    decimal_time, demo, discgolf, dual_timer, finetune, flashlight, french_revolutionary,
+    frequency_correction, habit, hello_there, interval, invaders, ish, ke_decimal_time,
+    kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time, menstrual_cycle, metronome,
+    minimal_clock, minmax, minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery,
+    periodic, ping, planetary_hours, planetary_time, preferences, probability, pulsometer,
+    randonaut, ratemeter, repetition_minute, rpn_calculator, rpn_calculator_alt, sailing,
+    save_load, set_time, set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock,
+    simple_clock_bin_led, simple_coin_flip, solar_time, solstice, sos, squash, stopwatch,
+    sunrise_sunset, tachymeter, tally, tarot, tempchart, thermistor_logging, thermistor_readout,
+    thermistor_testing, tide, time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones,
+    types, voltage, wake, wareki, weeknumber, wordle, world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -52,8 +52,6 @@ use sensor_watch_core::datetime::DateTime;
 use sensor_watch_core::mock_hw::{Hw, MockHw};
 
 #[cfg(feature = "real-faces")]
-
-
 
 /// A snapshot of what a real face wrote to the mock LCD, in Studio terms.
 #[derive(Clone, Copy, Debug, Default)]
@@ -91,7 +89,6 @@ pub struct RealFace {
     snapshot: RealFaceSnapshot,
     /// Whether the face has received its initial activation.
     activated: bool,
-
 }
 
 /// Object-safe seam over any migrated firmware `WatchFace`, so the Studio caller
@@ -532,7 +529,6 @@ impl RealFace {
         };
     }
 }
-
 
 /// Returns a heap-allocated real face for `face_name`, if a face of that name is
 /// migrated through the firmware seam. Matrix the name against the firmware's

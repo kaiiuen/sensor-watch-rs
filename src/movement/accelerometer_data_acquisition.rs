@@ -244,7 +244,10 @@ mod tests {
     fn fresh_storage_starts_at_a_writable_sample_offset() {
         let face = super::AccelerometerDataAcquisitionFace::new_static();
         assert_eq!(face.next_available_page, 8186);
-        assert_eq!(normalize_storage_pointer(face.next_available_page), Some(8186));
+        assert_eq!(
+            normalize_storage_pointer(face.next_available_page),
+            Some(8186)
+        );
     }
 
     #[test]

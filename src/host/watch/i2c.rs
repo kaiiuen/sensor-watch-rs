@@ -18,8 +18,7 @@ pub fn write16_checked(addr: i16, reg: u8, data: u16) -> Result<(), I2cError> {
     if !valid_i2c_address(addr) {
         return Err(I2cError::InvalidAddress);
     }
-    seam::with_current_hw(|hw| hw.i2c_write16(addr, reg, data))
-        .map_err(|_| I2cError::Nack)
+    seam::with_current_hw(|hw| hw.i2c_write16(addr, reg, data)).map_err(|_| I2cError::Nack)
 }
 
 pub fn read16_checked(addr: i16, reg: u8) -> Result<u16, I2cError> {
