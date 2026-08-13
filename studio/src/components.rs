@@ -269,6 +269,6 @@ pub fn show_configurator(
             format!("Warning: {warning}"),
         );
     }
-    ui.weak("This profile guides configuration and validation only. It does not magically change hardware pin mappings unless a registered module exists. Firmware build flags are unchanged.");
+    ui.weak("This profile is planning/validation data only. It does not change hardware pin mappings, firmware build flags, or the generated artifact. Studio refuses the UF2 build while these selections are not wired into firmware inputs.");
     changed
 }

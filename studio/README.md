@@ -1,8 +1,10 @@
 # Firmware Studio
 
 A **GUI companion app** for the Sensor-Watch firmware. This is the end-goal
-product: an editor, debugger, simulator, and assembler that produces the final
-`.uf2` firmware file and flashes it to the watch.
+product: an editor, debugger, simulator, and assembler. The Studio UI currently
+refuses its UF2 build because the selected preset/faces, board, and component
+profile are not yet wired into firmware build inputs; this prevents a stock
+artifact from being misrepresented as configured firmware.
 
 Built with **egui/eframe** (pure Rust, cross-platform GUI).
 
@@ -44,11 +46,12 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   through the `real_face.rs` host seam (see below) instead of the hand-written
   engine; the remaining faces use `face_sim`. Host seam coverage does not
   constitute physical hardware testing.
-- **Build & Flash** - combined panel: select the target board, build the
-  firmware into a `.uf2` (with estimated compile/flash times), then flash it to
-  the watch. The app **auto-detects** the watch's USB drive and auto-selects
-  the board from its `INFO_UF2.TXT`, copies the `.uf2`, and auto-fetches NTP
-  time for sync. Has a combined build & flash log.
+- **Build & Flash** - combined panel: review the target board and component
+  profile, then request a firmware build. The build is currently refused because
+  Studio does not pass the active preset/faces, board, or component profile into
+  firmware build inputs. No configured `.uf2` is published, so the flash action
+  cannot use a newly selected Studio configuration. The panel still documents
+  the intended USB-drive/`INFO_UF2.TXT` workflow for when that wiring is added.
 - **Calibration** - guided clock calibration (generates a `settime` command for
   the next minute boundary), a **beep-on-minute-rollover** helper, and guided
   drift calibration (parts-per-million). The hardware path requires UART Jig
@@ -65,7 +68,8 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   `src/watch/`; modules are persisted and can be enabled/disabled/removed.
   Component profiles are implemented in Studio as persisted configuration and
   planning-estimate UI, but they do not yet alter firmware build flags or pin
-  mappings. Thermistor and OPT3001 readings still require matching hardware;
+  mappings. The UF2 build refuses to proceed while that limitation remains.
+  Thermistor and OPT3001 readings still require matching hardware;
   simulator diagnostics do not create sensor measurements.
 - **Diagnostics / Probe-Test** - offline simulator and shell diagnostics. A
   connected UART is shown separately, but the diagnostic report does not query
@@ -177,8 +181,10 @@ launches at a 480p (640x480) default window size and is resizable.
 The app depends on `sensor-watch-core` (from `../core`), which provides the
 pure logic (UF2 encoding, date math, settings bit-packing, SECDED ECC, transfer
 validation, and optical protocol validation) that is host-testable and directly
-reusable by the app. The Build panel invokes the firmware's own `cargo build`
-and uses the core crate's `convert_to_uf2` to produce the final file.
+reusable by the app. The Build panel is fail-closed until its selected preset/faces, board, and
+component profile are passed into the firmware build. Once that input path is
+implemented, it will invoke the firmware's own `cargo build` and use the core
+crate's `convert_to_uf2` to produce the final file.
 
 The Simulator can also run the **real firmware faces** through a host seam:
 `real_face.rs` drives the firmware's own `WatchFace` code against a mock HAL,

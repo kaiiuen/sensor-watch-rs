@@ -3,6 +3,10 @@
 //! Invokes the firmware build (cargo + rust-objcopy) and converts the raw
 //! binary to a `.uf2` file using the `sensor-watch-core` UF2 encoder. This is
 //! the "assembler" part of Firmware Studio.
+//!
+//! The Studio UI currently does not pass its selected preset, faces, board, or
+//! component profile into this module. Builds therefore fail closed rather than
+//! publishing a stock artifact that could be mistaken for a configured one.
 
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -91,9 +95,29 @@ pub struct BuildResult {
     pub uf2_path: Option<PathBuf>,
 }
 
+/// The build cannot truthfully produce a configured artifact until Studio's
+/// selections are part of the firmware build inputs.
+pub const CONFIGURATION_BUILD_BLOCKED: &str =
+    "firmware build refused: selected presets, faces, board, and component profile are not wired into firmware build inputs; no configured UF2 was generated";
+
+/// Returns the fail-closed build validation error.
+///
+/// Keep this as a separate, side-effect-free check so callers and tests can
+/// surface the same limitation without touching the filesystem or toolchain.
+pub fn validate_configuration_inputs() -> Result<(), &'static str> {
+    Err(CONFIGURATION_BUILD_BLOCKED)
+}
+
 /// Runs the full firmware build: cargo build, extract the raw binary, and
 /// convert it to a `.uf2` file in the given output directory.
 pub fn build_firmware(output_dir: &Path) -> BuildResult {
+    if let Err(error) = validate_configuration_inputs() {
+        return BuildResult {
+            success: false,
+            message: error.to_string(),
+            uf2_path: None,
+        };
+    }
     if let Err(error) = validate_output_dir(output_dir) {
         return BuildResult {
             success: false,
@@ -520,6 +544,24 @@ fn ensure_regular_or_absent(path: &Path) -> Result<(), String> {
         Ok(_) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
         Err(error) => Err(format!("cannot inspect path: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn configured_builds_are_rejected_before_side_effects() {
+        assert_eq!(
+            validate_configuration_inputs(),
+            Err(CONFIGURATION_BUILD_BLOCKED)
+        );
+
+        let result = build_firmware(Path::new("target/studio-test-output"));
+        assert!(!result.success);
+        assert_eq!(result.message, CONFIGURATION_BUILD_BLOCKED);
+        assert!(result.uf2_path.is_none());
     }
 }
 
