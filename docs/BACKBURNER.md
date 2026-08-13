@@ -57,11 +57,11 @@ rollback remain unimplemented.
 
 ### 5. Full real-face host migration
 
-Move the remaining 20 firmware faces into the Studio host seam so all 111
+Move the remaining 18 firmware faces into the Studio host seam so all 111
 registered firmware faces can run the real firmware implementation in the
 simulator.
 
-**Status:** Open. 91 faces currently use the default-enabled `real-faces`
+**Status:** Open. 93 faces currently use the default-enabled `real-faces`
 seam; the remaining faces use the simulator engine because their modules are
 not yet exported through the host firmware library.
 
