@@ -407,12 +407,16 @@ fn country_label(index: u8) -> &'static str {
 
 /// The first-run walkthrough steps.
 const FIRST_RUN_STEPS: [&str; 5] = [
-    "1. Open Editor and choose Blocks",
-    "2. Give your face a name and arrange a few starter blocks",
+    "1. Start in Blocks and give your face a name",
+    "2. Arrange a few starter blocks",
     "3. Generate source, choose Load into Rust editor, then Save face",
     "4. Add the saved face to a preset and try it in Simulator",
     "5. Build & Flash is currently unavailable until Studio has configured build inputs",
 ];
+
+fn first_run_start_panel() -> Panel {
+    Panel::Editor
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Panel {
@@ -1354,8 +1358,11 @@ impl eframe::App for StudioApp {
                         ui.label(step);
                     }
                     ui.add_space(10.0);
-                    if ui.button("Got it - Start using").clicked() {
+                    if ui.button("Start with Blocks").clicked() {
                         self.first_run = false;
+                        self.block_editor.set_blocks_mode(true);
+                        self.current_panel = first_run_start_panel();
+                        self.status = "Blocks editor ready - name your face to begin".to_string();
                         self.save_settings_internal();
                     }
                 });
@@ -7747,16 +7754,23 @@ fn is_valid_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{credit_matches, CreditEntry, CREDIT_GROUPS, FIRST_RUN_STEPS};
+    use super::{
+        credit_matches, first_run_start_panel, CreditEntry, Panel, CREDIT_GROUPS, FIRST_RUN_STEPS,
+    };
 
     #[test]
     fn first_run_steps_describe_a_non_build_beginner_path() {
         let steps = FIRST_RUN_STEPS.join(" ");
-        assert!(steps.contains("choose Blocks"));
+        assert!(steps.contains("Start in Blocks"));
         assert!(steps.contains("Simulator"));
         assert!(steps.contains("currently unavailable"));
         assert!(!steps.contains("Build UF2"));
         assert!(!steps.contains("Copy to watch"));
+    }
+
+    #[test]
+    fn first_run_starts_in_the_blocks_editor() {
+        assert_eq!(first_run_start_panel(), Panel::Editor);
     }
 
     #[test]

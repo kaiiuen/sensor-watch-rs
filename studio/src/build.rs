@@ -141,8 +141,15 @@ pub const CONFIGURATION_INPUT_CONTRACT: &[&str] = &[
 
 /// The build cannot truthfully produce a configured artifact until every item in
 /// [`CONFIGURATION_INPUT_CONTRACT`] is supplied to the firmware build.
-pub const CONFIGURATION_BUILD_BLOCKED: &str =
-    "firmware build refused: Studio configuration input contract is incomplete; no configured UF2 was generated";
+pub const CONFIGURATION_BUILD_BLOCKED: &str = concat!(
+    "firmware build refused: Studio configuration input contract is incomplete; ",
+    "no configured UF2 was generated. Complete these inputs before retrying:\n",
+    "- active preset identity and ordered face/source inputs\n",
+    "- target board identity, revision, and board-specific runtime settings\n",
+    "- component-to-firmware feature/module selections\n",
+    "- concrete pin, bus, address, power, and ownership mappings for every selected component\n",
+    "- a generated-input provenance/validation record tied to the exact firmware build",
+);
 
 /// Returns the fail-closed build validation error.
 ///
@@ -670,6 +677,16 @@ mod tests {
         assert!(contract.iter().any(|item| item.contains("feature/module")));
         assert!(contract.iter().any(|item| item.contains("pin")));
         assert!(contract.iter().any(|item| item.contains("provenance")));
+    }
+
+    #[test]
+    fn blocked_build_message_lists_every_required_preflight_input() {
+        let message = validate_configuration_inputs().unwrap_err();
+
+        assert!(message.starts_with("firmware build refused:"));
+        for input in CONFIGURATION_INPUT_CONTRACT {
+            assert!(message.contains(input), "blocked message omitted: {input}");
+        }
     }
 
     #[test]

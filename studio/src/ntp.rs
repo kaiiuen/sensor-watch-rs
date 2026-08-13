@@ -95,6 +95,21 @@ fn ntp_to_unix_fractional(ntp: f64) -> f64 {
     ntp - NTP_TIMESTAMP_DELTA as f64
 }
 
+fn validate_response_header(packet: &[u8]) -> Result<(), String> {
+    // LI=3 means the server is unsynchronized. Stratum 0 is reserved for a
+    // Kiss-o'-Death response, neither of which is a usable time source.
+    if (packet[0] >> 6) == 3 {
+        return Err("NTP server is unsynchronized".to_string());
+    }
+    if packet[1] == 0 {
+        return Err("NTP server returned a stratum-0 response".to_string());
+    }
+    if (packet[0] & 0x07) != 4 {
+        return Err("Invalid NTP reply mode (expected server mode)".to_string());
+    }
+    Ok(())
+}
+
 /// Current local time as fractional NTP seconds (seconds since 1900).
 fn local_to_ntp_seconds() -> f64 {
     let now = SystemTime::now()
@@ -136,10 +151,7 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
     if len < 48 {
         return Err(format!("Short NTP response: {len} bytes"));
     }
-    // LI/VN/Mode byte sanity check: a valid server reply has Mode=4 (server).
-    if (buf[0] & 0x07) != 4 {
-        return Err("Invalid NTP reply mode (expected server mode)".to_string());
-    }
+    validate_response_header(&buf[..48])?;
 
     // T2 = receive timestamp (bytes 32..40), T3 = transmit (bytes 40..48).
     let (r1, r2) = parse_ntp_timestamp(&buf[..48], 32);
@@ -198,5 +210,28 @@ mod tests {
     fn uses_unix_epoch_weekday_offset() {
         assert_eq!(weekday_from_unix_seconds(0), 4); // Thursday
         assert_eq!(weekday_from_unix_seconds(86_400 * 3), 0); // Sunday
+    }
+
+    #[test]
+    fn rejects_unsynchronized_server_replies() {
+        let mut packet = [0u8; 48];
+        packet[0] = 0xc4; // LI=3, server mode
+        packet[1] = 2;
+
+        assert_eq!(
+            validate_response_header(&packet),
+            Err("NTP server is unsynchronized".to_string())
+        );
+    }
+
+    #[test]
+    fn rejects_kiss_of_death_stratum_zero_replies() {
+        let mut packet = [0u8; 48];
+        packet[0] = 0x24; // LI=0, server mode
+
+        assert_eq!(
+            validate_response_header(&packet),
+            Err("NTP server returned a stratum-0 response".to_string())
+        );
     }
 }
