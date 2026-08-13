@@ -53,7 +53,9 @@ impl AccelerometerDataAcquisitionFace {
             repeat_ticks: 0,
             settings_page: 0,
             beep_with_countdown: true,
-            next_available_page: 8192,
+            // The pointer is the start of the next 6-byte sample. Begin at
+            // the last sample-aligned position that fits in the 8 KiB area.
+            next_available_page: 8192 - SAMPLE_SIZE,
         }
     }
 
@@ -237,6 +239,13 @@ fn normalize_storage_pointer(pointer: i16) -> Option<i16> {
 #[cfg(test)]
 mod tests {
     use super::normalize_storage_pointer;
+
+    #[test]
+    fn fresh_storage_starts_at_a_writable_sample_offset() {
+        let face = super::AccelerometerDataAcquisitionFace::new_static();
+        assert_eq!(face.next_available_page, 8186);
+        assert_eq!(normalize_storage_pointer(face.next_available_page), Some(8186));
+    }
 
     #[test]
     fn normalizes_sample_pointer_at_page_boundary() {
