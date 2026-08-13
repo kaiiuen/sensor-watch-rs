@@ -32,18 +32,19 @@
 
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{
-    alarm, astronomy, beats, beeps, blinky, character_set, close_enough, countdown, counter,
-    day_night_percentage, day_one, deadline, decimal_time, demo, flashlight, french_revolutionary,
-    frequency_correction, hello_there, interval, invaders, ish, ke_decimal_time,
-    kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time, menstrual_cycle, metronome,
-    minimal_clock, minmax, minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery,
-    periodic, ping, planetary_hours, planetary_time, preferences, probability, pulsometer,
-    randonaut, ratemeter, repetition_minute, rpn_calculator, rpn_calculator_alt, sailing,
-    save_load, set_time, set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock,
-    simple_clock_bin_led, simple_coin_flip, solar_time, solstice, sos, squash, stopwatch,
-    sunrise_sunset, tachymeter, tally, tarot, tempchart, thermistor_logging, thermistor_readout,
-    thermistor_testing, tide, time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones,
-    types, voltage, wake, wareki, weeknumber, wordle, world_clock, world_clock2, wyoscan,
+    alarm, astronomy, beats, beeps, blinky, breathing, character_set, close_enough, countdown,
+    counter, databank, day_night_percentage, day_one, deadline, decimal_time, demo, discgolf,
+    flashlight, french_revolutionary, frequency_correction, habit, hello_there, interval, invaders,
+    ish, ke_decimal_time, kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time,
+    menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal, moon_phase,
+    morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time, preferences,
+    probability, pulsometer, randonaut, ratemeter, repetition_minute, rpn_calculator,
+    rpn_calculator_alt, sailing, save_load, set_time, set_time_hackwatch, ships_bell, simon,
+    simple_calculator, simple_clock, simple_clock_bin_led, simple_coin_flip, solar_time, solstice,
+    sos, squash, stopwatch, sunrise_sunset, tachymeter, tally, tarot, tempchart,
+    thermistor_logging, thermistor_readout, thermistor_testing, tide, time_left, timer, tomato,
+    toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki, weeknumber, wordle,
+    world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -305,6 +306,14 @@ impl_real_face_trait!(blinky::BlinkyFace);
 impl_real_face_trait!(character_set::CharacterSetFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(demo::DemoFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(databank::DatabankFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(habit::HabitFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(breathing::BreathingFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(discgolf::DiscgolfFace);
 
 #[cfg(feature = "real-faces")]
 impl RealFaceTrait for alarm::AlarmFace {
@@ -557,8 +566,11 @@ pub(crate) const REAL_FACE_NAMES: &[&str] = &[
     "FLASHLIGHT",
     "BEEPS",
     "BLINKY",
+    "BREATHING",
     "CHARACTER_SET",
+    "DATABANK",
     "DEMO",
+    "DISCGOLF",
     "BEATS",
     "ASTRONOMY",
     "CLOSE_ENOUGH",
@@ -650,8 +662,11 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "FLASHLIGHT" => Some(Box::new(flashlight::FlashlightFace::new_static())),
         "BEEPS" => Some(Box::new(beeps::BeepsFace::new_static())),
         "BLINKY" => Some(Box::new(blinky::BlinkyFace::new_static())),
+        "BREATHING" => Some(Box::new(breathing::BreathingFace::new_static())),
         "CHARACTER_SET" => Some(Box::new(character_set::CharacterSetFace::new_static())),
+        "DATABANK" => Some(Box::new(databank::DatabankFace::new_static())),
         "DEMO" => Some(Box::new(demo::DemoFace::new_static())),
+        "DISCGOLF" => Some(Box::new(discgolf::DiscgolfFace::new_static())),
         "BEATS" => Some(Box::new(beats::BeatsFace::new_static())),
         "ASTRONOMY" => Some(Box::new(astronomy::AstronomyFace::new_static())),
         "CLOSE_ENOUGH" => Some(Box::new(close_enough::CloseEnoughClockFace::new_static())),
@@ -773,8 +788,11 @@ fn new_face_name(face_name: &str) -> &'static str {
         "FLASHLIGHT" => "FLASHLIGHT",
         "BEEPS" => "BEEPS",
         "BLINKY" => "BLINKY",
+        "BREATHING" => "BREATHING",
         "CHARACTER_SET" => "CHARACTER_SET",
+        "DATABANK" => "DATABANK",
         "DEMO" => "DEMO",
+        "DISCGOLF" => "DISCGOLF",
         "BEATS" => "BEATS",
         "ASTRONOMY" => "ASTRONOMY",
         "CLOSE_ENOUGH" => "CLOSE_ENOUGH",
@@ -964,8 +982,11 @@ mod tests {
             "FLASHLIGHT",
             "BEEPS",
             "BLINKY",
+            "BREATHING",
             "CHARACTER_SET",
+            "DATABANK",
             "DEMO",
+            "DISCGOLF",
             "BEATS",
         ] {
             assert!(RealFace::new(name).is_some(), "{name} should be migrated");
@@ -1083,8 +1104,17 @@ mod tests {
     }
 
     #[test]
-    fn newly_added_simple_faces_activate_through_the_host_seam() {
-        for name in ["BEEPS", "BLINKY", "CHARACTER_SET", "DEMO", "BEATS"] {
+    fn newly_added_faces_activate_through_the_host_seam() {
+        for name in [
+            "BEEPS",
+            "BLINKY",
+            "BREATHING",
+            "CHARACTER_SET",
+            "DATABANK",
+            "DEMO",
+            "DISCGOLF",
+            "BEATS",
+        ] {
             let snapshot = render_real_face(name, 2024, 2, 29, 15, 4, 0, 4, true, false, false)
                 .unwrap_or_else(|| panic!("{name} should render through the host seam"));
             assert!(snapshot.chars.iter().any(|character| *character != '\0'));

@@ -143,6 +143,34 @@ pub mod beats {
     pub use real::BeatsFace;
 }
 
+/// The REAL `databank` face.
+pub mod databank {
+    #[path = "../../../movement/databank.rs"]
+    pub mod real;
+    pub use real::DatabankFace;
+}
+
+/// The REAL `habit` face.
+pub mod habit {
+    #[path = "../../../movement/habit.rs"]
+    pub mod real;
+    pub use real::HabitFace;
+}
+
+/// The REAL `breathing` face.
+pub mod breathing {
+    #[path = "../../../movement/breathing.rs"]
+    pub mod real;
+    pub use real::BreathingFace;
+}
+
+/// The REAL `discgolf` face.
+pub mod discgolf {
+    #[path = "../../../movement/discgolf.rs"]
+    pub mod real;
+    pub use real::DiscgolfFace;
+}
+
 /// The REAL `astronomy` face.
 pub mod astronomy {
     #[path = "../../../movement/astronomy.rs"]

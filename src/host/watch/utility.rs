@@ -6,9 +6,9 @@
 //! `crate::watch::utility::get_weekday` unchanged.
 
 pub use sensor_watch_core::utility::{
-    convert_to_12_hour, date_time_convert_zone, date_time_from_unix_time, date_time_to_unix_time,
-    days_in_month, days_since_new_year, get_iso8601_weekday_number, get_weekday, get_weeknumber,
-    seconds_to_duration,
+    convert_to_12_hour, convert_to_unix_time, date_time_convert_zone, date_time_from_unix_time,
+    date_time_to_unix_time, days_in_month, days_since_new_year, get_iso8601_weekday_number,
+    get_weekday, get_weeknumber, seconds_to_duration,
 };
 
 /// Offsets a timestamp by a given amount. Same logic as the real

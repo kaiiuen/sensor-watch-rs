@@ -232,8 +232,8 @@ validation.
       UART jig path for command execution.
 - [x] Optical command framing and validation exist as a protocol-only core module;
       no optical receiver integration is claimed.
-- [x] 87 real firmware faces are wired into the Studio host seam, which is
-      enabled by default by Studio's `real-faces` feature. The remaining 24
+- [x] 91 real firmware faces are wired into the Studio host seam, which is
+      enabled by default by Studio's `real-faces` feature. The remaining 20
       firmware faces use the simulated engine; this is host coverage, not
       hardware coverage.
 - [ ] Firmware component profiles for board-wide hardware presets. Studio has
