@@ -445,17 +445,35 @@ fn canonical_workspace_root(path: &Path) -> Option<PathBuf> {
     is_workspace_root(&root).then_some(root)
 }
 
-/// Resolves the firmware workspace without consulting the caller's cwd.
+fn compiled_workspace_root() -> Option<PathBuf> {
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    canonical_workspace_root(manifest_dir.parent().unwrap_or(manifest_dir))
+}
+
+fn trusted_runtime_root(candidate: &Path, trusted: &Path) -> Option<PathBuf> {
+    let root = canonical_workspace_root(candidate)?;
+    (root == trusted).then_some(root)
+}
+
+/// Resolves the firmware workspace without consulting an untrusted directory.
 ///
 /// A Studio/tools executable normally lives below `target/`, so its ancestor
-/// directories are the most useful runtime hint. The compile-time manifest
-/// directory is the safe fallback for Cargo invocations and source checkouts.
+/// directories are useful only when they resolve to the workspace this binary
+/// was compiled from. A copied executable must not select an arbitrary
+/// Cargo.toml and execute that project's build scripts.
 pub fn workspace_root() -> ToolResult<PathBuf> {
+    let trusted = compiled_workspace_root().ok_or_else(|| {
+        format!(
+            "cannot locate the compiled sensor-watch workspace ({})",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    })?;
+
     if let Ok(executable) = env::current_exe()
         && let Some(mut dir) = executable.parent().map(Path::to_path_buf)
     {
         loop {
-            if let Some(root) = canonical_workspace_root(&dir) {
+            if let Some(root) = trusted_runtime_root(&dir, &trusted) {
                 return Ok(root);
             }
             if !dir.pop() {
@@ -464,17 +482,9 @@ pub fn workspace_root() -> ToolResult<PathBuf> {
         }
     }
 
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    for candidate in [manifest_dir, manifest_dir.parent().unwrap_or(manifest_dir)] {
-        if let Some(root) = canonical_workspace_root(candidate) {
-            return Ok(root);
-        }
-    }
-
-    Err(format!(
-        "cannot locate the sensor-watch workspace from the executable or tool manifest ({})",
-        manifest_dir.display()
-    ))
+    // The executable may have been copied outside the checkout. Use only the
+    // compile-time workspace, never a similarly named project found at runtime.
+    Ok(trusted)
 }
 
 pub fn build_firmware() -> ToolResult<BuildResult> {
@@ -606,5 +616,23 @@ mod workspace_tests {
             .canonicalize()
             .unwrap();
         assert_eq!(workspace_root().unwrap(), expected);
+    }
+
+    #[test]
+    fn valid_workspace_elsewhere_is_not_trusted() {
+        let root = temp_root("untrusted-valid");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"sensor-watch\"\n",
+        )
+        .unwrap();
+        let trusted = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        assert!(trusted_runtime_root(&root, &trusted).is_none());
+        fs::remove_dir_all(root).unwrap();
     }
 }
