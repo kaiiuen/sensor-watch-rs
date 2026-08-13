@@ -5,6 +5,7 @@
 //! oscillator (XOSC32K) and routes its 1 kHz output to the RTC, then enables
 //! the RTC's APB clock. The RTC depends on this before it can run.
 
+use crate::watch::timeout::wait_until;
 use atsaml22j::mclk::RegisterBlock as Mclk;
 use atsaml22j::osc32kctrl::RegisterBlock as Osc32kctrl;
 use atsaml22j::osc32kctrl::rtcctrl::Rtcselselect;
@@ -31,7 +32,7 @@ fn mclk() -> &'static Mclk {
 /// - Run in standby
 /// - Start-up time 0x3 (1000092 us)
 /// - On-demand disabled
-fn init_xosc32k() {
+fn init_xosc32k() -> bool {
     osc32kctrl().xosc32k().modify(|_, w| {
         w.enable().set_bit();
         w.xtalen().set_bit();
@@ -43,8 +44,9 @@ fn init_xosc32k() {
         unsafe { w.startup().bits(0x3) }
     });
 
-    // Wait for the oscillator to become ready.
-    while !osc32kctrl().status().read().xosc32krdy().bit_is_set() {}
+    // Wait for the oscillator to become ready, but leave the watchdog a chance
+    // to reset the device if the crystal or clock controller is stuck.
+    wait_until(|| osc32kctrl().status().read().xosc32krdy().bit_is_set()).is_ok()
 }
 
 /// Routes the XOSC32K 1 kHz output to the RTC and selects the SLCD source.
@@ -93,9 +95,18 @@ pub fn cfd_fired() -> bool {
 ///
 /// This is called from `watch::rtc::init()` before the RTC is configured.
 pub fn init() {
-    init_xosc32k();
+    // The oscillator-ready wait below is part of boot, before the normal
+    // watch::init watchdog step. Start the watchdog first so a failed clock
+    // cannot trap boot forever.
+    crate::watch::wdt::init();
+    let oscillator_ready = init_xosc32k();
     init_rtc_source();
     enable_rtc_apb();
+    if !oscillator_ready {
+        // The RTC/APB clock is available now, so fault recording can safely use
+        // the RTC backup registers after a failed crystal startup.
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::ClockFailure);
+    }
     // Enable the clock failure detector so a broken crystal doesn't freeze
     // the watch.
     init_cfd();

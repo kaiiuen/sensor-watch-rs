@@ -106,8 +106,8 @@ pub fn is_enabled() -> bool {
 }
 
 /// Waits for the RTC to finish synchronizing its registers.
-fn sync() {
-    let _ = wait_until(|| rtc().syncbusy().read().bits() == 0);
+fn sync() -> bool {
+    wait_until(|| rtc().syncbusy().read().bits() == 0).is_ok()
 }
 
 /// Initializes the RTC in clock/calendar (MODE2) mode.
@@ -124,9 +124,13 @@ pub fn init() {
 
     // Disable and reset.
     rtc().ctrla().modify(|_, w| w.enable().clear_bit());
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+    }
     rtc().ctrla().modify(|_, w| w.swrst().set_bit());
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+    }
 
     // Configure: clock mode, DIV1024 prescaler, clock sync enabled.
     rtc().ctrla().modify(|_, w| {
@@ -135,7 +139,9 @@ pub fn init() {
         w.clocksync().set_bit();
         w.enable().set_bit()
     });
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+    }
 }
 
 /// Sets the date and time.
@@ -144,16 +150,24 @@ pub fn set_date_time(date_time: DateTime) -> Result<(), ()> {
         return Err(());
     }
     // Double sync: without it, setting the time at high tick rates is unreliable.
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return Err(());
+    }
     // SAFETY: writing the full CLOCK register with a valid packed value.
     unsafe { rtc().clock().write(|w| w.bits(date_time.to_reg())) };
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return Err(());
+    }
     Ok(())
 }
 
 /// Returns the current date and time.
 pub fn get_date_time() -> DateTime {
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+    }
     let date_time = DateTime::from_reg(rtc().clock().read().bits());
     if date_time.is_valid() {
         date_time
@@ -490,11 +504,19 @@ pub extern "C" fn RTC() {
 /// This is a dangerous operation, so the enable bit is written twice, waiting
 /// for synchronization in between.
 pub fn enable(en: bool) {
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return;
+    }
     rtc().ctrla().modify(|_, w| w.enable().bit(en));
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return;
+    }
     rtc().ctrla().modify(|_, w| w.enable().bit(en));
-    sync();
+    if !sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+    }
 }
 
 /// Writes a frequency-correction value in a single register write.

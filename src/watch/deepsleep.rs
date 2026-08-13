@@ -5,6 +5,7 @@
 
 use crate::watch::gpio::{self, Direction, Function, Pin, PullMode};
 use crate::watch::rtc;
+use crate::watch::timeout::wait_until;
 use atsaml22j::rtc::Mode2;
 use atsaml22j::rtc::mode2::tampctrl::{In0actselect, In1actselect, In2actselect};
 
@@ -35,8 +36,8 @@ fn supc() -> &'static atsaml22j::supc::RegisterBlock {
 }
 
 /// Waits for the RTC to finish synchronizing.
-fn rtc_sync() {
-    while rtc_mode2().syncbusy().read().bits() != 0 {}
+fn rtc_sync() -> bool {
+    wait_until(|| rtc_mode2().syncbusy().read().bits() == 0).is_ok()
 }
 
 /// Registers a callback on one of the RTC's external wake pins.
@@ -65,7 +66,10 @@ pub fn register_extwake_callback(pin: Pin, callback: rtc::Callback, level: bool)
 
     // Disable the RTC.
     rtc_mode2().ctrla().modify(|_, w| w.enable().clear_bit());
-    while !rtc_mode2().syncbusy().read().enable().bit_is_set() {}
+    if wait_until(|| rtc_mode2().syncbusy().read().enable().bit_is_set()).is_err() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return;
+    }
 
     // Update the TAMPCTRL configuration.
     match in_idx {
@@ -91,7 +95,10 @@ pub fn register_extwake_callback(pin: Pin, callback: rtc::Callback, level: bool)
 
     // Re-enable the RTC.
     rtc_mode2().ctrla().modify(|_, w| w.enable().set_bit());
-    while !rtc_mode2().syncbusy().read().enable().bit_is_set() {}
+    if wait_until(|| rtc_mode2().syncbusy().read().enable().bit_is_set()).is_err() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return;
+    }
 
     cortex_m::peripheral::NVIC::unpend(atsaml22j::Interrupt::RTC);
     // SAFETY: unmasking a valid interrupt is safe.
@@ -123,7 +130,10 @@ pub fn disable_extwake_interrupt(pin: Pin) {
 
     if rtc_mode2().ctrla().read().enable().bit_is_set() {
         rtc_mode2().ctrla().modify(|_, w| w.enable().clear_bit());
-        rtc_sync();
+        if !rtc_sync() {
+            crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+            return;
+        }
     }
     match in_idx {
         0 => {
@@ -137,6 +147,9 @@ pub fn disable_extwake_interrupt(pin: Pin) {
         }
     }
     rtc_mode2().ctrla().modify(|_, w| w.enable().set_bit());
+    if !rtc_sync() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+    }
 }
 
 /// Stores data in one of the RTC's backup registers (0-7).

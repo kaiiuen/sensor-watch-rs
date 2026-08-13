@@ -5,6 +5,7 @@
 //! whole chip. This is the "authoritarian backstop" that guarantees the watch
 //! always recovers from a hang - it can never freeze forever.
 
+use crate::watch::timeout::wait_until;
 use atsaml22j::wdt::RegisterBlock as Wdt;
 use atsaml22j::wdt::config::Perselect;
 
@@ -16,8 +17,8 @@ fn wdt() -> &'static Wdt {
 }
 
 /// Waits for the WDT to finish synchronizing.
-fn sync() {
-    while wdt().syncbusy().read().bits() != 0 {}
+fn sync() -> bool {
+    wait_until(|| wdt().syncbusy().read().bits() == 0).is_ok()
 }
 
 /// Initializes the watchdog with a ~2 second timeout.
@@ -25,18 +26,24 @@ fn sync() {
 /// The WDT runs on a 1 kHz clock. `Cyc2048` gives a 2.048 second timeout. We
 /// set `ALWAYSON` so the watchdog cannot be accidentally disabled by software.
 pub fn init() {
+    // Clock setup can wait for a broken crystal, so start the watchdog before
+    // any boot-time clock wait. The later call from watch::init is harmless.
+    if wdt().ctrla().read().enable().bit_is_set() {
+        return;
+    }
+
     // Configure the period first (must be done before enabling).
     wdt()
         .config()
         .modify(|_, w| w.per().variant(Perselect::Cyc2048));
-    sync();
+    let _ = sync();
 
     // Enable the watchdog with always-on behavior.
     wdt().ctrla().modify(|_, w| {
         w.enable().set_bit();
         w.alwayson().set_bit()
     });
-    sync();
+    let _ = sync();
 }
 
 /// Kicks (reloads) the watchdog counter.
@@ -70,7 +77,7 @@ pub fn extend_timeout() {
     wdt()
         .config()
         .modify(|_, w| w.per().variant(Perselect::Cyc16384));
-    sync();
+    let _ = sync();
 }
 
 /// Restores the ~2 s watchdog timeout for active, interactive use.
@@ -78,5 +85,5 @@ pub fn tighten_timeout() {
     wdt()
         .config()
         .modify(|_, w| w.per().variant(Perselect::Cyc2048));
-    sync();
+    let _ = sync();
 }

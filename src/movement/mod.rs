@@ -1581,15 +1581,11 @@ pub fn app_setup() {
     unsafe {
         watch::deepsleep::store_backup_data(MOVEMENT_STATE.settings.reg, 0);
 
-        // Set up the 1-minute alarm for background tasks.
-        let alarm_time = DateTime {
-            second: 59,
-            minute: 0,
-            hour: 0,
-            day: 0,
-            month: 0,
-            year: 0,
-        };
+        // Set up the 1-minute alarm for background tasks. AlarmMatch::Ss
+        // ignores the calendar fields, but the PAC still receives a valid RTC
+        // alarm value rather than the old invalid zero month/day fields.
+        let mut alarm_time = rtc::get_date_time();
+        alarm_time.second = 59;
         rtc::register_alarm_callback(cb_alarm_fired, alarm_time, rtc::AlarmMatch::Ss);
 
         // Register a fast tick for long-press detection (suspends when idle).
