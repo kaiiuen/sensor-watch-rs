@@ -87,6 +87,9 @@ impl TossUpFace {
     }
 
     fn roll_dice(&self, sides: u8) -> u8 {
+        if sides == 0 {
+            return 0;
+        }
         let mut bits_needed = 0u8;
         let mut temp_sides = sides - 1;
         while temp_sides > 0 {
@@ -100,7 +103,7 @@ impl TossUpFace {
                 result <<= 1;
                 result |= self.divine_bit();
             }
-            if result <= sides - 1 {
+            if result < sides {
                 break;
             }
         }
@@ -654,6 +657,18 @@ impl TossUpFace {
             }
         }
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::TossUpFace;
+
+    #[test]
+    fn roll_dice_handles_invalid_and_single_sided_dice() {
+        let face = TossUpFace::new_static();
+        assert_eq!(face.roll_dice(0), 0);
+        assert_eq!(face.roll_dice(1), 1);
     }
 }
 

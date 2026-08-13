@@ -337,7 +337,7 @@ impl WatchFace for LanderFace {
                         }
                     }
                     // Wait until time for next display.
-                    if self.tick_counter >= (1 * LANDER_TICK_FREQUENCY) as u16 {
+                    if self.tick_counter >= LANDER_TICK_FREQUENCY as u16 {
                         self.tick_counter = 0;
                         self.mode = MODE_DISPLAY_FINAL_STATUS;
                     }

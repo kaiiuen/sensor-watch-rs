@@ -100,8 +100,10 @@ pub fn dayofweek(y: u8, m: u8, d: u8) -> u8 {
     let d = d as i32;
     y -= (m < 3) as i32;
     let year = y + 2000;
-    let mut dow =
-        (year + year / 4 - year / 100 + 2000 / 400 + TABLE[(m - 1) as usize] as i32 + d) % 7;
+    let Some(&month_offset) = m.checked_sub(1).and_then(|month| TABLE.get(month as usize)) else {
+        return 0;
+    };
+    let mut dow = (year + year / 4 - year / 100 + 2000 / 400 + month_offset as i32 + d) % 7;
     if dow == 0 {
         dow = 7;
     }
@@ -117,16 +119,19 @@ pub fn is_leap_year(y: u8) -> bool {
 /// Returns the number of days in a month for a given year.
 pub fn days_in_month(y: u8, m: u8) -> u8 {
     const DAYS: [u8; 13] = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    let Some(&days) = DAYS.get(m as usize) else {
+        return 0;
+    };
     if m == 2 && is_leap_year(y) {
-        DAYS[m as usize] + 1
+        days + 1
     } else {
-        DAYS[m as usize]
+        days
     }
 }
 
 /// Returns the offset (0-6) from the current day-of-week to the desired one.
 pub fn next_dayofweek_offset(cur: u8, target: u8) -> u8 {
-    (7 + target - cur) % 7
+    (7 + target as i16 - cur as i16).rem_euclid(7) as u8
 }
 
 /// Compares two datetimes: negative if dt1 < dt2, 0 if equal, positive if >.
@@ -195,6 +200,13 @@ pub fn unpack_rules(
     cur_year: u8,
     rules_out: &mut [URule; MAX_CURRENT_RULES],
 ) {
+    if rules_in.is_empty() {
+        for rule in rules_out.iter_mut() {
+            *rule = URule::default();
+        }
+        return;
+    }
+
     let mut l = 0usize;
     let mut current_rule_count = 1usize;
 
@@ -263,7 +275,36 @@ pub fn unpack_zone<'a>(
     let inc = zone_in.offset_inc_minutes as i32;
     zone_out.offset.minutes = ((inc % (60 / OFFSET_INCREMENT)) * OFFSET_INCREMENT) as u8;
     zone_out.offset.hours = (inc / (60 / OFFSET_INCREMENT)) as i8;
-    zone_out.rules = &zone_rules
-        [zone_in.rules_idx as usize..zone_in.rules_idx as usize + zone_in.rules_len as usize];
+    let start = zone_in.rules_idx as usize;
+    let end = start.saturating_add(zone_in.rules_len as usize);
+    zone_out.rules = zone_rules.get(start..end).unwrap_or(&[]);
     zone_out.abrev_formatter = "";
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        MAX_CURRENT_RULES, URule, dayofweek, days_in_month, next_dayofweek_offset, unpack_rules,
+    };
+
+    #[test]
+    fn invalid_calendar_inputs_do_not_index_past_tables() {
+        assert_eq!(dayofweek(26, 0, 1), 0);
+        assert_eq!(dayofweek(26, 13, 1), 0);
+        assert_eq!(days_in_month(24, 0), 0);
+        assert_eq!(days_in_month(24, 13), 0);
+    }
+
+    #[test]
+    fn weekday_offset_does_not_underflow() {
+        assert_eq!(next_dayofweek_offset(7, 1), 1);
+        assert_eq!(next_dayofweek_offset(1, 7), 6);
+    }
+
+    #[test]
+    fn empty_rule_sets_produce_empty_cached_rules() {
+        let mut rules = [URule::default(); MAX_CURRENT_RULES];
+        unpack_rules(&[], 26, &mut rules);
+        assert!(rules.iter().all(|rule| !rule.is_valid()));
+    }
 }

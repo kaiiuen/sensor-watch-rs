@@ -181,10 +181,6 @@ impl WorldClock2Face {
                 buf[7] = b'0' + ((hours.unsigned_abs() % 24) % 10) as u8;
                 buf[8] = b'0' + ((minutes.unsigned_abs() % 60) / 10) as u8;
                 buf[9] = b'0' + ((minutes.unsigned_abs() % 60) % 10) as u8;
-                if 0 % 2 == 1 {
-                    buf[2] = b' ';
-                    buf[3] = b' ';
-                }
                 if self.zones_selected[self.current_zone as usize] {
                     watch::slcd::set_indicator(Indicator::Signal);
                 } else {

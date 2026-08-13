@@ -153,38 +153,16 @@ impl WatchFace for SetTimeFace {
             buf[8] = b'0' + date_time.day / 10;
             buf[9] = b'0' + date_time.day % 10;
         } else {
-            if 0 % 2 == 1 {
-                watch::slcd::clear_colon();
-            } else {
-                watch::slcd::set_colon();
-                let offset = movement::TIMEZONE_OFFSETS[(settings.time_zone() as usize).min(40)];
-                let hours = offset / 60;
-                let mins = offset % 60;
-                buf[4] = if hours < 0 { b'-' } else { b' ' };
-                buf[5] = b'0' + (hours.unsigned_abs() / 10) as u8;
-                buf[6] = b'0' + (hours.unsigned_abs() % 10) as u8;
-                buf[7] = b'0' + (mins.unsigned_abs() / 10) as u8;
-                buf[8] = b'0' + (mins.unsigned_abs() % 10) as u8;
-                buf[9] = b' ';
-            }
-        }
-
-        if 0 % 2 == 1 && !self.quick_ticks_running {
-            match self.current_page {
-                0 | 3 => {
-                    buf[4] = b' ';
-                    buf[5] = b' ';
-                }
-                1 | 4 => {
-                    buf[6] = b' ';
-                    buf[7] = b' ';
-                }
-                2 | 5 => {
-                    buf[8] = b' ';
-                    buf[9] = b' ';
-                }
-                _ => {}
-            }
+            watch::slcd::set_colon();
+            let offset = movement::TIMEZONE_OFFSETS[(settings.time_zone() as usize).min(40)];
+            let hours = offset / 60;
+            let mins = offset % 60;
+            buf[4] = if hours < 0 { b'-' } else { b' ' };
+            buf[5] = b'0' + (hours.unsigned_abs() / 10) as u8;
+            buf[6] = b'0' + (hours.unsigned_abs() % 10) as u8;
+            buf[7] = b'0' + (mins.unsigned_abs() / 10) as u8;
+            buf[8] = b'0' + (mins.unsigned_abs() % 10) as u8;
+            buf[9] = b' ';
         }
 
         watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);

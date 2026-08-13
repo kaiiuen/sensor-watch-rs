@@ -510,11 +510,7 @@ impl WatchFace for WordleFace {
         match event {
             Event::Tick => match self.curr_screen {
                 SCREEN_PLAYING => {
-                    if 0 % 2 == 1 {
-                        self.display_letter(true);
-                    } else {
-                        watch::slcd::display_string(" ", self.position + 5);
-                    }
+                    watch::slcd::display_string(" ", self.position + 5);
                 }
                 SCREEN_RESULT => self.display_result(0),
                 SCREEN_LOSE => self.display_lose(0),

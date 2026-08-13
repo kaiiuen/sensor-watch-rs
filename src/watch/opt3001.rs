@@ -121,10 +121,11 @@ mod host_mock_tests {
     fn reads_fixture_through_host_i2c_seam() {
         let mut hw = MockHw::new();
         hw.opt3001_result = Some(0x2123);
-        seam::install_hw(&mut hw);
         let mut sensor = Opt3001::new();
-        sensor.begin().unwrap();
-        assert!((sensor.read_lux().unwrap() - 11.64).abs() < 0.001);
+        seam::with_hw(&mut hw, || {
+            sensor.begin().unwrap();
+            assert!((sensor.read_lux().unwrap() - 11.64).abs() < 0.001);
+        });
     }
 }
 

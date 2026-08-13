@@ -53,10 +53,20 @@ impl AccelInterruptCountFace {
 
 /// Writes a number right-aligned into the buffer at the given offset.
 fn write_num(buf: &mut [u8; 11], value: u32, offset: usize, width: usize) {
+    let Some(end) = offset.checked_add(width).and_then(|end| end.checked_sub(1)) else {
+        return;
+    };
+    if end >= buf.len() {
+        return;
+    }
+
     let mut v = value;
-    let mut i = offset + width - 1;
+    let mut i = end;
     loop {
-        buf[i] = b'0' + (v % 10) as u8;
+        let Some(slot) = buf.get_mut(i) else {
+            return;
+        };
+        *slot = b'0' + (v % 10) as u8;
         v /= 10;
         if i == offset || v == 0 {
             break;
@@ -141,5 +151,25 @@ impl WatchFace for AccelInterruptCountFace {
 
     fn wants_background_task(&mut self, _settings: &Settings) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::write_num;
+
+    #[test]
+    fn writes_number_within_buffer() {
+        let mut buf = [b' '; 11];
+        write_num(&mut buf, 42, 4, 4);
+        assert_eq!(&buf[4..8], b"0042");
+    }
+
+    #[test]
+    fn ignores_empty_or_out_of_bounds_field() {
+        let mut buf = [b' '; 11];
+        write_num(&mut buf, 42, 4, 0);
+        write_num(&mut buf, 42, 9, 4);
+        assert_eq!(buf, [b' '; 11]);
     }
 }

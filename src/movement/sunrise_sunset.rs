@@ -269,9 +269,6 @@ impl SunriseSunsetFace {
             }
             _ => return,
         }
-        if 0 % 2 == 1 {
-            buf[self.active_digit as usize + 4] = b' ';
-        }
         watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
     }
 
