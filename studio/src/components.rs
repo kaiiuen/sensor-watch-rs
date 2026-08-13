@@ -165,6 +165,16 @@ pub fn show_configurator(
     let mut changed = false;
     ui.strong("Components / Build Profile");
     ui.label("Describe a custom Sensor Watch board or OSO accessory LCD/sensor board.");
+    ui.colored_label(
+        egui::Color32::from_rgb(220, 160, 80),
+        "UF2 build disabled: this profile is planning data only; it is not a firmware build input.",
+    );
+    ui.collapsing("Missing Studio-to-firmware input contract", |ui| {
+        ui.label("A configured build cannot be published until all of these are supplied:");
+        for input in crate::build::missing_configuration_inputs() {
+            ui.label(format!("• {input}"));
+        }
+    });
     ui.horizontal(|ui| {
         ui.label("Profile:");
         let current = profiles
@@ -269,6 +279,6 @@ pub fn show_configurator(
             format!("Warning: {warning}"),
         );
     }
-    ui.weak("This profile is planning/validation data only. It does not change hardware pin mappings, firmware build flags, or the generated artifact. Studio refuses the UF2 build while these selections are not wired into firmware inputs.");
+    ui.weak("Profile edits remain available for planning and review. Studio does not infer pins, buses, addresses, power sequencing, or firmware modules from these choices; the build preflight therefore refuses to generate a configured UF2.");
     changed
 }

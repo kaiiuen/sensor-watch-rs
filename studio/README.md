@@ -2,9 +2,8 @@
 
 A **GUI companion app** for the Sensor-Watch firmware. This is the end-goal
 product: an editor, debugger, simulator, and assembler. The Studio UI currently
-refuses its UF2 build because the selected preset/faces, board, and component
-profile are not yet wired into firmware build inputs, this prevents a stock
-artifact from being misrepresented as configured firmware.
+refuses its UF2 build because its configuration input contract is incomplete;
+this prevents a stock artifact from being misrepresented as configured firmware.
 
 Built with **egui/eframe** (pure Rust, cross-platform GUI).
 
@@ -47,11 +46,11 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   engine, the remaining **18 faces** use `face_sim`. Host seam coverage does not
   constitute physical hardware testing.
 - **Build & Flash** - combined panel: review the target board and component
-  profile, then request a firmware build. The build is currently refused because
-  Studio does not pass the active preset/faces, board, or component profile into
-  firmware build inputs. No configured `.uf2` is published, so the flash action
-  cannot use a newly selected Studio configuration. The panel still documents
-  the intended USB-drive/`INFO_UF2.TXT` workflow for when that wiring is added.
+  profile, then request a firmware build. The build preflight is explicitly
+  fail-closed and the profile panel displays the disabled state. No configured
+  `.uf2` is published, so the flash action cannot use a newly selected Studio
+  configuration. The panel still documents the intended USB-drive/`INFO_UF2.TXT`
+  workflow for when the missing input contract is implemented.
 - **Calibration** - guided clock calibration (generates a `settime` command for
   the next minute boundary), a **beep-on-minute-rollover** helper, and guided
   drift calibration (parts-per-million). The hardware path requires UART Jig
@@ -90,6 +89,27 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   (app-only, adjustable update rate), settings save/export/import, source
   export, integrity (SHA-256 + release checksum verification), community credits
   (see [`docs/CREDITS.md`](../docs/CREDITS.md)), code statistics, and license.
+
+## Studio build input contract
+
+A safe profile-to-build path is not available yet. The current profile contains
+only an LCD variant and component booleans; those values cannot identify a valid
+firmware configuration or concrete hardware wiring. Before the fail-closed gate
+can be removed, Studio and firmware must agree on all of the following inputs:
+
+1. Active preset identity plus the ordered face/source inputs.
+2. Target board identity, revision, and board-specific runtime settings.
+3. Component-to-firmware feature/module selections.
+4. Concrete pin, bus, address, power, and ownership mappings for every selected
+   component. Enabling SPI or I2C alone is not a pin mapping, and a thermistor
+   cannot be mapped from the component name alone.
+5. A generated-input provenance and validation record tied to the exact firmware
+   build, so the resulting UF2 can be identified as configured rather than stock.
+
+Until this contract exists on both sides, profile edits are for planning/review
+only. Studio shows the missing contract in the profile panel and rejects the
+build before filesystem, Cargo, or UF2 side effects. No pin assignments are
+inferred or claimed by the current UI.
 
 ## Advanced and Probe/Test safety
 

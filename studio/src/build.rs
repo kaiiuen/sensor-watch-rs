@@ -129,10 +129,20 @@ pub struct BuildResult {
     pub uf2_path: Option<PathBuf>,
 }
 
-/// The build cannot truthfully produce a configured artifact until Studio's
-/// selections are part of the firmware build inputs.
+/// The build inputs that must be defined before Studio can publish a configured
+/// artifact. Keep this list explicit: a component checkbox is not a pin map.
+pub const CONFIGURATION_INPUT_CONTRACT: &[&str] = &[
+    "active preset identity and ordered face/source inputs",
+    "target board identity, revision, and board-specific runtime settings",
+    "component-to-firmware feature/module selections",
+    "concrete pin, bus, address, power, and ownership mappings for every selected component",
+    "a generated-input provenance/validation record tied to the exact firmware build",
+];
+
+/// The build cannot truthfully produce a configured artifact until every item in
+/// [`CONFIGURATION_INPUT_CONTRACT`] is supplied to the firmware build.
 pub const CONFIGURATION_BUILD_BLOCKED: &str =
-    "firmware build refused: selected presets, faces, board, and component profile are not wired into firmware build inputs; no configured UF2 was generated";
+    "firmware build refused: Studio configuration input contract is incomplete; no configured UF2 was generated";
 
 /// Returns the fail-closed build validation error.
 ///
@@ -140,6 +150,13 @@ pub const CONFIGURATION_BUILD_BLOCKED: &str =
 /// surface the same limitation without touching the filesystem or toolchain.
 pub fn validate_configuration_inputs() -> Result<(), &'static str> {
     Err(CONFIGURATION_BUILD_BLOCKED)
+}
+
+/// The exact inputs currently missing from the Studio-to-firmware build path.
+/// This is also used by the profile UI so the disabled state cannot drift from
+/// the build preflight.
+pub fn missing_configuration_inputs() -> &'static [&'static str] {
+    CONFIGURATION_INPUT_CONTRACT
 }
 
 /// Runs the full firmware build: cargo build, extract the raw binary, and
@@ -645,16 +662,29 @@ mod tests {
     }
 
     #[test]
+    fn configuration_contract_names_all_required_input_classes() {
+        let contract = missing_configuration_inputs();
+        assert_eq!(contract, CONFIGURATION_INPUT_CONTRACT);
+        assert!(contract.iter().any(|item| item.contains("preset")));
+        assert!(contract.iter().any(|item| item.contains("board")));
+        assert!(contract.iter().any(|item| item.contains("feature/module")));
+        assert!(contract.iter().any(|item| item.contains("pin")));
+        assert!(contract.iter().any(|item| item.contains("provenance")));
+    }
+
+    #[test]
     fn configured_builds_are_rejected_before_side_effects() {
         assert_eq!(
             validate_configuration_inputs(),
             Err(CONFIGURATION_BUILD_BLOCKED)
         );
 
-        let result = build_firmware(Path::new("target/studio-test-output"));
+        let output = temp_root("blocked-output");
+        let result = build_firmware(&output);
         assert!(!result.success);
         assert_eq!(result.message, CONFIGURATION_BUILD_BLOCKED);
         assert!(result.uf2_path.is_none());
+        assert!(!output.exists());
     }
 }
 
