@@ -19,10 +19,28 @@ jobs:
           channel: '1.97.1'
           targets: thumbv6m-none-eabi
       - uses: Swatinem/rust-cache@v2
-      - name: Build firmware
-        run: cargo build --target thumbv6m-none-eabi -p sensor-watch
-      - name: Build firmware (release)
+      - name: Check firmware (debug)
+        # Debug linking can exceed the device flash budget; check validates the
+        # ARM compilation without requiring a debug firmware image.
+        run: cargo check --target thumbv6m-none-eabi -p sensor-watch
+      - name: Build firmware (release flash image)
         run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch
+      - name: Install binutils for release size check
+        run: sudo apt-get update && sudo apt-get install -y binutils-arm-none-eabi
+      - name: Enforce release flash budget
+        env:
+          FLASH_BUDGET_BYTES: 237568
+        run: |
+          elf=target/thumbv6m-none-eabi/release/sensor-watch
+          flash_bytes=$(arm-none-eabi-size -A "$elf" | awk '
+            $1 ~ /^\.(vector_table|text|rodata|data|ramfunc|ARM.exidx)(\.|$)/ { total += $2 }
+            END {
+              if (total == 0) exit 1
+              print total
+            }
+          ')
+          echo "Release flash usage: ${flash_bytes}/${FLASH_BUDGET_BYTES} bytes"
+          test "$flash_bytes" -le "$FLASH_BUDGET_BYTES"
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
         with:

@@ -194,13 +194,13 @@ Faults are recorded automatically alongside the persistent fault summary.
 The optional `defmt-log` Cargo feature mirrors each event to an RTT backend for
 an SWD probe. It also emits fault codes, reset reasons, and panic fingerprints.
 the persistent backup-register summary and the event ring remain in place as
-fallbacks. Enable it only for an ARM firmware build:
+fallbacks. Enable it only for an optimized ARM firmware build:
 
 ```sh
-cargo build --target thumbv6m-none-eabi -p sensor-watch --features defmt-log
+cargo build --release --target thumbv6m-none-eabi -p sensor-watch --features defmt-log
 ```
 
-Use the resulting ELF with `probe-rs run` as in the flashing section above. The
+Use the resulting release ELF with `probe-rs run` as in the flashing section above. The
 normal build command does not enable this feature, so it does not add `defmt`,
 RTT, RTT sections, or logging call-site code to the default firmware. The
 feature is target-checked and intentionally rejected for host builds.

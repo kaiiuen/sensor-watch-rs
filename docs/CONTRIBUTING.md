@@ -15,19 +15,24 @@ rewrite in Rust.
 
 ## Building
 
-The firmware builds for the SAM L22 (Cortex-M0+):
+The firmware can be compile-checked for the SAM L22 (Cortex-M0+)
+without linking a debug image:
 
 ```sh
-cargo build --target thumbv6m-none-eabi
+cargo check --target thumbv6m-none-eabi -p sensor-watch
 ```
 
-For a release build (optimized, smaller):
+Debug linking is not a useful flash-budget check because the unoptimized image
+can exceed the device flash region. For the flashable image, link an optimized
+release build:
 
 ```sh
-cargo build --release --target thumbv6m-none-eabi
+cargo build --release --target thumbv6m-none-eabi -p sensor-watch
 ```
 
-The output ELF is at `target/thumbv6m-none-eabi/release/sensor-watch`.
+The output ELF is at `target/thumbv6m-none-eabi/release/sensor-watch`. The
+release image must fit the `0x3A000`-byte firmware flash region; CI enforces
+this budget before producing artifacts.
 
 ## Testing
 

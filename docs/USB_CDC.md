@@ -26,8 +26,8 @@ must be supplied and reviewed first. The opt-in feature is currently
 compile-safe scaffolding, not a CDC claim:
 
 ```sh
-cargo build --target thumbv6m-none-eabi -p sensor-watch
-cargo build --target thumbv6m-none-eabi -p sensor-watch --features usb-cdc
+cargo check --target thumbv6m-none-eabi -p sensor-watch
+cargo check --target thumbv6m-none-eabi -p sensor-watch --features usb-cdc
 cargo test --lib --features usb-cdc
 ```
 

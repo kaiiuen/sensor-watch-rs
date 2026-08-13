@@ -725,7 +725,8 @@ failures on its own. Each hardening measure addresses a specific failure mode:
 
 The project has a CI pipeline (GitHub Actions) that runs on every push:
 
-- **Build** - `cargo build --target thumbv6m-none-eabi`
+- **Debug validation** - `cargo check --target thumbv6m-none-eabi -p sensor-watch`
+- **Release link** - `cargo build --release --target thumbv6m-none-eabi -p sensor-watch`
 - **Clippy** - informational firmware clippy for `thumbv6m-none-eabi`, plus
   strict core clippy with `-D warnings`
 - **Test** - `cargo test -p sensor-watch-core` (host unit tests)

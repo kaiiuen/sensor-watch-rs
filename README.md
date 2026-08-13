@@ -133,17 +133,22 @@ Prerequisites:
   cargo install flip-link
   ```
 
-Build (debug):
+Check (debug, compile-only):
 
 ```
-cargo build -p sensor-watch --target thumbv6m-none-eabi
+cargo check -p sensor-watch --target thumbv6m-none-eabi
 ```
 
-Build (release, optimized):
+Debug linking is intentionally not used for validation because the unoptimized
+image can exceed the device flash region. Build the optimized release image for
+link validation and flashing:
 
 ```
 cargo build -p sensor-watch --release --target thumbv6m-none-eabi
 ```
+
+The release image must fit the `0x3A000`-byte firmware flash region shown in the
+memory map above; CI enforces this budget before producing artifacts.
 
 For optional SWD/RTT structured logging, opt in explicitly:
 
