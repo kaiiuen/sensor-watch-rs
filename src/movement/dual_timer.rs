@@ -30,7 +30,9 @@ struct Duration {
     seconds: u8,
     minutes: u8,
     hours: u8,
-    days: u8,
+    // The configured maximum timer interval is over 35 years, so a u8 day
+    // counter would overflow after only 256 days.
+    days: u16,
 }
 
 impl Duration {
@@ -47,7 +49,7 @@ impl Duration {
 
 fn ticks_to_duration(mut ticks: u32) -> Duration {
     let mut hours = 0u8;
-    let mut days = 0u8;
+    let mut days = 0u16;
     while ticks >= (60 * 60) {
         ticks -= 60 * 60;
         hours += 1;
@@ -127,8 +129,9 @@ impl DualTimerFace {
             self.stop_ticks[!self.show as usize] - self.start_ticks[!self.show as usize],
         );
         if timer.days > 0 {
-            buf[0] = b'0' + timer.days / 10;
-            buf[1] = b'0' + timer.days % 10;
+            let days = timer.days.min(99);
+            buf[0] = b'0' + (days / 10) as u8;
+            buf[1] = b'0' + (days % 10) as u8;
             buf[2] = b'0' + timer.hours / 10;
             buf[3] = b'0' + timer.hours % 10;
             buf[4] = b'0' + timer.minutes / 10;
@@ -161,18 +164,18 @@ impl DualTimerFace {
         let oi = if other.days > 0 {
             other.days
         } else if other.hours > 0 {
-            other.hours
+            other.hours as u16
         } else if other.minutes > 0 {
-            other.minutes
+            other.minutes as u16
         } else if other.seconds > 0 {
-            other.seconds
+            other.seconds as u16
         } else {
-            other.centiseconds
+            other.centiseconds as u16
         };
         if self.stop_ticks[!self.show as usize] - self.start_ticks[!self.show as usize] > 0 {
             let mut ob = [0u8; 3];
-            ob[0] = b'0' + oi / 10;
-            ob[1] = b'0' + oi % 10;
+            ob[0] = b'0' + (oi / 10) as u8;
+            ob[1] = b'0' + (oi % 10) as u8;
             slcd::display_string(core::str::from_utf8(&ob[..2]).unwrap_or("  "), 2);
         } else {
             slcd::display_string("  ", 2);
@@ -182,6 +185,34 @@ impl DualTimerFace {
         } else {
             slcd::clear_colon();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ticks_to_duration;
+
+    const SECONDS_PER_DAY: u32 = 24 * 60 * 60;
+
+    #[test]
+    fn duration_keeps_counting_past_u8_day_limit() {
+        let duration = ticks_to_duration(256 * SECONDS_PER_DAY);
+
+        assert_eq!(duration.days, 256);
+        assert_eq!(duration.hours, 0);
+        assert_eq!(duration.minutes, 0);
+        assert_eq!(duration.seconds, 0);
+    }
+
+    #[test]
+    fn duration_handles_configured_maximum_without_day_overflow() {
+        // This is the elapsed-tick guard used by loop_().
+        let duration = ticks_to_duration(1_105_919_999);
+
+        assert_eq!(duration.days, 12_799);
+        assert_eq!(duration.hours, 23);
+        assert_eq!(duration.minutes, 59);
+        assert_eq!(duration.seconds, 59);
     }
 }
 
