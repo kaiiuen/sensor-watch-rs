@@ -21,6 +21,10 @@
 //! The `Hw` trait grows a method only when a face's host build needs a call the
 //! trait does not yet carry (keep it minimal).
 
+/// The production physical-presence state machine, tested on the host too.
+#[path = "../../movement/shell_auth.rs"]
+pub mod shell_auth;
+
 pub mod types {
     // Reuse the real movement types verbatim so the trait/event contract is the
     // same code the firmware binary compiles (no drift).
@@ -137,6 +141,13 @@ pub mod character_set {
     pub use real::CharacterSetFace;
 }
 
+/// The REAL `chirpy_demo` face. Uses only LCD, buzzer, and navigation/tick hooks.
+pub mod chirpy_demo {
+    #[path = "../../../movement/chirpy_demo.rs"]
+    pub mod real;
+    pub use real::ChirpyDemoFace;
+}
+
 /// The REAL `demo` face.
 pub mod demo {
     #[path = "../../../movement/demo.rs"]
@@ -156,6 +167,13 @@ pub mod databank {
     #[path = "../../../movement/databank.rs"]
     pub mod real;
     pub use real::DatabankFace;
+}
+
+/// The REAL `days_since` face. Uses the host EEPROM model for its saved date.
+pub mod days_since {
+    #[path = "../../../movement/days_since.rs"]
+    pub mod real;
+    pub use real::DaysSinceFace;
 }
 
 /// The REAL `habit` face.
@@ -782,12 +800,12 @@ use types::{Event, Settings};
 /// Sets the wake rate based on whether seconds are shown. Host forwards to the
 /// `Hw::set_tick_rate` hook.
 pub fn set_tick_rate(show_seconds: bool) {
-    watch::seam::hw().set_tick_rate(show_seconds);
+    watch::seam::with_current_hw(|hw| hw.set_tick_rate(show_seconds));
 }
 
 /// Plays the signal tune. Host forwards to the `Hw::play_signal` hook.
 pub fn play_signal() {
-    watch::seam::hw().play_signal();
+    watch::seam::with_current_hw(|hw| hw.play_signal());
 }
 
 /// The default (no-handler) event dispatch. Host forwards to
@@ -795,7 +813,7 @@ pub fn play_signal() {
 /// signature (`&Settings`, since faces may hold it immutably).
 pub fn default_loop_handler(event: Event, settings: &Settings) {
     let s = sensor_watch_core::settings::Settings { reg: settings.reg };
-    watch::seam::hw().default_loop_handler(to_core_event(event), &s);
+    watch::seam::with_current_hw(|hw| hw.default_loop_handler(to_core_event(event), &s));
 }
 
 /// Converts the firmware movement `Event`/`Settings` to the shared core types
@@ -966,15 +984,47 @@ mod tests {
     }
 
     #[test]
+    fn real_chirpy_demo_activate_and_select_program() {
+        let mut mock = steady_state();
+        let mut settings = h24_settings();
+        let mut face = chirpy_demo::ChirpyDemoFace::new();
+
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
+        assert!(mock.text().starts_with("CH"));
+        assert!(mock.text().contains("SCALE"));
+
+        seam::with_hw(&mut mock, || face.loop_(
+            types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
+            &mut settings,
+        ));
+        assert!(mock.text().starts_with("CH"));
+        assert!(mock.text().contains("SHORT"));
+    }
+
+    #[test]
+    fn real_days_since_uses_host_storage_and_rtc() {
+        let mut mock = steady_state();
+        let mut settings = h24_settings();
+        let mut face = days_since::DaysSinceFace::new();
+
+        face.setup(&settings, 0);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
+
+        assert!(mock.text().starts_with("DA"));
+        assert!(mock.text().len() >= 4);
+    }
+
+    #[test]
     fn real_simple_clock_renders_24h_via_mock() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
 
         let mut settings = h24_settings();
         settings.set_show_seconds(true);
         let mut face = simple_clock::SimpleClockFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
 
         // The REAL face write path (FR + day 06 + HH:MM:SS) recorded on the mock.
         assert_eq!(mock.text(), "FR06150400");
@@ -987,30 +1037,28 @@ mod tests {
         let mut mock = MockHw::new();
         mock.set_time(dt(2023, 1, 6, 15, 4, 0));
         mock.vcc_mv = 2000; // below the 2200 mV threshold
-        seam::install_hw(&mut mock);
 
         let mut settings = h24_settings();
         let mut face = simple_clock::SimpleClockFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert!(mock.indicator(Indicator::Lap));
     }
 
     #[test]
     fn real_simple_clock_alarm_button_toggles_seconds() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
 
         let mut settings = h24_settings();
         let mut face = simple_clock::SimpleClockFace::new();
-        face.activate(&settings);
-        face.loop_(
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(
                 types::Button::Alarm,
                 types::ButtonEvent::Up, // firmware-typed event (real face contract)
             ),
             &mut settings,
-        );
+        ));
         assert!(settings.show_seconds());
     }
 
@@ -1019,13 +1067,12 @@ mod tests {
     #[test]
     fn real_alarm_activate_24h_renders_dow_alarm_index_and_time() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
 
         // Default slot 0: day = ALARM_DAY_EACH_DAY (7 -> "SO"), hour 0, minute 0.
         let mut face = alarm::AlarmFace::new_static();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
 
         assert!(mock.colon);
         // 24h mode sets the H24 indicator; disabled alarm clears Signal.
@@ -1039,28 +1086,27 @@ mod tests {
     #[test]
     fn real_alarm_light_press_enters_setting_and_changes_dow() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = alarm::AlarmFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
         // Enter settings mode (Light up) -> setting_state 0.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         // Advance to the DOW field (setting_state 1).
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         // In the DOW field, Alarm up advances the day and enables the alarm
         // (state > 0), so the Signal indicator is drawn on the next Tick.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
-        face.loop_(types::Event::Tick, &mut settings);
+        ));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert!(mock.indicator(Indicator::Signal));
     }
 
@@ -1069,57 +1115,54 @@ mod tests {
     #[test]
     fn real_counter_activate_shows_zero_and_sets_signal() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = counter::CounterFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.indicator(Indicator::Signal));
 
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         assert_eq!(mock.text(), "CO    00");
     }
 
     #[test]
     fn real_counter_alarm_increments_and_long_press_resets() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = counter::CounterFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "CO    01");
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         // 2 counts: 01 -> 02.
         assert_eq!(mock.text(), "CO    02");
 
         // Long-press resets to 00.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::LongPress),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "CO    00");
     }
 
     #[test]
     fn real_counter_light_long_press_toggles_beep_signal() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = counter::CounterFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.indicator(Indicator::Signal));
 
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::LongPress),
             &mut settings,
-        );
+        ));
         assert!(!mock.indicator(Indicator::Signal));
     }
 
@@ -1128,12 +1171,11 @@ mod tests {
     #[test]
     fn real_world_clock_activate_renders_label_and_24h_time() {
         let mut mock = steady_state(); // Friday 2023-01-06 15:04:00
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = world_clock::WorldClockFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         assert!(mock.colon);
         assert!(mock.indicator(Indicator::H24));
         // timezone 0 == UTC == local; label chars 0,0 -> two spaces then day+time.
@@ -1143,17 +1185,16 @@ mod tests {
     #[test]
     fn real_world_clock_settings_mode_shows_offset() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = world_clock::WorldClockFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
         // Alarm long-press enters settings mode.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::LongPress),
             &mut settings,
-        );
-        face.loop_(types::Event::Tick, &mut settings);
+        ));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         // Settings screen 1: char_0 label, space, offset (00:00 for UTC).
         assert!(mock.colon);
         assert!(!mock.indicator(Indicator::Pm));
@@ -1164,12 +1205,11 @@ mod tests {
     #[test]
     fn real_stopwatch_activate_shows_zero_and_sets_colon() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = stopwatch::StopwatchFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         assert!(mock.colon);
         assert_eq!(mock.text(), "st  000000");
     }
@@ -1177,19 +1217,18 @@ mod tests {
     #[test]
     fn real_stopwatch_tick_started_counts_seconds() {
         let mut mock = steady_state(); // 15:04:00
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = stopwatch::StopwatchFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
         // Start running on Alarm down at 15:04:00; start_time = 15:04:00.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Down),
             &mut settings,
-        );
+        ));
         // Advance the simulated clock by 5 s and tick.
         mock.set_time(dt(2023, 1, 6, 15, 4, 5));
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         // 5 seconds elapsed, seconds shown; days/hours/minute are all 0.
         assert_eq!(mock.text(), "st  000005");
     }
@@ -1199,15 +1238,14 @@ mod tests {
     #[test]
     fn real_timer_activate_shows_label_and_slot_zero_value() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = timer::TimerFace::new_static();
         // setup() records the watch_face_index (used to schedule background tasks).
         face.setup(&settings, 0);
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.colon);
 
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Slot 0 label "1 ", then the 2-minute value "00020". `activate` wrote
         // "TR" at position 0 and draw() writes the value at position 3, so the
         // recorded LCD carries the label + slot value.
@@ -1217,23 +1255,22 @@ mod tests {
     #[test]
     fn real_timer_alarm_starts_slot_and_tick_counts_down() {
         let mut mock = steady_state(); // 15:04:00
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = timer::TimerFace::new_static();
         face.setup(&settings, 0);
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
         // In Waiting mode, an Alarm long-press starts the selected slot.
         // Slot 0 is 2 minutes (000200), so the start sets target = now + 120s.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::LongPress),
             &mut settings,
-        );
+        ));
         // Starting sets the Bell indicator (via start()).
         assert!(mock.indicator(Indicator::Bell));
         // Two ticks decrement: now -> target-2s (118 s remaining).
-        face.loop_(types::Event::Tick, &mut settings);
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         // Timer value drawn at position 3 begins with the slot label "1 ".
         assert_eq!(&mock.chars[3..], ['1', ' ', '0', '0', '0', '1', '5']);
     }
@@ -1243,14 +1280,13 @@ mod tests {
     #[test]
     fn real_countdown_activate_renders_default_minutes() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = countdown::CountdownFace::new_static();
         face.setup(&settings, 0);
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.colon);
 
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Default 3 minutes: CD + "000300" (with an extra space for hours' tens).
         assert_eq!(mock.text(), "CD  000300");
     }
@@ -1258,21 +1294,20 @@ mod tests {
     #[test]
     fn real_countdown_alarm_starts_then_ticks_down() {
         let mut mock = steady_state(); // 15:04:00
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = countdown::CountdownFace::new_static();
         face.setup(&settings, 0);
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
         // Reset mode: Alarm up starts the 3-minute countdown.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert!(mock.indicator(Indicator::Signal));
         // Each Tick decrements now_ts by 1; 3 minutes = 180 s, then 179 ... The
         // value is 000259 (hours 00, minutes 02, seconds 59) at one tick in.
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert_eq!(mock.text(), "CD  000259");
     }
 
@@ -1281,28 +1316,27 @@ mod tests {
     #[test]
     fn real_flashlight_activate_shows_label_and_light_button_toggles_pin() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = flashlight::FlashlightFace::new_static();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
 
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         assert_eq!(mock.text(), "FL");
         // A2 defaults low.
         assert!(!mock.pin_level((1, 2)));
 
         // Light button up toggles the output on.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert!(mock.pin_level((1, 2)));
 
         // Toggling again turns it off.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert!(!mock.pin_level((1, 2)));
     }
 
@@ -1311,11 +1345,10 @@ mod tests {
     #[test]
     fn real_randonaut_activate_shows_landing_screen() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = randonaut::RandonautFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Activate drives display() in mode 0 -> "RA  Rando " (trailing trimmed).
         assert_eq!(mock.text(), "RA  Rando");
     }
@@ -1323,26 +1356,24 @@ mod tests {
     #[test]
     fn real_randonaut_light_up_cycles_to_point() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = randonaut::RandonautFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // Light up from mode 0 -> mode 2, location_format 0 -> "RA  Point ".
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "RA  Point");
     }
 
     #[test]
     fn real_ratemeter_activate_shows_idle_label() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = ratemeter::RatemeterFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // The 12-char label written from pos 0 only fills chars 0-9; trailing space trimmed.
         assert_eq!(mock.text(), "ra");
     }
@@ -1350,54 +1381,50 @@ mod tests {
     #[test]
     fn real_ratemeter_alarm_down_starts_ticking() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = ratemeter::RatemeterFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // Alarm down resets ticks (rate stays 0). One tick re-draws the idle label.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Down),
             &mut settings,
-        );
-        face.loop_(types::Event::Tick, &mut settings);
+        ));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert_eq!(mock.text(), "ra");
     }
 
     #[test]
     fn real_repetition_minute_activate_renders_24h_clock() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = repetition_minute::RepetitionMinuteFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.colon);
         assert!(mock.indicator(Indicator::H24));
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert_eq!(mock.text(), "FR06150400");
     }
 
     #[test]
     fn real_repetition_minute_alarm_long_press_toggles_bell() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = repetition_minute::RepetitionMinuteFace::new();
-        face.activate(&settings);
-        face.loop_(
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::LongPress),
             &mut settings,
-        );
+        ));
         assert!(mock.indicator(Indicator::Bell));
     }
 
     #[test]
     fn real_rpn_calculator_activate_draws_zero_waiting() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = rpn_calculator::RpnCalculatorFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Waiting mode draws the (empty) stack top as 000000.
         assert_eq!(mock.text(), "CA  000000");
     }
@@ -1405,33 +1432,31 @@ mod tests {
     #[test]
     fn real_rpn_calculator_alarm_up_enters_number_and_increments() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = rpn_calculator::RpnCalculatorFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // Alarm up: enter NUMBER mode, push 0. Then alarm up increments selection 2
         // (the ones place? selection starts 2 -> ones digit of the 6-digit) -> 000100.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "CA  000000");
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "CA  000100");
     }
 
     #[test]
     fn real_sailing_activate_renders_waiting_countdown() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = sailing::SailingFace::new_static();
         face.setup(&settings, 0);
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Waiting mode: minutes[0]=5 -> "SA1L  0500".
         assert_eq!(mock.text(), "SA1L  0500");
     }
@@ -1439,11 +1464,10 @@ mod tests {
     #[test]
     fn real_save_load_activate_shows_empty_slot() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = save_load::SaveLoadFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Slot 0 empty -> "SL 0no dat" (buffer cell 6 is a space).
         assert_eq!(mock.text(), "SL 0no dat");
     }
@@ -1451,15 +1475,14 @@ mod tests {
     #[test]
     fn real_save_load_light_long_press_saves_slot() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = save_load::SaveLoadFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
-        face.loop_(
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::LongPress),
             &mut settings,
-        );
+        ));
         // Save writes backup data (slot 0 now holds the RTC) and shows "Saved ".
         assert_eq!(mock.text(), "SL 0Saved");
     }
@@ -1467,15 +1490,14 @@ mod tests {
     #[test]
     fn real_save_load_alarm_long_press_loads_nothing_when_empty() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = save_load::SaveLoadFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // Empty slot -> load is a no-op; display still shows the empty slot.
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::LongPress),
             &mut settings,
-        );
+        ));
         // No initial draw has happened yet (no Activate event), so only the
         // trailing segments are visible; just check nothing panicked and the
         // slot is still empty per the backup registers.
@@ -1485,11 +1507,10 @@ mod tests {
     #[test]
     fn real_ships_bell_activate_shows_label_and_colon() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = ships_bell::ShipsBellFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // draw() -> label "SB" at pos 0-3, then hour/min/sec at pos 4+. 15:04:00
         // gives hour=15%4=3, so "SB   30400".
         assert_eq!(mock.text(), "SB   30400");
@@ -1498,11 +1519,10 @@ mod tests {
     #[test]
     fn real_simon_activate_shows_not_playing_score() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = simon::SimonFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Best score 00, mode E at pos 9; the 4 chars 6-9 are still 0 (NUL).
         assert_eq!(mock.text(), "SI  00\0\0\0E");
         assert!(mock.indicator(Indicator::Bell));
@@ -1512,11 +1532,10 @@ mod tests {
     #[test]
     fn real_simple_calculator_activate_enters_first_number() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = simple_calculator::SimpleCalculatorFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Entering first num, zeros with the ones digit blinking (pos 9 blank
         // because display_index = 9 - placeholder(2) = 7 ... actually subsecond 0
         // shows dash; observed output has a space at index 6).
@@ -1526,39 +1545,36 @@ mod tests {
     #[test]
     fn real_simple_calculator_alarm_up_sets_ones_digit() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = simple_calculator::SimpleCalculatorFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // placeholder = ones (2). Alarm up increments ones -> 1 via
         // update_display_number (no blink) -> "CA1 000100".
-        face.loop_(
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "CA1 000100");
     }
 
     #[test]
     fn real_simple_clock_bin_led_activate_renders_24h() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = simple_clock_bin_led::SimpleClockBinLedFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.colon);
         assert!(mock.indicator(Indicator::H24));
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert_eq!(mock.text(), "FR06150400");
     }
 
     #[test]
     fn real_simple_coin_flip_activate_shows_flip_label() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let settings = h24_settings();
         let mut face = simple_coin_flip::SimpleCoinFlipFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // "flip" at pos 5 -> "     flip" (trailing spaces trimmed).
         assert_eq!(mock.text(), "     flip");
     }
@@ -1566,12 +1582,11 @@ mod tests {
     #[test]
     fn real_solar_time_activate_shows_no_location_prompt() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = solar_time::SolarTimeFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // The draw only happens on loop_; backup location reg 1 is 0.
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert!(mock.text().starts_with("SOL"));
         assert!(mock.text().contains("no Loc"));
     }
@@ -1579,12 +1594,13 @@ mod tests {
     #[test]
     fn real_solstice_activate_shows_solstice_date() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = solstice::SolsticeFace::new();
-        face.setup(&settings, 0);
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || {
+            face.setup(&settings, 0);
+            face.activate(&settings);
+        });
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // show_main_screen: "  YY  MMDD". Year 2023 -> fields from date_time.
         // (Values depend on JDE math; assert it renders 8 chars + 2 blanks.)
         assert_eq!(mock.text().len(), 10);
@@ -1593,36 +1609,33 @@ mod tests {
     #[test]
     fn real_sos_activate_shows_selected_code() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = sos::SosFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         assert_eq!(mock.text(), "SOS");
     }
 
     #[test]
     fn real_sos_light_up_cycles_to_mayday() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = sos::SosFace::new();
-        face.activate(&settings);
-        face.loop_(
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "MAYDAY");
     }
 
     #[test]
     fn real_squash_activate_renders_zero_game() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = squash::SquashFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Games 0-0 at pos 0 and 2, scores 0-0 at pos 4 and 6 => "00000000".
         assert_eq!(mock.text(), "00000000");
         assert!(!mock.indicator(Indicator::Lap));
@@ -1631,25 +1644,23 @@ mod tests {
     #[test]
     fn real_squash_light_up_scores_player_one() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = squash::SquashFace::new();
-        face.activate(&settings);
-        face.loop_(
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         assert_eq!(mock.text(), "00000100");
     }
 
     #[test]
     fn real_tachymeter_activate_shows_default_distance() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = tachymeter::TachymeterFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // distance 100 -> 6-digit right-aligned leaves leading NULs.
         assert_eq!(mock.text(), "TC d\0\0\0100");
     }
@@ -1657,11 +1668,10 @@ mod tests {
     #[test]
     fn real_tally_activate_shows_zero() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = tally::TallyFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // "TA  0000" written from a [0u8;11] buffer -> leading NULs remain.
         assert_eq!(mock.text(), "TA  \0\0\00");
     }
@@ -1669,23 +1679,21 @@ mod tests {
     #[test]
     fn real_tarot_activate_shows_title() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = tarot::TarotFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert_eq!(mock.text(), "TA");
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         assert_eq!(mock.text(), "TA03n&ajor");
     }
 
     #[test]
     fn real_tempchart_activate_shows_zero_samples() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = tempchart::TempchartFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // sum=0 -> "TS00" + 6 NULs + "0".
         assert_eq!(mock.text(), "TS00\0\0\0\0\00");
     }
@@ -1693,11 +1701,10 @@ mod tests {
     #[test]
     fn real_thermistor_readout_activate_shows_celsius() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = thermistor_readout::ThermistorReadoutFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // The default host mock has no thermistor fixture.
         assert_eq!(mock.text(), "NO TE");
     }
@@ -1705,14 +1712,13 @@ mod tests {
     #[test]
     fn real_thermistor_readout_alarm_down_toggles_fahrenheit() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = thermistor_readout::ThermistorReadoutFace::new();
-        face.activate(&settings);
-        face.loop_(
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Down),
             &mut settings,
-        );
+        ));
         // Unit changes do not manufacture a value when the sensor is absent.
         assert_eq!(mock.text(), "NO TE");
     }
@@ -1720,11 +1726,10 @@ mod tests {
     #[test]
     fn real_time_left_activate_shows_days_left() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = time_left::TimeLeftFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // Title "DL " + digits; value depends on target 2030-01-01 vs 2023-01-06.
         assert!(mock.text().starts_with("DL"));
     }
@@ -1732,10 +1737,9 @@ mod tests {
     #[test]
     fn real_tomato_activate_renders_ready_focus() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let settings = h24_settings();
         let mut face = tomato::TomatoFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.colon);
         assert!(!mock.indicator(Indicator::Bell));
     }
@@ -1743,14 +1747,13 @@ mod tests {
     #[test]
     fn real_tomato_alarm_up_starts_focus_timer() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = tomato::TomatoFace::new();
-        face.activate(&settings);
-        face.loop_(
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(
             types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
             &mut settings,
-        );
+        ));
         // Running focus: "TO f2500" (25:00), Bell set.
         assert!(mock.indicator(Indicator::Bell));
     }
@@ -1758,11 +1761,10 @@ mod tests {
     #[test]
     fn real_tuning_tones_activate_shows_selected_note() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = tuning_tones::TuningTonesFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // note_ind 9 -> "A " at pos 8 -> 8 leading spaces.
         assert_eq!(mock.text(), "        A");
     }
@@ -1770,12 +1772,11 @@ mod tests {
     #[test]
     fn real_voltage_activate_shows_battery_voltage() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         mock.vcc_mv = 3000;
         let mut settings = h24_settings();
         let mut face = voltage::VoltageFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // 3000 mV -> "BA  3.00 V" (blank before the unit).
         assert_eq!(mock.text(), "BA  3.00 V");
     }
@@ -1783,11 +1784,10 @@ mod tests {
     #[test]
     fn real_wake_activate_renders_5_00() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = wake::WakeFace::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Activate, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Activate, &mut settings));
         // hour 5 minute 0 in 24h mode -> "WA  0500".
         assert_eq!(mock.text(), "WA  0500");
     }
@@ -1795,25 +1795,23 @@ mod tests {
     #[test]
     fn real_wareki_activate_shows_year_and_era() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = wareki::WarekiFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // The year/era is drawn on Tick; real year 2023 > REIWA_GANNEN.
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert!(mock.text().contains("2023"));
     }
 
     #[test]
     fn real_weeknumber_activate_renders_clock_and_week() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = weeknumber::WeekNumberClockFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         assert!(mock.colon);
         assert!(mock.indicator(Indicator::H24));
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         // "FR0615" + minutes "04" + week number. 2023-01-06 is week 1.
         assert_eq!(mock.text(), "FR06150401");
     }
@@ -1821,10 +1819,9 @@ mod tests {
     #[test]
     fn real_wordle_activate_shows_title_screen() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let settings = h24_settings();
         let mut face = wordle::WordleFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // Title + a blank at pos 3.
         assert_eq!(mock.text(), "WO  WordLE");
     }
@@ -1832,11 +1829,10 @@ mod tests {
     #[test]
     fn real_world_clock2_activate_starts_in_settings_mode() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = world_clock2::WorldClock2Face::new();
-        face.activate(&settings);
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         // Settings mode zone 0 (UTC): "UT00 +0000".
         assert_eq!(mock.text(), "UT00 +0000");
     }
@@ -1844,12 +1840,11 @@ mod tests {
     #[test]
     fn real_wyoscan_activate_then_tick_animates() {
         let mut mock = steady_state();
-        seam::install_hw(&mut mock);
         let mut settings = h24_settings();
         let mut face = wyoscan::WyoscanFace::new();
-        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.activate(&settings));
         // First tick captures the time and starts the animation, setting pixels.
-        face.loop_(types::Event::Tick, &mut settings);
+        seam::with_hw(&mut mock, || face.loop_(types::Event::Tick, &mut settings));
         assert!(!mock.segments.is_empty());
     }
 }

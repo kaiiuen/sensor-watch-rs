@@ -31,18 +31,18 @@ pub fn get_pin_level(pin: Pin) -> bool {
         Pin(0, 2) => Button::Alarm,
         Pin(0, 22) => Button::Light,
         Pin(0, 23) => Button::Mode,
-        _ => return seam::hw().read_pin_level((pin.0, pin.1)),
+        _ => return seam::with_current_hw(|hw| hw.read_pin_level((pin.0, pin.1))),
     };
-    seam::hw().get_button_level(button)
+    seam::with_current_hw(|hw| hw.get_button_level(button))
 }
 
 /// Sets a GPIO pin's direction. Host forwards a boolean (`Direction::Out` =
 /// `true`) to the `Hw::set_pin_direction` hook; recorded as the direction shadow.
 pub fn set_pin_direction(pin: Pin, direction: Direction) {
-    seam::hw().set_pin_direction((pin.0, pin.1), direction == Direction::Out);
+    seam::with_current_hw(|hw| hw.set_pin_direction((pin.0, pin.1), direction == Direction::Out));
 }
 
 /// Sets a GPIO pin's output level. Host forwards to `Hw::set_pin_level`.
 pub fn set_pin_level(pin: Pin, level: bool) {
-    seam::hw().set_pin_level((pin.0, pin.1), level);
+    seam::with_current_hw(|hw| hw.set_pin_level((pin.0, pin.1), level));
 }

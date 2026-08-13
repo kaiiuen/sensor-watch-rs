@@ -83,6 +83,7 @@ pub mod sailing;
 pub mod save_load;
 pub mod set_time;
 pub mod set_time_hackwatch;
+pub mod shell_auth;
 pub mod settings_face;
 pub mod ships_bell;
 pub mod simon;
@@ -815,6 +816,10 @@ fn take_background_task_request() -> bool {
 /// active, the I2C bus to the accelerometer must stay powered so a tap can be
 /// read when it wakes the CPU, so `release_peripherals` must not disable I2C.
 pub static mut TAP_DETECTION_ACTIVE: bool = false;
+
+/// The physical-presence window for mutating shell commands.
+pub static mut SHELL_AUTH: shell_auth::ShellAuthorization =
+    shell_auth::ShellAuthorization::new();
 
 /// The serial command shell.
 pub static mut SHELL: watch::shell::Shell = watch::shell::Shell::new_static();
@@ -1796,8 +1801,12 @@ pub fn app_loop() {
             handle_background_tasks();
         }
 
-        // React to the single pending event.
+        // React to the single pending event. The service-button event is
+        // consumed before the shell so a release revokes mutations immediately.
         let event = take_event();
+        SHELL_AUTH.observe(event, FAST_TICKS);
+        let shell_authorized = SHELL_AUTH.is_authorized(FAST_TICKS);
+        SHELL.set_mutation_authorized(shell_authorized);
         if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
         }

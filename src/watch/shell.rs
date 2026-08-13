@@ -83,11 +83,11 @@ impl Shell {
 
     /// Set whether mutating commands may run for the current shell session.
     ///
-    /// A board integration should call this only after its physical-presence
-    /// check (for example, a held service button). Tests and development tools
-    /// may use the same explicit hook. The shell starts locked and callers can
-    /// revoke authorization at any time.
-    pub fn set_mutation_authorized(&mut self, authorized: bool) {
+    /// The movement integration calls this only from its physical-presence
+    /// state machine. Tests may use the hook to exercise command authorization;
+    /// the shell starts locked and authorization is revoked on the next app
+    /// loop when the service window closes.
+    pub(crate) fn set_mutation_authorized(&mut self, authorized: bool) {
         self.mutation_authorized = authorized;
     }
 

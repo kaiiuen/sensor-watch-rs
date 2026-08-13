@@ -13,7 +13,7 @@ pub fn display_string(string: &str, position: u8) {
     if !sensor_watch_core::safety::valid_display_position(position) {
         return;
     }
-    seam::hw().display_string(string, position);
+    seam::with_current_hw(|hw| hw.display_string(string, position));
 }
 
 /// Displays a single character at `position`, applying the same segment-map
@@ -95,66 +95,66 @@ pub fn display_character(character: u8, position: u8) {
 
     let buf = [character];
     let s = core::str::from_utf8(&buf).unwrap_or(" ");
-    seam::hw().display_string(s, position);
+    seam::with_current_hw(|hw| hw.display_string(s, position));
 }
 
 /// Turns the colon on.
 pub fn set_colon() {
-    seam::hw().set_colon();
+    seam::with_current_hw(|hw| hw.set_colon());
 }
 
 /// Turns the colon off.
 pub fn clear_colon() {
-    seam::hw().clear_colon();
+    seam::with_current_hw(|hw| hw.clear_colon());
 }
 
 /// Sets an indicator segment.
 pub fn set_indicator(indicator: Indicator) {
-    seam::hw().set_indicator(indicator);
+    seam::with_current_hw(|hw| hw.set_indicator(indicator));
 }
 
 /// Clears an indicator segment.
 pub fn clear_indicator(indicator: Indicator) {
-    seam::hw().clear_indicator(indicator);
+    seam::with_current_hw(|hw| hw.clear_indicator(indicator));
 }
 
 /// Sets a raw (com, seg) pixel.
 pub fn set_pixel(com: u8, seg: u8) {
     if com <= 2 && seg < 32 {
-        seam::hw().set_pixel(com, seg);
+        seam::with_current_hw(|hw| hw.set_pixel(com, seg));
     }
 }
 
 /// Clears a raw (com, seg) pixel.
 pub fn clear_pixel(com: u8, seg: u8) {
     if com <= 2 && seg < 32 {
-        seam::hw().clear_pixel(com, seg);
+        seam::with_current_hw(|hw| hw.clear_pixel(com, seg));
     }
 }
 
 /// Clears the entire display.
 pub fn clear_display() {
-    seam::hw().clear_display();
+    seam::with_current_hw(|hw| hw.clear_display());
 }
 
 /// True while the tick animation is running.
 pub fn tick_animation_is_running() -> bool {
-    seam::hw().tick_animation_is_running()
+    seam::with_current_hw(|hw| hw.tick_animation_is_running())
 }
 
 /// Stops the tick animation.
 pub fn stop_tick_animation() {
-    seam::hw().stop_tick_animation();
+    seam::with_current_hw(|hw| hw.stop_tick_animation());
 }
 
 /// Clears all indicator segments at once.
 pub fn clear_all_indicators() {
-    seam::hw().clear_all_indicators();
+    seam::with_current_hw(|hw| hw.clear_all_indicators());
 }
 
 /// Starts the tick (colon) animation for `duration` ms.
 pub fn start_tick_animation(duration: u32) {
-    seam::hw().start_tick_animation(duration);
+    seam::with_current_hw(|hw| hw.start_tick_animation(duration));
 }
 
 #[cfg(test)]

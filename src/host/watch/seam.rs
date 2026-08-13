@@ -1,27 +1,9 @@
-//! The host hardware seam: a global one-slot dispatch to an installed `Hw`.
+//! Scoped host hardware access for the `watch` HAL.
 //!
-//! On the host, the firmware HAL free functions in this tree
-//! (`slcd::display_string`, `rtc::get_date_time`, `adc::get_vcc_voltage`,
-//! `gpio::get_button_level`, ...) forward to whatever [`Hw`] is installed via
-//! [`install_hw`]. Host tests/Studio install a reuseable
-//! [`MockHw`](sensor_watch_core::mock_hw::MockHw), so the *real face code* runs
-//! against a recording LCD instead of SAM L22 MMIO.
-//!
-//! # The target vs. host split
-//!
-//! This module only exists in the host (`cfg(all(not(target_arch = "arm"),
-//! feature = "hostmock"))`) build of the lib target. The `thumbv6m-none-eabi`
-//! firmware build compiles the *real* `src/watch/*` MMIO drivers directly from
-//! the binary and is completely unchanged by this seam.
-//!
-//! # Threading / safety
-//!
-//! The dispatch holds a `static mut Option<*mut dyn Hw>` (a raw fat pointer;
-//! `Option` avoids building a null pointer to a `dyn` whose metadata is not
-//! `Thin`). This is sound only for single-threaded host use (unit tests, a
-//! single Studio simulation), which is exactly how the seam is consumed. The
-//! returned short-lived `&mut dyn Hw` is re-borrowed per call, mimicking the
-//! firmware's global singleton HAL functions.
+//! Host HAL functions run inside [`with_hw`]. The active backend is visible only
+//! while that closure is running, and each HAL call borrows it through
+//! [`with_current_hw`]. This keeps the synchronization held for the complete
+//! lifetime of every backend borrow without exposing a lifetime-erased reference.
 
 #[cfg(not(test))]
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -30,26 +12,18 @@ use sensor_watch_core::mock_hw::Hw;
 #[cfg(test)]
 use core::cell::Cell;
 
-/// A raw trait-object pointer cannot auto-implement `Send` because the trait
-/// itself is not required to be `Send`. The slot is protected by a critical
-/// section, and the seam's documented single-backend contract prevents the
-/// pointer from being used concurrently.
 #[derive(Clone, Copy)]
 struct DispatchPtr(*mut dyn Hw);
 
-// SAFETY: access to the slot is serialized, and callers must serialize calls
-// through the returned mutable backend as required by this host-only seam.
+// The pointer is used only while the scoped dispatch lock is held. The backend
+// itself is still borrowed by `with_hw` for the duration of that scope.
 unsafe impl Send for DispatchPtr {}
 
-/// The installed host backend (None until [`install_hw`] is called).
 #[cfg(not(test))]
 static mut DISPATCH: Option<DispatchPtr> = None;
 #[cfg(not(test))]
 static DISPATCH_LOCKED: AtomicBool = AtomicBool::new(false);
 
-// Unit tests run in parallel. Keeping each test's backend in thread-local
-// storage preserves the single-backend API without allowing one test to
-// replace another test's raw pointer while it is in use.
 #[cfg(test)]
 std::thread_local! {
     static TEST_DISPATCH: Cell<Option<DispatchPtr>> = const { Cell::new(None) };
@@ -70,81 +44,101 @@ fn unlock_dispatch() {
     DISPATCH_LOCKED.store(false, Ordering::Release);
 }
 
-/// Installs `hw` as the backend that the `watch` free functions forward to.
-///
-/// A host test installs a `&mut MockHw` here before driving a face; the same
-/// mock then records every LCD write the face makes. It is the **host analogue
-/// of `watch::init()`** on the target.
-///
-/// The seam is single-threaded and deliberately unsafe: the `&mut` borrow is
-/// promoted to `'static` so it can live in a global slot for the duration of a
-/// test/simulation. The caller must keep the mock alive until the face is done
-/// writing (a requirement that mirrors the ARM HAL, where the registers live
-/// for the whole firmware).
-pub fn install_hw(hw: &mut dyn Hw) {
-    // The seam is single-threaded and deliberately leaky: the `&mut` borrow is
-    // surfaced to `'static` so it can live in a global slot for the duration of
-    // a test/simulation. `*mut dyn Trait` is lifetime-invariant on newer rustc,
-    // so the borrow lifetime is erased explicitly. The caller must keep the mock
-    // alive until the face is done writing (mirrors the ARM HAL, where the
-    // registers live for the whole firmware).
-    let leaked: *mut (dyn Hw + 'static) = unsafe { core::mem::transmute(hw) };
-    #[cfg(test)]
-    TEST_DISPATCH.with(|slot| slot.set(Some(DispatchPtr(leaked))));
+struct DispatchScope {
     #[cfg(not(test))]
-    {
-        lock_dispatch();
-        unsafe {
-            DISPATCH = Some(DispatchPtr(leaked));
-        }
-        unlock_dispatch();
+    locked: bool,
+}
+
+union PointerParts<'a> {
+    reference: *mut (dyn Hw + 'a),
+    parts: (*mut (), *mut ()),
+}
+
+union RebuildPointer {
+    parts: (*mut (), *mut ()),
+    erased: *mut (dyn Hw + 'static),
+}
+
+fn erase_pointer(hw: &mut dyn Hw) -> *mut (dyn Hw + 'static) {
+    // SAFETY: these operations copy only the two fat-pointer words. The
+    // resulting pointer is installed and dereferenced exclusively inside the
+    // borrow scope owned by the caller; no reference lifetime is exposed.
+    unsafe {
+        let parts = PointerParts::<'_> { reference: hw }.parts;
+        RebuildPointer { parts }.erased
     }
 }
 
-/// Clears the installed backend. Optional; for completeness.
-pub fn clear_hw() {
-    #[cfg(test)]
-    TEST_DISPATCH.with(|slot| slot.set(None));
-    #[cfg(not(test))]
-    {
-        lock_dispatch();
-        unsafe {
-            DISPATCH = None;
+impl DispatchScope {
+    fn enter(hw: &mut dyn Hw) -> Self {
+        #[cfg(test)]
+        TEST_DISPATCH.with(|slot| slot.set(Some(DispatchPtr(erase_pointer(hw)))));
+        #[cfg(not(test))]
+        {
+            lock_dispatch();
+            unsafe {
+                // The slot stores only the address while this scope is active;
+                // the borrow is kept alive by `DispatchScope` and cannot escape
+                // `with_hw`. A union is used only to carry the raw fat pointer
+                // into the scoped slot; no reference lifetime is exposed.
+                DISPATCH = Some(DispatchPtr(erase_pointer(hw)));
+            }
         }
-        unlock_dispatch();
+        Self {
+            #[cfg(not(test))]
+            locked: true,
+        }
     }
 }
 
-/// Returns the installed backend, panicking if none is installed.
+impl Drop for DispatchScope {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        TEST_DISPATCH.with(|slot| slot.set(None));
+        #[cfg(not(test))]
+        {
+            unsafe {
+                DISPATCH = None;
+            }
+            if self.locked {
+                unlock_dispatch();
+                self.locked = false;
+            }
+        }
+    }
+}
+
+/// Runs `f` with `hw` installed for exactly the duration of the closure.
 ///
-/// This is the single seam point that every host `watch::*` free function calls.
+/// The backend may not be used by host HAL calls outside this scope. Nested
+/// scopes are intentionally unsupported because a single firmware HAL has one
+/// active backend at a time.
+pub fn with_hw<R>(hw: &mut dyn Hw, f: impl FnOnce() -> R) -> R {
+    let _scope = DispatchScope::enter(hw);
+    f()
+}
+
+/// Borrows the active backend for one host HAL operation.
+///
+/// This is private to the host HAL seam: callers must use [`with_hw`] so the
+/// dispatch lock outlives the returned borrow and is released even on panic.
 #[inline]
-pub fn hw() -> &'static mut dyn Hw {
+pub(crate) fn with_current_hw<R>(f: impl FnOnce(&mut dyn Hw) -> R) -> R {
     #[cfg(test)]
     let ptr = TEST_DISPATCH.with(|slot| match slot.get() {
         Some(DispatchPtr(ptr)) => ptr,
-        None => panic!(
-            "host watch: no Hw installed; call sensor_watch::watch::seam::install_hw \\
-             with a &mut MockHw before driving a face"
-        ),
+        None => panic!("host watch: no Hw installed; call sensor_watch::watch::seam::with_hw"),
     });
     #[cfg(not(test))]
-    let ptr = {
-        lock_dispatch();
-        let ptr = unsafe {
-            match DISPATCH {
-                Some(DispatchPtr(ptr)) => ptr,
-                None => panic!(
-                    "host watch: no Hw installed; call sensor_watch::watch::seam::install_hw \\
-                     with a &mut MockHw before driving a face"
-                ),
-            }
-        };
-        unlock_dispatch();
-        ptr
+    let ptr = unsafe {
+        match DISPATCH {
+            Some(DispatchPtr(ptr)) => ptr,
+            None => panic!("host watch: no Hw installed; call sensor_watch::watch::seam::with_hw"),
+        }
     };
-    // SAFETY: `install_hw` documents that the backend outlives all uses and that
-    // callers serialize access. The atomic lock protects the global slot in
-    // non-test builds; test builds isolate the slot per thread.
-    unsafe { &mut *ptr }
+
+    // SAFETY: `with_hw` installs this pointer only for the duration of its
+    // closure, while its dispatch scope holds the synchronization. Every host
+    // HAL caller reaches this function inside that scope.
+    unsafe { f(&mut *ptr) }
 }

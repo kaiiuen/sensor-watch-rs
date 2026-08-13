@@ -3,7 +3,7 @@
 //! This is the host build's replacement for the ARM `src/watch/mod.rs`. The face
 //! code (`movement/*.rs`) calls `crate::watch::*` free functions with the SAME
 //! names/signatures as the real HAL, but here they forward to the installed
-//! [`Hw`] backend (a [`MockHw`] in tests) via `crate::watch::seam::hw()`.
+//! [`Hw`] backend (a [`MockHw`] in tests) via `crate::watch::seam::with_hw` and its scoped backend borrow.
 //!
 //! Only the subset of the real HAL that the migrated faces use is provided here,
 //! growing one method at a time as faces are ported (keep it minimal, mirroring
@@ -24,7 +24,7 @@ pub mod storage;
 pub mod thermistor;
 pub mod utility;
 
-/// The `Hw`-seam plumbing: [`install_hw`](seam::install_hw) + [`hw`](seam::hw).
+/// The `Hw`-seam plumbing: scoped [`seam::with_hw`] access.
 pub mod seam;
 
 // Re-export the shared date/time type so callers (and real face code) can use it

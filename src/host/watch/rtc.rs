@@ -11,21 +11,21 @@ use super::seam;
 
 /// Reads the current date/time from the installed mock.
 pub fn get_date_time() -> DateTime {
-    seam::hw().get_date_time()
+    seam::with_current_hw(|hw| hw.get_date_time())
 }
 
 /// Host: sets the RTC date/time by forwarding to the `Hw::set_date_time` hook
 /// (the mock records it as `now`).
 pub fn set_date_time(date_time: DateTime) {
-    seam::hw().set_date_time(date_time);
+    seam::with_current_hw(|hw| hw.set_date_time(date_time));
 }
 
 /// Host: writes the frequency-correction register via the `Hw` seam (no-op).
 pub fn freqcorr_write(value: i16, sign: i16) {
-    seam::hw().freqcorr_write(value, sign);
+    seam::with_current_hw(|hw| hw.freqcorr_write(value, sign));
 }
 
 /// Host: reads the frequency-correction register via the `Hw` seam (0).
 pub fn freqcorr_read() -> i16 {
-    seam::hw().freqcorr_read()
+    seam::with_current_hw(|hw| hw.freqcorr_read())
 }

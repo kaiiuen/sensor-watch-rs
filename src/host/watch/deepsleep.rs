@@ -10,13 +10,13 @@ use super::seam;
 /// Stores data in one of the RTC's backup registers (0-7).
 /// Host: forwards to `Hw::store_backup_data`.
 pub fn store_backup_data(data: u32, reg: u8) {
-    seam::hw().store_backup_data(data, reg);
+    seam::with_current_hw(|hw| hw.store_backup_data(data, reg));
 }
 
 /// Gets 32 bits of data from the RTC's BACKUP register (0-7).
 /// Host: forwards to `Hw::get_backup_data`.
 pub fn get_backup_data(reg: u8) -> u32 {
-    seam::hw().get_backup_data(reg)
+    seam::with_current_hw(|hw| hw.get_backup_data(reg))
 }
 
 /// Host: no-op (the mock does not model device standby).

@@ -10,13 +10,13 @@ use super::seam;
 
 /// Turns the LED off. Host: forwards to the `Hw` seam (no-op by default).
 pub fn set_led_off() {
-    seam::hw().set_led_off();
+    seam::with_current_hw(|hw| hw.set_led_off());
 }
 
 /// Sets the LED to a custom color by modulating each output's duty cycle.
 /// Host: records via `Hw::set_led_color`.
 pub fn set_led_color(red: u8, green: u8) {
-    seam::hw().set_led_color(red, green);
+    seam::with_current_hw(|hw| hw.set_led_color(red, green));
 }
 
 /// Sets the red LED to full brightness, green off.
