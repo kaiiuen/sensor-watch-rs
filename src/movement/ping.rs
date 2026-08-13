@@ -481,7 +481,7 @@ impl PingFace {
         slcd::clear_display();
         slcd::display_string(" LOSE ", 4);
         if self.sound_on {
-            movement::play_sequence(LOSE_TUNE.as_ptr(), None);
+            movement::play_sequence(&LOSE_TUNE, None);
         }
     }
 
@@ -499,7 +499,7 @@ impl PingFace {
                 movement::play_note(Note::C5, 0);
             }
         } else if game_result == PingResult::FirstHit && self.sound_on {
-            movement::play_sequence(START_TUNE.as_ptr(), None);
+            movement::play_sequence(&START_TUNE, None);
         }
     }
 }

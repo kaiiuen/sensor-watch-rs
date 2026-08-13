@@ -793,7 +793,23 @@ pub static mut FAST_TICK_ON: bool = false;
 
 /// Set by the per-minute alarm so the main loop runs the all-face background
 /// task pass (`handle_background_tasks`) once per minute, in main context.
+///
+/// The flag is an interrupt-to-main handoff. Readers must take it through a
+/// critical section rather than reading and clearing it separately; otherwise
+/// an alarm interrupt between those operations can lose the next request.
 pub static mut RUN_BACKGROUND_TASKS: bool = false;
+
+/// Atomically takes the pending per-minute background-task request.
+///
+/// Clearing and observing the flag in one critical section prevents the alarm
+/// ISR from setting it between the main loop's read and clear operations.
+fn take_background_task_request() -> bool {
+    critical_section::with(|_| unsafe {
+        let requested = RUN_BACKGROUND_TASKS;
+        RUN_BACKGROUND_TASKS = false;
+        requested
+    })
+}
 
 /// True while tap detection (accelerometer wake-on-motion) is active. While
 /// active, the I2C bus to the accelerometer must stay powered so a tap can be
@@ -1019,11 +1035,11 @@ pub fn play_alarm_beeps(_rounds: u8, alarm_note: BuzzerNote) {
     buzzer::enable_buzzer();
 }
 
-/// Plays a note sequence (a pointer to (note, duration) pairs ending in 0).
+/// Plays a note sequence (a bounded slice of (note, duration) pairs ending in 0).
 ///
 /// The sequence plays at signal priority, so it cannot be cancelled by a button
 /// note but can be interrupted by an alarm.
-pub fn play_sequence(note_sequence: *const i8, _callback_on_end: Option<fn()>) {
+pub fn play_sequence(note_sequence: &[i8], _callback_on_end: Option<fn()>) {
     if crate::movement::fault::in_safe_state() {
         return;
     }
@@ -1776,8 +1792,7 @@ pub fn app_loop() {
         // Run the per-minute all-face background task pass (advise + wants) if
         // the minute alarm requested it. Done here in main-loop context, not
         // the ISR.
-        if RUN_BACKGROUND_TASKS {
-            RUN_BACKGROUND_TASKS = false;
+        if take_background_task_request() {
             handle_background_tasks();
         }
 

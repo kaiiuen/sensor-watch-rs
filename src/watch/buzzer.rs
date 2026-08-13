@@ -272,11 +272,16 @@ fn delay_ms(ms: u16) {
 
 // --- Non-blocking note sequences (TC3 timer) ---
 
+/// Maximum encoded sequence size: 128 (note, duration) pairs.
+const MAX_SEQUENCE_BYTES: usize = 256;
+
 static mut SEQ_POSITION: u16 = 0;
+static mut SEQUENCE_LENGTH: u16 = 0;
 static mut TONE_TICKS: i8 = 0;
 static mut REPEAT_COUNTER: i8 = -1;
 static mut CALLBACK_RUNNING: bool = false;
-static mut SEQUENCE: *const i8 = core::ptr::null();
+/// Owned storage keeps the sequence alive until the TC3 ISR finishes it.
+static mut SEQUENCE: [i8; MAX_SEQUENCE_BYTES] = [0; MAX_SEQUENCE_BYTES];
 static mut CB_FINISHED: Option<fn()> = None;
 
 /// Starts the TC3 timer.
@@ -319,13 +324,13 @@ fn tc3_initialize() {
 
 /// Plays a sequence of notes in a non-blocking way.
 ///
-/// `note_sequence` is a pointer to a sequence of (note, duration) tuples ending
-/// with a zero. A negative note value rewinds the sequence by that many notes;
-/// the following byte is the loop count.
-pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
-    // The legacy ABI supplies only a pointer, so reject null and validate a
-    // bounded sequence before retaining it for the interrupt callback.
-    if note_sequence.is_null() || !validate_sequence(note_sequence) {
+/// `note_sequence` contains explicit (note, duration) byte pairs and must end
+/// with a zero note. A negative note value rewinds the sequence by that many
+/// notes; the following byte is the loop count. The sequence is validated and
+/// copied into an internal fixed-size buffer before this function returns, so
+/// callers may safely pass stack or temporary slices.
+pub fn play_sequence(note_sequence: &[i8], callback_on_end: Option<fn()>) {
+    if !validate_sequence(note_sequence) {
         set_buzzer_off();
         return;
     }
@@ -334,7 +339,11 @@ pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
     }
     set_buzzer_off();
     unsafe {
-        SEQUENCE = note_sequence;
+        // The length is retained separately; the ISR never scans past it.
+        SEQUENCE_LENGTH = note_sequence.len() as u16;
+        for (index, &value) in note_sequence.iter().enumerate() {
+            SEQUENCE[index] = value;
+        }
         CB_FINISHED = callback_on_end;
         SEQ_POSITION = 0;
         TONE_TICKS = 0;
@@ -346,13 +355,16 @@ pub fn play_sequence(note_sequence: *const i8, callback_on_end: Option<fn()>) {
     tc3_start();
 }
 
-fn validate_sequence(sequence: *const i8) -> bool {
-    if sequence.is_null() {
+fn validate_sequence(sequence: &[i8]) -> bool {
+    if sequence.is_empty()
+        || sequence.len() > MAX_SEQUENCE_BYTES
+        || !sequence.len().is_multiple_of(2)
+    {
         return false;
     }
-    for pair in 0..128usize {
-        let note = unsafe { *sequence.add(pair * 2) };
-        let duration = unsafe { *sequence.add(pair * 2 + 1) };
+    for (pair, tuple) in sequence.chunks_exact(2).enumerate() {
+        let note = tuple[0];
+        let duration = tuple[1];
         if note == 0 {
             return true;
         }
@@ -372,23 +384,24 @@ fn validate_sequence(sequence: *const i8) -> bool {
 fn cb_watch_buzzer_seq() {
     unsafe {
         if TONE_TICKS == 0 {
-            let seq = SEQUENCE;
-            let pos = SEQ_POSITION as isize;
-            if *seq.add(pos as usize) < 0
-                && *seq.add(pos as usize) != Note::Rest as i8
-                && *seq.add(pos as usize + 1) != 0
-            {
+            let pos = SEQ_POSITION as usize;
+            let length = SEQUENCE_LENGTH as usize;
+            if pos + 1 >= length {
+                abort_sequence();
+                return;
+            }
+            if SEQUENCE[pos] < 0 && SEQUENCE[pos] != Note::Rest as i8 && SEQUENCE[pos + 1] != 0 {
                 // Repeat indicator found.
                 if REPEAT_COUNTER == -1 {
-                    REPEAT_COUNTER = *seq.add(pos as usize + 1);
+                    REPEAT_COUNTER = SEQUENCE[pos + 1];
                 } else {
                     REPEAT_COUNTER -= 1;
                 }
                 if REPEAT_COUNTER > 0 {
                     // Rewind.
-                    let rewind = *seq.add(pos as usize) as isize * -2;
-                    if pos as i16 > rewind as i16 {
-                        SEQ_POSITION = (pos + rewind) as u16;
+                    let rewind = SEQUENCE[pos] as usize * 2;
+                    if pos > rewind {
+                        SEQ_POSITION = (pos - rewind) as u16;
                     } else {
                         SEQ_POSITION = 0;
                     }
@@ -398,10 +411,14 @@ fn cb_watch_buzzer_seq() {
                     REPEAT_COUNTER = -1;
                 }
             }
-            let pos = SEQ_POSITION as isize;
-            if *seq.add(pos as usize) != 0 && *seq.add(pos as usize + 1) != 0 {
+            let pos = SEQ_POSITION as usize;
+            if pos + 1 >= length {
+                abort_sequence();
+                return;
+            }
+            if SEQUENCE[pos] != 0 && SEQUENCE[pos + 1] != 0 {
                 // Read note.
-                let note = *seq.add(pos as usize) as u8;
+                let note = SEQUENCE[pos] as u8;
                 if note != Note::Rest as u8 {
                     if (note as usize) < NOTE_PERIODS.len() {
                         let _ = set_buzzer_period(NOTE_PERIODS[note as usize] as u32);
@@ -413,7 +430,7 @@ fn cb_watch_buzzer_seq() {
                 } else {
                     set_buzzer_off();
                 }
-                TONE_TICKS = *seq.add(pos as usize + 1);
+                TONE_TICKS = SEQUENCE[pos + 1];
                 SEQ_POSITION = (pos + 2) as u16;
             } else {
                 // End the sequence.

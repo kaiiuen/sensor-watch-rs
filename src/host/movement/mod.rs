@@ -903,7 +903,7 @@ pub fn request_tick_frequency(freq: u8) {
 pub fn play_note(_note: types::BuzzerNote, _priority: u8) {}
 
 /// Plays a note sequence. Host: no-op. Mirrors `movement::play_sequence`.
-pub fn play_sequence(_note_sequence: *const i8, _callback_on_end: Option<fn()>) {}
+pub fn play_sequence(_note_sequence: &[i8], _callback_on_end: Option<fn()>) {}
 
 /// Detects and enables tap detection if an accelerometer is present.
 /// Host: returns false (no accelerometer), so faces fall back to button control.

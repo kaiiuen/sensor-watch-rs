@@ -108,7 +108,7 @@ pub fn play_signal() {}
 /// Host: no-op.
 pub fn play_note(_note: Note, _duration_ms: u16) {}
 /// Host: no-op.
-pub fn play_sequence(_note_sequence: *const i8, _callback: Option<fn()>) {}
+pub fn play_sequence(_note_sequence: &[i8], _callback: Option<fn()>) {}
 
 /// The oscillator period (in clock ticks) for each [`Note`], matching the real
 /// `src/watch/buzzer.rs` so faces that index `NOTE_PERIODS[Note as usize]`

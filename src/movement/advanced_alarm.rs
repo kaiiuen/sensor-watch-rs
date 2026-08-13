@@ -252,13 +252,11 @@ impl AdvancedAlarmFace {
     }
 
     fn play_short_beep(&mut self, pitch_idx: u8) {
-        // A short double beep sequence.
-        static mut BEEP_SEQUENCE: [i8; 7] = [0, 4, -1, 4, 0, 6, 0];
-        unsafe {
-            BEEP_SEQUENCE[0] = BUZZER_NOTES[pitch_idx as usize] as i8;
-            BEEP_SEQUENCE[4] = BUZZER_NOTES[pitch_idx as usize] as i8;
-            movement::play_sequence(BEEP_SEQUENCE.as_ptr(), None);
-        }
+        // A short double beep sequence. The buzzer copies it synchronously.
+        let mut beep_sequence: [i8; 7] = [0, 4, -1, 4, 0, 6, 0];
+        beep_sequence[0] = BUZZER_NOTES[pitch_idx as usize] as i8;
+        beep_sequence[4] = BUZZER_NOTES[pitch_idx as usize] as i8;
+        movement::play_sequence(&beep_sequence, None);
     }
 
     fn indicate_beep(&mut self) {
