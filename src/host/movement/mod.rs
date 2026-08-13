@@ -108,6 +108,41 @@ pub mod flashlight {
     pub use real::FlashlightFace;
 }
 
+/// The REAL `blinky` face.
+pub mod blinky {
+    #[path = "../../../movement/blinky.rs"]
+    pub mod real;
+    pub use real::BlinkyFace;
+}
+
+/// The REAL `beeps` face.
+pub mod beeps {
+    #[path = "../../../movement/beeps.rs"]
+    pub mod real;
+    pub use real::BeepsFace;
+}
+
+/// The REAL `character_set` face.
+pub mod character_set {
+    #[path = "../../../movement/character_set.rs"]
+    pub mod real;
+    pub use real::CharacterSetFace;
+}
+
+/// The REAL `demo` face.
+pub mod demo {
+    #[path = "../../../movement/demo.rs"]
+    pub mod real;
+    pub use real::DemoFace;
+}
+
+/// The REAL `beats` face.
+pub mod beats {
+    #[path = "../../../movement/beats.rs"]
+    pub mod real;
+    pub use real::BeatsFace;
+}
+
 /// The REAL `astronomy` face.
 pub mod astronomy {
     #[path = "../../../movement/astronomy.rs"]
