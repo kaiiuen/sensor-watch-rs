@@ -50,9 +50,10 @@ Polish and harden the deployment story around the UF2 bootloader:
 
 **Status:** Partially done. The Rust `sensor-watch-tools` binary provides
 host-side validation, known-good backup preservation, manifest output, and
-explicit rollback staging. Studio orchestration, USB-device detection, reboot
-verification, automatic fail-safe loops, and device-side rollback remain
-unimplemented.
+explicit rollback staging. Studio currently refuses configured UF2 builds until
+preset, board, and component selections are wired into firmware inputs. USB-device
+detection, reboot verification, automatic fail-safe loops, and device-side
+rollback remain unimplemented.
 
 ### 5. Full real-face host migration
 

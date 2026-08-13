@@ -182,21 +182,24 @@ The reset handler in `src/main.rs` runs in this exact order:
 1. copy_ramfunc()                        - copy .ramfunc routines from flash to RAM
 2. movement::fault::check_reset_reason() - record why we reset (watchdog/panic/power-on)
 3. movement::fault::check_boot_throttle()- detect a brown-out reboot loop
-4. watch::crc::check_firmware_integrity() - CRC-32 integrity check; on failure
+4. wdt::init()                         - initialize the watchdog before
+                                            boot-time clock waits
+5. watch::crc::check_firmware_integrity() - CRC-32 integrity check; on failure
                                             record a CorruptImage fault and keep
                                             booting best-effort (non-bricking)
-5. watch::init()                         - hardware init in dependency order:
+6. watch::init()                         - hardware init in dependency order:
      a. irq::init()                      - interrupt priorities
-     b. clock::init()                    - 32 kHz crystal + GCLK routing
+     b. clock::init()                    - 32 kHz crystal + GCLK routing,
+                                            with bounded oscillator wait
      c. rtc::init()                      - RTC (depends on the clock)
-     d. wdt::init()                      - watchdog backstop
-6. movement::fault::check_clock_failure()- detect a failed 32 kHz crystal (CFD)
-7. watch::deepsleep::init_bod33()        - brown-out detector (low-battery interrupt)
-8. movement::app_init()                  - load settings, init framework
-9. movement::board::apply()              - apply LED polarity + buzzer voltage
-10. movement::app_setup()                - register faces, buttons, alarms
-11. watch::rtc::register_tick_callback() - 1 Hz tick
-12. loop:
+     d. wdt::init()                      - idempotent watchdog backstop
+7. movement::fault::check_clock_failure()- detect a failed 32 kHz crystal (CFD)
+8. watch::deepsleep::init_bod33()        - brown-out detector (low-battery interrupt)
+9. movement::app_init()                  - load settings, init framework
+10. movement::board::apply()              - apply LED polarity + buzzer voltage
+11. movement::app_setup()                - register faces, buttons, alarms
+12. watch::rtc::register_tick_callback() - 1 Hz tick
+13. loop:
      a. movement::app_loop()             - react to one event
      b. watch::wdt::kick()               - watchdog heartbeat
      c. watch::deepsleep::enter_standby()- enter STANDBY (SysTick-safe)

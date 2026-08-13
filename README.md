@@ -68,24 +68,26 @@ graph TD
 ```
 
 The firmware is a sealed, air-gapped system: the CPU wakes only to react to a
-single event, then returns to STANDBY. The Studio app is the companion that
-builds, simulates, and flashes it.
+single event, then returns to STANDBY. The Studio app is the companion simulator
+and configuration front end; its UF2 build is fail-closed until selections are
+wired into firmware inputs.
 
 ## Firmware Studio (companion app)
 
 The `studio/` directory contains **Firmware Studio**, a GUI companion app that
-assembles the firmware into a `.uf2`, lists the watch faces, and flashes the
-watch. It reuses the `core` crate's pure logic (UF2 encoding, date math,
-settings).
+lists and simulates watch faces, manages configuration, and provides the planned
+build/flash workflow. Its configured UF2 build currently fails closed because
+preset, board, and component selections are not yet firmware build inputs. It
+reuses the `core` crate's pure logic (UF2 encoding, date math, settings).
 
 ```
 cargo build -p sensor-watch-studio
 ```
 
 See [`studio/README.md`](studio/README.md) for details. Studio's normal mode
-is the beginner-safe simulator and UF2 workflow. Its Advanced editor mode and
-Probe/Test (Diagnostics) workflow are for experienced users and do not turn
-simulated checks into physical hardware validation.
+is the beginner-safe simulator and configuration workflow. Its Advanced editor
+mode and Probe/Test (Diagnostics) workflow are for experienced users and do not
+turn simulated checks into physical hardware validation.
 
 For physical access, the USB bootloader drive exposes UF2/file-transfer
 information only. A UART shell requires a 3.3 V UART jig on A4/A2/GND at
@@ -212,10 +214,10 @@ validation.
       reference projects and Second Movement (advanced alarm, hydration, SOS,
       lander, ping, blackjack, tide, days-since, settings, ISH, solar time,
       beats, and more).
-- [x] Hardware hardening: SysTick-safe standby, I2C pin floating, inverted
-      battery ADC, BOD33, boot-count throttle, `.ramfunc` flash writes,
-      `#[repr(C, align(4))]`, windowed watchdog, CRC-32 integrity check,
-      `panic = "abort"`, flip-link
+- [x] Hardware hardening: bounded clock/RTC waits, SysTick-safe standby, I2C
+      pin floating, inverted battery ADC, BOD33, boot-count throttle,
+      `.ramfunc` flash writes, `#[repr(C, align(4))]`, windowed watchdog,
+      CRC-32 integrity check, `panic = "abort"`, flip-link
 - [x] Second Movement features: DST-aware timezones (utz), primary/secondary
       face lists, buzzer priority system
 - [x] Accelerometer framework: LIS2DW driver, tap detection, motion wake
@@ -244,10 +246,9 @@ validation.
 
 ## Status and validation snapshot
 
-- The current host validation passes 67 core tests, 70 Studio tests, and 6
-  tools tests, for 143 passing tests total.
-- The firmware library target runs 0 tests. The passing host suites do not
-  validate physical hardware.
+- The current workspace validation passes 93 firmware-library tests, 67 core
+  tests, 73 Studio tests, and 7 tools tests, for 240 passing tests total.
+- The passing host suites and ARM build do not validate physical hardware.
 - The Studio and tools package test targets pass their host suites; these
   results are separate from embedded hardware validation.
 - No complete repository warning total is claimed here because the full
