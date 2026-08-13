@@ -9,6 +9,7 @@ use crate::watch::storage;
 
 /// The offset within the storage row where the settings live.
 const SETTINGS_OFFSET: u32 = 0;
+const SETTINGS_NAMESPACE: u32 = 0x5357_0001;
 
 /// A magic value written alongside the settings to detect valid stored data.
 const SETTINGS_MAGIC: u32 = 0x5357_0001; // "SW" + version
@@ -19,7 +20,7 @@ const SETTINGS_MAGIC: u32 = 0x5357_0001; // "SW" + version
 /// valid settings have been saved yet (e.g. first boot).
 pub fn load() -> Option<Settings> {
     let mut buf = [0u8; 8];
-    if !storage::wear_leveled_read(SETTINGS_OFFSET, &mut buf) {
+    if !storage::wear_leveled_read_namespaced(SETTINGS_NAMESPACE, SETTINGS_OFFSET, &mut buf) {
         return None;
     }
     let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
@@ -38,5 +39,5 @@ pub fn save(settings: &Settings) -> bool {
     let mut buf = [0u8; 8];
     buf[0..4].copy_from_slice(&SETTINGS_MAGIC.to_le_bytes());
     buf[4..8].copy_from_slice(&settings.reg.to_le_bytes());
-    storage::wear_leveled_write(SETTINGS_OFFSET, &buf)
+    storage::wear_leveled_write_namespaced(SETTINGS_NAMESPACE, SETTINGS_OFFSET, &buf)
 }

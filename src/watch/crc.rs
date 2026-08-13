@@ -14,6 +14,7 @@ const TEXT_END: usize = 0x0003_C000;
 /// The storage row and offset where the firmware signature lives.
 const CRC_ROW: u32 = 1;
 const CRC_OFFSET: u32 = 0;
+const CRC_NAMESPACE: u32 = 0x4352_4301;
 
 /// A magic value written alongside the signature to detect valid stored data.
 const CRC_MAGIC: u32 = 0x4352_4301; // "CRC" + version
@@ -46,7 +47,7 @@ pub fn firmware_crc() -> u32 {
 /// been stored yet (first boot after flashing).
 fn load_stored() -> Option<u32> {
     let mut buf = [0u8; 8];
-    if !crate::watch::storage::wear_leveled_read(CRC_OFFSET, &mut buf) {
+    if !crate::watch::storage::wear_leveled_read_namespaced(CRC_NAMESPACE, CRC_OFFSET, &mut buf) {
         return None;
     }
     let magic = u32::from_le_bytes([buf[0], buf[1], buf[2], buf[3]]);
@@ -61,7 +62,7 @@ fn store(crc: u32) {
     let mut buf = [0u8; 8];
     buf[0..4].copy_from_slice(&CRC_MAGIC.to_le_bytes());
     buf[4..8].copy_from_slice(&crc.to_le_bytes());
-    crate::watch::storage::wear_leveled_write(CRC_OFFSET, &buf);
+    crate::watch::storage::wear_leveled_write_namespaced(CRC_NAMESPACE, CRC_OFFSET, &buf);
 }
 
 /// Checks the firmware text against the stored signature.

@@ -237,9 +237,18 @@ const WEAR_ROWS: u32 = 8;
 /// A magic value written at the start of each wear-leveled row to identify a
 /// committed entry.
 const WEAR_MAGIC: u32 = 0x574C_0001; // "WL" + version
-/// New entries store a generation and its complement after the magic. The
-/// complement distinguishes the new header from legacy row data at offset 4.
-const WEAR_HEADER_SIZE: u32 = 12;
+/// New entries store a generation and its complement, followed by an object
+/// discriminator and its complement. The complements make a partially
+/// programmed header fail validation rather than becoming the newest record.
+const WEAR_HEADER_SIZE: u32 = 20;
+const LEGACY_WEAR_HEADER_SIZE: u32 = 12;
+
+/// The two persistent objects use disjoint row partitions. This prevents a
+/// settings write from erasing the CRC record (and vice versa), while keeping
+/// the bounded eight-row footprint and avoiding heap allocation.
+const NAMESPACE_ROWS: u32 = WEAR_ROWS / 2;
+const CRC_NAMESPACE: u32 = 0x4352_4301;
+const SETTINGS_NAMESPACE: u32 = 0x5357_0001;
 
 /// The current wear-leveling row index, kept in RAM.
 ///
@@ -263,8 +272,8 @@ fn generation_is_newer(candidate: u32, current: u32) -> bool {
 }
 
 /// Validates the complete entry before any destructive erase occurs.
-fn valid_wear_entry(offset: u32, len: usize) -> bool {
-    let data_offset = match offset.checked_add(WEAR_HEADER_SIZE) {
+fn valid_wear_entry(offset: u32, len: usize, header_size: u32) -> bool {
+    let data_offset = match offset.checked_add(header_size) {
         Some(offset) => offset,
         None => return false,
     };
@@ -277,32 +286,52 @@ fn valid_wear_entry(offset: u32, len: usize) -> bool {
     let Some(data_address) = base.checked_add(data_offset) else {
         return false;
     };
-    valid_page_write(header_address, WEAR_HEADER_SIZE) && valid_page_write(data_address, data_size)
+    valid_page_write(header_address, header_size) && valid_page_write(data_address, data_size)
 }
 
-/// Finds the newest valid row and its format. Four-byte headers from older
-/// firmware are accepted as generation zero so an upgrade does not lose the
-/// last saved settings.
-fn find_last_entry() -> Option<WearEntry> {
+/// Finds the newest valid row for a namespace. `None` selects only the
+/// legacy, unnamespaced format; this keeps old callers from mistaking a new
+/// record for their data. A namespaced read separately falls back to legacy.
+fn find_last_entry(namespace: Option<u32>, row_start: u32, row_count: u32) -> Option<WearEntry> {
     let mut newest = None;
-    for row in 0..WEAR_ROWS {
-        let mut header = [0u8; 12];
+    for row in row_start..row_start + row_count {
+        let mut header = [0u8; WEAR_HEADER_SIZE as usize];
         if !read(row, 0, &mut header[..4])
             || u32::from_le_bytes(header[..4].try_into().unwrap()) != WEAR_MAGIC
         {
             continue;
         }
-        let (generation, data_offset) = if read(row, 4, &mut header[4..])
-            && u32::from_le_bytes(header[4..8].try_into().unwrap())
-                ^ u32::from_le_bytes(header[8..12].try_into().unwrap())
-                == u32::MAX
-        {
-            (
-                u32::from_le_bytes(header[4..8].try_into().unwrap()),
-                WEAR_HEADER_SIZE,
-            )
-        } else {
+        if !read(row, 4, &mut header[4..12]) {
+            continue;
+        }
+        let generation = u32::from_le_bytes(header[4..8].try_into().unwrap());
+        let generation_complement = u32::from_le_bytes(header[8..12].try_into().unwrap());
+        let (generation, data_offset) = if generation ^ generation_complement == u32::MAX {
+            if let Some(namespace) = namespace {
+                if !read(row, 12, &mut header[12..])
+                    || u32::from_le_bytes(header[12..16].try_into().unwrap()) != namespace
+                    || u32::from_le_bytes(header[16..20].try_into().unwrap()) != !namespace
+                {
+                    continue;
+                }
+                (generation, WEAR_HEADER_SIZE)
+            } else {
+                // A complete namespace header belongs to the new format and
+                // must not be exposed through the legacy namespace.
+                if read(row, 12, &mut header[12..])
+                    && u32::from_le_bytes(header[12..16].try_into().unwrap())
+                        ^ u32::from_le_bytes(header[16..20].try_into().unwrap())
+                        == u32::MAX
+                {
+                    continue;
+                }
+                (generation, LEGACY_WEAR_HEADER_SIZE)
+            }
+        } else if namespace.is_none() {
+            // Four-byte headers from the oldest format remain readable.
             (0, 4)
+        } else {
+            continue;
         };
         if newest.is_none_or(|entry: WearEntry| generation_is_newer(generation, entry.generation)) {
             newest = Some(WearEntry {
@@ -325,7 +354,7 @@ fn find_last_entry() -> Option<WearEntry> {
 pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     // Validate both page writes before erasing the destination row. A malformed
     // request must never destroy the previously committed entry.
-    if !valid_wear_entry(offset, buffer.len()) {
+    if !valid_wear_entry(offset, buffer.len(), LEGACY_WEAR_HEADER_SIZE) {
         return false;
     }
 
@@ -333,11 +362,13 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     // reboot always erased row zero and could destroy the newest entry.
     let row = unsafe {
         if WEAR_ROW == 0 {
-            WEAR_ROW = find_last_entry().map_or(0, |entry| (entry.row + 1) % WEAR_ROWS);
+            WEAR_ROW =
+                find_last_entry(None, 0, WEAR_ROWS).map_or(0, |entry| (entry.row + 1) % WEAR_ROWS);
         }
         WEAR_ROW % WEAR_ROWS
     };
-    let generation = find_last_entry().map_or(1, |entry| entry.generation.wrapping_add(1));
+    let generation =
+        find_last_entry(None, 0, WEAR_ROWS).map_or(1, |entry| entry.generation.wrapping_add(1));
 
     // Erase the target row, then write the generation-bearing header and data.
     if !erase(row) {
@@ -350,7 +381,7 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
     if !write(row, 0, &header) {
         return false;
     }
-    let data_offset = offset + WEAR_HEADER_SIZE;
+    let data_offset = offset + LEGACY_WEAR_HEADER_SIZE;
     if !write(row, data_offset, buffer) {
         return false;
     }
@@ -365,7 +396,63 @@ pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
 /// Scans the rows for the most recent valid entry (matching the magic header)
 /// and reads the data from it. Returns true if a valid entry was found.
 pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
-    let Some(entry) = find_last_entry() else {
+    let Some(entry) = find_last_entry(None, 0, WEAR_ROWS) else {
+        return false;
+    };
+    let data_offset = match offset.checked_add(entry.data_offset) {
+        Some(offset) => offset,
+        None => return false,
+    };
+    read(entry.row, data_offset, buffer)
+}
+
+fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
+    match namespace {
+        CRC_NAMESPACE => Some((0, NAMESPACE_ROWS)),
+        SETTINGS_NAMESPACE => Some((NAMESPACE_ROWS, NAMESPACE_ROWS)),
+        _ => None,
+    }
+}
+
+/// Writes one independently wear-levelled object. The namespace is persisted
+/// in the commit header, so records sharing an offset cannot collide.
+pub fn wear_leveled_write_namespaced(namespace: u32, offset: u32, buffer: &[u8]) -> bool {
+    let Some((row_start, row_count)) = namespace_rows(namespace) else {
+        return false;
+    };
+    if !valid_wear_entry(offset, buffer.len(), WEAR_HEADER_SIZE) {
+        return false;
+    }
+    let previous = find_last_entry(Some(namespace), row_start, row_count);
+    let row = previous.map_or(row_start, |entry| {
+        row_start + (entry.row - row_start + 1) % row_count
+    });
+    let generation = previous.map_or(1, |entry| entry.generation.wrapping_add(1));
+    if !erase(row) {
+        return false;
+    }
+    let mut header = [0u8; WEAR_HEADER_SIZE as usize];
+    header[..4].copy_from_slice(&WEAR_MAGIC.to_le_bytes());
+    header[4..8].copy_from_slice(&generation.to_le_bytes());
+    header[8..12].copy_from_slice(&(!generation).to_le_bytes());
+    header[12..16].copy_from_slice(&namespace.to_le_bytes());
+    header[16..20].copy_from_slice(&(!namespace).to_le_bytes());
+    if !write(row, 0, &header) {
+        return false;
+    }
+    let data_offset = offset + WEAR_HEADER_SIZE;
+    write(row, data_offset, buffer)
+}
+
+/// Reads one independently wear-levelled object. Legacy unnamespaced records
+/// are accepted only when no namespaced record exists, for firmware upgrades.
+pub fn wear_leveled_read_namespaced(namespace: u32, offset: u32, buffer: &mut [u8]) -> bool {
+    let Some((row_start, row_count)) = namespace_rows(namespace) else {
+        return false;
+    };
+    let entry = find_last_entry(Some(namespace), row_start, row_count)
+        .or_else(|| find_last_entry(None, 0, WEAR_ROWS));
+    let Some(entry) = entry else {
         return false;
     };
     let data_offset = match offset.checked_add(entry.data_offset) {
