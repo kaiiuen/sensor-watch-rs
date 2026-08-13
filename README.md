@@ -186,7 +186,7 @@ The `core` crate holds pure logic that is host-testable:
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-studio --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-tools --target x86_64-pc-windows-msvc
-# Current checkout: 67 core + 70 Studio + 6 tools tests pass (143 total).
+# Test counts vary as coverage evolves; run the commands to get the current totals.
 ```
 
 Lint and format:
@@ -197,9 +197,8 @@ cargo clippy -p sensor-watch-core --target x86_64-pc-windows-msvc -- -D warnings
 cargo fmt --check
 
 The firmware clippy job is informational in CI; the core clippy job is the
-warnings-as-errors gate. The Studio package test target passes with one existing dead-code warning.
-The tools package has five passing host tests. These results are separate from
-embedded hardware validation.
+warnings-as-errors gate. These results are separate from embedded hardware
+validation.
 ```
 
 ## Status

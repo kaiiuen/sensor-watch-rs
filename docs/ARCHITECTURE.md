@@ -152,8 +152,8 @@ build is roughly **210-230 KB**, so most of the region is used. Each watch face
 adds roughly 1-3 KB, leaving modest headroom for a few more faces, not dozens.
 Adding faces beyond the current count should be validated against the linker
 region on every build. Studio currently wires 82 of those faces into its
- default-enabled `real-faces` host seam; the other faces use the simulated engine
- in Studio.
+default-enabled `real-faces` host seam; the other faces use the simulated engine
+in Studio.
 
 ### RAM (32 KB)
 
