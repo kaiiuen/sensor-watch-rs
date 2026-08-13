@@ -268,6 +268,8 @@ struct StudioApp {
     catalog_error_search: String,
     /// Area filter for the in-app error/fault encyclopedia.
     catalog_error_area: String,
+    /// Search text for the grouped Settings credits list.
+    credits_search: String,
     /// Last panic fingerprint resolution result.
     panic_resolution: String,
     /// Dedicated log for the Watch Faces tab.
@@ -473,6 +475,168 @@ impl Panel {
     }
 }
 
+struct CreditEntry {
+    name: &'static str,
+    details: &'static str,
+    url: Option<&'static str>,
+}
+
+struct CreditGroup {
+    name: &'static str,
+    entries: &'static [CreditEntry],
+}
+
+const UPSTREAM_CREDITS: &[CreditEntry] = &[
+    CreditEntry {
+        name: "kaiiuen",
+        details: "Studio author",
+        url: Some("https://github.com/kaiiuen"),
+    },
+    CreditEntry {
+        name: "Joey Castillo / Sensor Watch",
+        details: "Original C firmware, hardware, movement architecture, simulator, display work, and project coordination",
+        url: Some("https://github.com/joeycastillo/Sensor-Watch"),
+    },
+    CreditEntry {
+        name: "Second Movement contributors",
+        details: "UTC/UTZ timekeeping, DST, custom LCDs, board variants, face ports, background tasks, alarms, USB/UART experiments, and hardware validation",
+        url: Some("https://github.com/joeycastillo/Sensor-Watch/tree/main/movement2"),
+    },
+    CreditEntry {
+        name: "evq / utz",
+        details: "Timezone and DST library used as an upstream reference",
+        url: None,
+    },
+    CreditEntry {
+        name: "atsamd-rs and svd2rust contributors",
+        details: "PAC, HAL, and register-generation work informing SAM L22 Rust support",
+        url: Some("https://github.com/atsamd-rs/atsamd"),
+    },
+    CreditEntry {
+        name: "Microchip",
+        details: "SAM L22 datasheets and silicon errata",
+        url: None,
+    },
+    CreditEntry {
+        name: "STMicroelectronics",
+        details: "LIS2DW, LIS2DW12, and LIS2DUX12 sensor documentation",
+        url: None,
+    },
+];
+
+const COMMUNITY_CREDITS: &[CreditEntry] = &[
+    CreditEntry { name: "ZeptoBars / BarsMonster", details: "Precision timing, frequency correction, temperature compensation, RTC investigations, power profiling, and UltraPatch", url: None },
+    CreditEntry { name: "Tahnok", details: "Watch faces, framework work, background tasks, testing, and simulator discussions", url: None },
+    CreditEntry { name: "WJHRDY", details: "Wyoscan face and low-energy animation work", url: None },
+    CreditEntry { name: "Neutralinsomniac", details: "Smallchess/chess face and engine integration", url: None },
+    CreditEntry { name: "Austen Adler / austenadler", details: "Early Rust integration experiments", url: None },
+    CreditEntry { name: "Wesleyac", details: "Link-time optimization and review/merge assistance", url: None },
+    CreditEntry { name: "Matheus Moreira", details: "Feature integration, structured TOTP, deadline/USB/clock work, testing coordination, and preserved attribution", url: None },
+    CreditEntry { name: "Voloved / Devolov / devolov", details: "DST/UTZ, sunrise/sunset, step-count, quiet-hours, LED, battery, and display work", url: None },
+    CreditEntry { name: "Krzysztof Gałka / kshysztof", details: "Debounce and hardware button testing", url: None },
+    CreditEntry { name: "Atax1a", details: "Hardware testing, silicon-errata work, and development support", url: None },
+    CreditEntry { name: "Osresearch / Trammell Hudson", details: "MicroPython porting and power-analysis investigations", url: None },
+    CreditEntry { name: "Alessandro Genova / alesgenova", details: "Counter32, fast stopwatch, optical communications, UltraPatch integration, location faces, and sensor work", url: None },
+    CreditEntry { name: "Ruben Sandwich", details: "Custom display, step-count experimentation, and hardware testing", url: None },
+    CreditEntry { name: "knrd", details: "Step-count algorithms and benchmark testing", url: None },
+    CreditEntry { name: "Gabor / Gugray / eiriksm / soundblaster", details: "Chirpy/Fesk acoustic communications, receiver tools, tone selection, and protocol testing", url: None },
+    CreditEntry { name: "Jim di Griz", details: "Battery-drain and low-voltage investigations", url: None },
+    CreditEntry { name: "Faldor20", details: "Dive-computer and pressure-sensor experiments", url: None },
+    CreditEntry { name: "Nima Kalantar", details: "Prayer-times face work", url: None },
+    CreditEntry { name: "Ucodia", details: "Flowtime face", url: None },
+    CreditEntry { name: "Ganapati", details: "Custom faces and metronome work", url: None },
+    CreditEntry { name: "Aron Hegedus", details: "Sea Shanty face", url: None },
+    CreditEntry { name: "Alessandro and community testers", details: "Dynamic tunes, hourly chimes, and acoustic-transfer experiments", url: None },
+    CreditEntry { name: "James / wryun", details: "Calculator, builder, and simulator/tooling discussions", url: None },
+    CreditEntry { name: "Jeremy", details: "Custom-display simulator and build integration", url: None },
+    CreditEntry { name: "Fgergo, Crim, Jack, Alexis Philip, Michael Shriver, Benny Blue, Monican, Cyberdeath, and Agent-E11", details: "Faces, TOTP/HOTP, display mappings, Rust/Zig experiments, builders, documentation, and review", url: None },
+];
+
+const TOOL_CREDITS: &[CreditEntry] = &[
+    CreditEntry {
+        name: "sensor-watch-ir-tools and community IrDA work",
+        details: "Optical flashing tools and integrations",
+        url: None,
+    },
+    CreditEntry {
+        name: "UltraPatch and detools",
+        details: "Small in-place Cortex-M update research",
+        url: None,
+    },
+    CreditEntry {
+        name: "ChirpyRX and Fesk",
+        details: "Acoustic data-transfer receiver prototypes",
+        url: None,
+    },
+    CreditEntry {
+        name: "edbg, OpenOCD, GDB, J-Link, Raspberry Pi Debug Probe, and SWD",
+        details: "Debugging and flashing workflows",
+        url: None,
+    },
+    CreditEntry {
+        name: "Nordic Power Profiler Kit 2, Joulescope, and EnergyTrace",
+        details: "Bench-current measurement workflows",
+        url: None,
+    },
+    CreditEntry {
+        name: "Emscripten and custom-LCD tooling",
+        details: "Browser simulator and display tooling",
+        url: None,
+    },
+    CreditEntry {
+        name: "LittleFS and USB mass-storage experiments",
+        details: "Embedded storage and host filesystem utilities",
+        url: None,
+    },
+    CreditEntry {
+        name: "utz, gossamer, smallchesslib, nanopb/protobuf, and embedded references",
+        details: "Libraries, protocols, and reference projects informing the community work",
+        url: None,
+    },
+    CreditEntry {
+        name: "egui / eframe",
+        details: "Rust GUI framework used for Studio",
+        url: Some("https://github.com/emilk/egui"),
+    },
+    CreditEntry {
+        name: "resvg / usvg",
+        details: "SVG rendering libraries used to draw the watch face",
+        url: Some("https://github.com/RazrFalcon/resvg"),
+    },
+    CreditEntry {
+        name: "sysinfo",
+        details: "System resource usage library",
+        url: Some("https://github.com/GuillaumeGomez/sysinfo"),
+    },
+    CreditEntry {
+        name: "Casio F-91W simulator",
+        details: "Online F-91W replica by Alexis Philip, used for the SVG",
+        url: Some("https://github.com/alexisphilip/Casio-F-91W"),
+    },
+];
+
+const CREDIT_GROUPS: &[CreditGroup] = &[
+    CreditGroup {
+        name: "Upstream projects and maintainers",
+        entries: UPSTREAM_CREDITS,
+    },
+    CreditGroup {
+        name: "Named community contributors",
+        entries: COMMUNITY_CREDITS,
+    },
+    CreditGroup {
+        name: "Community tools and integrations",
+        entries: TOOL_CREDITS,
+    },
+];
+
+fn credit_matches(entry: &CreditEntry, query: &str) -> bool {
+    let query = query.to_lowercase();
+    query.is_empty()
+        || entry.name.to_lowercase().contains(&query)
+        || entry.details.to_lowercase().contains(&query)
+}
+
 impl Default for StudioApp {
     fn default() -> Self {
         // Shared atomic for the stats sampler's live rate.
@@ -547,6 +711,7 @@ impl Default for StudioApp {
             panic_fingerprint_input: String::new(),
             catalog_error_search: String::new(),
             catalog_error_area: String::from("All"),
+            credits_search: String::new(),
             panic_resolution: String::new(),
             faces_log: debug::DebugLog::new(),
             sim_log: debug::DebugLog::new(),
@@ -6177,59 +6342,55 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
-        ui.heading("Credits");
-        ui.label("This project builds on the work of several open-source projects:");
-        ui.add_space(8.0);
-        egui::Grid::new("credits_grid")
-            .striped(true)
-            .spacing([16.0, 6.0])
-            .num_columns(2)
+        egui::CollapsingHeader::new("Credits")
+            .default_open(false)
             .show(ui, |ui| {
-                ui.label("Author");
-                ui.hyperlink_to("kaiiuen", "https://github.com/kaiiuen");
-                ui.end_row();
-                ui.label("Sensor Watch");
-                ui.hyperlink_to(
-                    "Original C firmware + hardware by Joey Castillo",
-                    "https://github.com/joeycastillo/Sensor-Watch",
-                );
-                ui.end_row();
-                ui.label("Movement");
-                ui.hyperlink_to(
-                    "Original watch-face framework (part of Sensor Watch)",
-                    "https://github.com/joeycastillo/Sensor-Watch/tree/main/movement",
-                );
-                ui.end_row();
-                ui.label("Second Movement");
-                ui.hyperlink_to(
-                    "Rewritten C framework with persistent settings and wear-leveling",
-                    "https://github.com/joeycastillo/Sensor-Watch/tree/main/movement2",
-                );
-                ui.end_row();
-                ui.label("Casio F-91W simulator");
-                ui.hyperlink_to(
-                    "Online F-91W replica by Alexis Philip, used for the SVG",
-                    "https://github.com/alexisphilip/Casio-F-91W",
-                );
-                ui.end_row();
-                ui.label("egui / eframe");
-                ui.hyperlink_to(
-                    "Rust GUI framework used for this app",
-                    "https://github.com/emilk/egui",
-                );
-                ui.end_row();
-                ui.label("resvg / usvg");
-                ui.hyperlink_to(
-                    "SVG rendering libraries used to draw the watch face",
-                    "https://github.com/RazrFalcon/resvg",
-                );
-                ui.end_row();
-                ui.label("sysinfo");
-                ui.hyperlink_to(
-                    "System resource usage library",
-                    "https://github.com/GuillaumeGomez/sysinfo",
-                );
-                ui.end_row();
+                ui.label("Community and upstream credits from docs/CREDITS.md:");
+                ui.horizontal(|ui| {
+                    ui.label("Search:");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut self.credits_search)
+                            .hint_text("Filter names, projects, or contributions"),
+                    );
+                    if !self.credits_search.is_empty() && ui.small_button("x").clicked() {
+                        self.credits_search.clear();
+                    }
+                });
+                let query = self.credits_search.trim().to_lowercase();
+                let mut visible = 0;
+                for (group_index, group) in CREDIT_GROUPS.iter().enumerate() {
+                    let entries: Vec<&CreditEntry> = group
+                        .entries
+                        .iter()
+                        .filter(|entry| credit_matches(entry, &query))
+                        .collect();
+                    if entries.is_empty() {
+                        continue;
+                    }
+                    ui.add_space(8.0);
+                    ui.strong(group.name);
+                    egui::Grid::new(format!("credits_grid_{group_index}"))
+                        .striped(true)
+                        .spacing([16.0, 6.0])
+                        .num_columns(2)
+                        .show(ui, |ui| {
+                            for entry in entries {
+                                ui.label(entry.name);
+                                if let Some(url) = entry.url {
+                                    ui.hyperlink_to(entry.details, url);
+                                } else {
+                                    ui.label(entry.details);
+                                }
+                                ui.end_row();
+                                visible += 1;
+                            }
+                        });
+                }
+                if visible == 0 {
+                    ui.weak("No credits match the current search.");
+                }
+                ui.add_space(8.0);
+                ui.weak("Attribution is intentionally high-level; see docs/CREDITS.md for the full policy and source inventory.");
             });
 
         // Code statistics.
@@ -7557,4 +7718,43 @@ fn verify_artifact_manifest(
 
 fn is_valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.is_ascii() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{credit_matches, CreditEntry, CREDIT_GROUPS};
+
+    #[test]
+    fn credits_search_matches_names_and_details_case_insensitively() {
+        let entry = CreditEntry {
+            name: "Example Contributor",
+            details: "Optical flashing tools",
+            url: None,
+        };
+        assert!(credit_matches(&entry, "contributor"));
+        assert!(credit_matches(&entry, "OPTICAL"));
+        assert!(!credit_matches(&entry, "unrelated"));
+        assert!(credit_matches(&entry, ""));
+    }
+
+    #[test]
+    fn credits_include_all_documented_groups() {
+        let groups: Vec<&str> = CREDIT_GROUPS.iter().map(|group| group.name).collect();
+        assert_eq!(
+            groups,
+            vec![
+                "Upstream projects and maintainers",
+                "Named community contributors",
+                "Community tools and integrations",
+            ]
+        );
+        assert!(CREDIT_GROUPS
+            .iter()
+            .flat_map(|group| group.entries)
+            .any(|entry| entry.name.contains("Matheus Moreira")));
+        assert!(CREDIT_GROUPS
+            .iter()
+            .flat_map(|group| group.entries)
+            .any(|entry| entry.name.contains("UltraPatch")));
+    }
 }
