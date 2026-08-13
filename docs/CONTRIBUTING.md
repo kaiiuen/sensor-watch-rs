@@ -52,8 +52,8 @@ cargo test -p sensor-watch --lib --features hostmock,std
 (On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin` for
 commands that specify a target.)
 
-The current host suites pass 96 firmware host-seam tests, 67 core tests, 78
-Studio tests, and 10 tools tests, for 251 tests total. The core suite covers date
+The current host suites pass 99 firmware host-seam tests, 67 core tests, 84
+Studio tests, and 14 tools tests, for 264 tests total. The core suite covers date
 math, settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging,
 transfer validation, optical protocol validation, and other pure logic.
 Passing host tests provide confidence in software and mock seams, they do not

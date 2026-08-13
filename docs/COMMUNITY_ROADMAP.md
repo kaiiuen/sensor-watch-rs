@@ -23,8 +23,8 @@ traceability, while only genuinely unfinished items belong in the Backburner.
 - Event-driven Movement framework with RTC-owned timekeeping, scheduled tasks,
   debounce, long-press handling, fault tracking, buzzer priority, and primary /
   secondary face registration.
-111 registered firmware faces, with 93 faces currently running through the
-  real Studio host seam and 18 using the simulator fallback.
+111 registered firmware faces, with 95 faces currently running through the
+  real Studio host seam and 16 using the simulator fallback.
 - Alarm, advanced alarm, countdown, timer, stopwatch, quick utility, metronome,
   repetition-minute, time-left, deadline, and world-clock families.
 - DST-aware timezones, UTC/local-time conversion, NTP, drift correction,

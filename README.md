@@ -239,9 +239,9 @@ validation.
       UART jig path for command execution.
 - [x] Optical command framing and validation exist as a protocol-only core module.
       no optical receiver integration is claimed.
-- [x] 93 real firmware faces are wired into the Studio host seam, which is
-      enabled by default by Studio's `real-faces` feature. The remaining 18
-      firmware faces use the simulated engine, this is host coverage, not
+- [x] 95 real firmware faces are wired into the Studio host seam, which is
+      enabled by default by Studio's `real-faces` feature. The remaining 16
+      firmware faces use the simulated engine; this is host coverage, not
       hardware coverage.
 - [ ] Firmware component profiles for board-wide hardware presets. Studio has
       persisted profile/configuration UI and planning estimates, but profiles do
@@ -251,8 +251,8 @@ validation.
 
 ## Status and validation snapshot
 
-- The current workspace validation passes 96 firmware host-seam tests, 67 core
-  tests, 78 Studio tests, and 10 tools tests, for 251 passing tests total.
+- The current workspace validation passes 99 firmware host-seam tests, 67 core
+  tests, 84 Studio tests, and 14 tools tests, for 264 passing tests total.
 - The passing host suites and ARM build do not validate physical hardware.
 - The Studio and tools package test targets pass their host suites, these
   results are separate from embedded hardware validation.
