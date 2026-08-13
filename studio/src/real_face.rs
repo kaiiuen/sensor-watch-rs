@@ -32,9 +32,9 @@
 
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{
-    alarm, astronomy, beats, beeps, blinky, breathing, character_set, close_enough, countdown,
-    counter, databank, day_night_percentage, day_one, deadline, decimal_time, demo, discgolf,
-    dual_timer, finetune, flashlight, french_revolutionary, frequency_correction, habit,
+    alarm, astronomy, beats, beeps, blinky, breathing, character_set, chirpy_demo, close_enough,
+    countdown, counter, databank, day_night_percentage, day_one, days_since, deadline, decimal_time,
+    demo, discgolf, dual_timer, finetune, flashlight, french_revolutionary, frequency_correction, habit,
     hello_there, interval, invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter,
     lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
     minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
@@ -52,18 +52,8 @@ use sensor_watch_core::datetime::DateTime;
 use sensor_watch_core::mock_hw::{Hw, MockHw};
 
 #[cfg(feature = "real-faces")]
-use std::sync::{Mutex, MutexGuard};
 
-/// Serializes access to the firmware's single-slot global `Hw` seam.
-///
-/// The seam (`sensor_watch::watch::seam`) dispatches to a single global
-/// `MockHw` at a time and is explicitly single-threaded. Studio tests drive
-/// several `RealFace`s in parallel, so a face must hold this lock for its whole
-/// lifetime to guarantee that the mock it installed is the one the seam still
-/// points at when it writes. Dropping the guard (on `RealFace` drop) opens the
-/// slot for the next face.
-#[cfg(feature = "real-faces")]
-static SEAM_LOCK: Mutex<()> = Mutex::new(());
+
 
 /// A snapshot of what a real face wrote to the mock LCD, in Studio terms.
 #[derive(Clone, Copy, Debug, Default)]
@@ -93,10 +83,7 @@ pub struct RealFace {
     /// The name of the face this instance runs (used by the app to detect face
     /// switches).
     face_name: &'static str,
-    /// The mock hardware the face draws onto. Boxed so its heap address is
-    /// stable: `install_hw` stores a raw pointer to it in the global seam, and a
-    /// move would invalidate that pointer (the seam would point at dead stack
-    /// memory).
+    /// The mock hardware the face draws onto.
     mock: Box<MockHw>,
     /// The settings the face mutates (the firmware's movement settings).
     settings: types::Settings,
@@ -104,9 +91,7 @@ pub struct RealFace {
     snapshot: RealFaceSnapshot,
     /// Whether the face has received its initial activation.
     activated: bool,
-    /// Holds the global seam lock so this face's mock stays installed for its
-    /// whole lifetime (see `SEAM_LOCK`).
-    _seam_guard: MutexGuard<'static, ()>,
+
 }
 
 /// Object-safe seam over any migrated firmware `WatchFace`, so the Studio caller
@@ -309,9 +294,13 @@ impl_real_face_trait!(blinky::BlinkyFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(character_set::CharacterSetFace);
 #[cfg(feature = "real-faces")]
+impl_real_face_trait!(chirpy_demo::ChirpyDemoFace);
+#[cfg(feature = "real-faces")]
 impl_real_face_trait!(demo::DemoFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(databank::DatabankFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(days_since::DaysSinceFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(habit::HabitFace);
 #[cfg(feature = "real-faces")]
@@ -395,14 +384,9 @@ impl RealFace {
     /// has been migrated into the firmware seam. Returns `None` otherwise.
     pub fn new(face_name: &str) -> Option<RealFace> {
         let face = new_face(face_name)?;
-        let _seam_guard = SEAM_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut mock = Box::new(MockHw::new());
         mock.vcc_mv = 3000; // healthy battery
-                            // Install the mock into the host `Hw` seam so the real face's HAL calls
-                            // (`slcd::*`, `rtc::get_date_time`, ...) forward to this mock instead of
-                            // panicking with "no Hw installed". The `Drop` impl clears it when this
-                            // face is dropped so the global slot doesn't leak between faces.
-        sensor_watch::watch::seam::install_hw(&mut *mock);
+
         let settings = types::Settings::default();
         Some(RealFace {
             face,
@@ -411,7 +395,6 @@ impl RealFace {
             snapshot: RealFaceSnapshot::default(),
             activated: false,
             face_name: new_face_name(face_name),
-            _seam_guard,
         })
     }
 
@@ -457,7 +440,9 @@ impl RealFace {
         // the display's AM/PM and date fields synchronized after a time edit
         // while preserving stateful face navigation.
         if self.activated {
-            self.face.loop_(types::Event::Tick, &mut self.settings);
+            sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+                self.face.loop_(types::Event::Tick, &mut self.settings);
+            });
             self.snapshot_from_mock();
         }
         true
@@ -476,8 +461,10 @@ impl RealFace {
             .clear_indicator(sensor_watch_core::mock_hw::Indicator::Pm);
         self.mock
             .clear_indicator(sensor_watch_core::mock_hw::Indicator::H24);
-        self.face.activate(&self.settings);
-        self.face.loop_(types::Event::Tick, &mut self.settings);
+        sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+            self.face.activate(&self.settings);
+            self.face.loop_(types::Event::Tick, &mut self.settings);
+        });
         self.activated = true;
         self.snapshot_from_mock();
     }
@@ -487,7 +474,9 @@ impl RealFace {
     /// Callers must only invoke this at a simulated-second boundary; ordinary
     /// frame redraws and RTC edits belong in [`set_time`].
     pub fn tick(&mut self) {
-        self.face.loop_(types::Event::Tick, &mut self.settings);
+        sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+            self.face.loop_(types::Event::Tick, &mut self.settings);
+        });
         self.snapshot_from_mock();
     }
 
@@ -496,16 +485,20 @@ impl RealFace {
     /// the face).
     pub fn press(&mut self, light: bool, alarm: bool) {
         if light {
-            self.face.loop_(
-                types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
-                &mut self.settings,
-            );
+            sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+                self.face.loop_(
+                    types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
+                    &mut self.settings,
+                );
+            });
         }
         if alarm {
-            self.face.loop_(
-                types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
-                &mut self.settings,
-            );
+            sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+                self.face.loop_(
+                    types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
+                    &mut self.settings,
+                );
+            });
         }
         self.snapshot_from_mock();
     }
@@ -540,14 +533,6 @@ impl RealFace {
     }
 }
 
-/// Clears the mock from the host `Hw` seam so the global slot doesn't leak
-/// between faces (e.g. when the Studio app swaps the simulated face).
-#[cfg(feature = "real-faces")]
-impl Drop for RealFace {
-    fn drop(&mut self) {
-        sensor_watch::watch::seam::clear_hw();
-    }
-}
 
 /// Returns a heap-allocated real face for `face_name`, if a face of that name is
 /// migrated through the firmware seam. Matrix the name against the firmware's
@@ -574,7 +559,9 @@ pub(crate) const REAL_FACE_NAMES: &[&str] = &[
     "BLINKY",
     "BREATHING",
     "CHARACTER_SET",
+    "CHIRPY_DEMO",
     "DATABANK",
+    "DAYS_SINCE",
     "DEMO",
     "DISCGOLF",
     "BEATS",
@@ -672,7 +659,9 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "BLINKY" => Some(Box::new(blinky::BlinkyFace::new_static())),
         "BREATHING" => Some(Box::new(breathing::BreathingFace::new_static())),
         "CHARACTER_SET" => Some(Box::new(character_set::CharacterSetFace::new_static())),
+        "CHIRPY_DEMO" => Some(Box::new(chirpy_demo::ChirpyDemoFace::new_static())),
         "DATABANK" => Some(Box::new(databank::DatabankFace::new_static())),
+        "DAYS_SINCE" => Some(Box::new(days_since::DaysSinceFace::new_static())),
         "DEMO" => Some(Box::new(demo::DemoFace::new_static())),
         "DISCGOLF" => Some(Box::new(discgolf::DiscgolfFace::new_static())),
         "BEATS" => Some(Box::new(beats::BeatsFace::new_static())),
@@ -800,7 +789,9 @@ fn new_face_name(face_name: &str) -> &'static str {
         "BLINKY" => "BLINKY",
         "BREATHING" => "BREATHING",
         "CHARACTER_SET" => "CHARACTER_SET",
+        "CHIRPY_DEMO" => "CHIRPY_DEMO",
         "DATABANK" => "DATABANK",
+        "DAYS_SINCE" => "DAYS_SINCE",
         "DEMO" => "DEMO",
         "DISCGOLF" => "DISCGOLF",
         "BEATS" => "BEATS",
@@ -994,7 +985,9 @@ mod tests {
             "BLINKY",
             "BREATHING",
             "CHARACTER_SET",
+            "CHIRPY_DEMO",
             "DATABANK",
+            "DAYS_SINCE",
             "DEMO",
             "DISCGOLF",
             "BEATS",
