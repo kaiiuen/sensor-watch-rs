@@ -421,9 +421,64 @@ fn find_file(root: &Path, name: &str) -> Option<PathBuf> {
     }
     None
 }
+
+fn is_workspace_root(path: &Path) -> bool {
+    let manifest = path.join("Cargo.toml");
+    let Ok(metadata) = fs::symlink_metadata(&manifest) else {
+        return false;
+    };
+    if metadata.file_type().is_symlink() || !metadata.is_file() {
+        return false;
+    }
+    let Ok(contents) = fs::read_to_string(&manifest) else {
+        return false;
+    };
+    contents.contains("[workspace]")
+        && contents.contains("[package]")
+        && contents
+            .lines()
+            .any(|line| line.trim() == "name = \"sensor-watch\"")
+}
+
+fn canonical_workspace_root(path: &Path) -> Option<PathBuf> {
+    let root = path.canonicalize().ok()?;
+    is_workspace_root(&root).then_some(root)
+}
+
+/// Resolves the firmware workspace without consulting the caller's cwd.
+///
+/// A Studio/tools executable normally lives below `target/`, so its ancestor
+/// directories are the most useful runtime hint. The compile-time manifest
+/// directory is the safe fallback for Cargo invocations and source checkouts.
+pub fn workspace_root() -> ToolResult<PathBuf> {
+    if let Ok(executable) = env::current_exe()
+        && let Some(mut dir) = executable.parent().map(Path::to_path_buf)
+    {
+        loop {
+            if let Some(root) = canonical_workspace_root(&dir) {
+                return Ok(root);
+            }
+            if !dir.pop() {
+                break;
+            }
+        }
+    }
+
+    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
+    for candidate in [manifest_dir, manifest_dir.parent().unwrap_or(manifest_dir)] {
+        if let Some(root) = canonical_workspace_root(candidate) {
+            return Ok(root);
+        }
+    }
+
+    Err(format!(
+        "cannot locate the sensor-watch workspace from the executable or tool manifest ({})",
+        manifest_dir.display()
+    ))
+}
+
 pub fn build_firmware() -> ToolResult<BuildResult> {
-    let root =
-        env::current_dir().map_err(|e| format!("cannot determine workspace directory: {e}"))?;
+    let root = workspace_root()?;
     let _build_lock = acquire_build_lock(&root)?;
     let mut c = Command::new("cargo");
     c.args([
@@ -436,8 +491,9 @@ pub fn build_firmware() -> ToolResult<BuildResult> {
         "--bin",
         "sensor-watch",
     ]);
+    c.current_dir(&root);
     run(c)?;
-    let dir = Path::new("target/thumbv6m-none-eabi/release");
+    let dir = root.join("target/thumbv6m-none-eabi/release");
     let elf = dir.join("sensor-watch");
     let bin = dir.join("sensor-watch.bin");
     let uf2_path = dir.join("sensor-watch.uf2");
@@ -467,6 +523,7 @@ pub fn build_firmware() -> ToolResult<BuildResult> {
     write_manifest(&manifest_path, &create_manifest(&uf2_path, None, None)?)?;
     Ok(BuildResult { uf2_path })
 }
+
 pub fn flash_firmware(elf: &Path) -> ToolResult<()> {
     match fs::symlink_metadata(elf) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -495,4 +552,59 @@ pub fn flash_firmware(elf: &Path) -> ToolResult<()> {
     ])
     .arg(elf);
     run(c)
+}
+
+#[cfg(test)]
+mod workspace_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_root(label: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "sensor-watch-workspace-{label}-{}",
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .expect("system clock before unix epoch")
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn workspace_manifest_is_identified_by_package_and_workspace() {
+        let root = temp_root("valid");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"sensor-watch\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            canonical_workspace_root(&root),
+            Some(root.canonicalize().unwrap())
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unrelated_manifest_is_not_accepted_as_workspace() {
+        let root = temp_root("unrelated");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(
+            root.join("Cargo.toml"),
+            "[workspace]\nmembers = [\".\"]\n\n[package]\nname = \"other-project\"\n",
+        )
+        .unwrap();
+        assert!(canonical_workspace_root(&root).is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn workspace_root_does_not_depend_on_caller_cwd() {
+        let expected = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .canonicalize()
+            .unwrap();
+        assert_eq!(workspace_root().unwrap(), expected);
+    }
 }

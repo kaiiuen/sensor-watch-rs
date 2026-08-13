@@ -67,8 +67,14 @@ host tool builds the release firmware, extracts the raw binary with `rust-objcop
 (or `arm-none-eabi-objcopy`), converts it to UF2, and writes the recovery
 manifest. `build.sh` remains a compatibility launcher. The same build, UF2,
 verification, recovery-staging, and probe-flash operations are available through
-`cargo run -p sensor-watch-studio -- help`; with no command that binary starts
-the GUI.
+`cargo run -p sensor-watch-studio -- help`; with no command that binary starts the
+GUI.
+
+The `build` CLI resolves the workspace from the executable location, with the
+tool crate's manifest as a verified fallback, so it does not depend on the
+caller's current directory. Studio still refuses configured builds until preset,
+board, and component selections are wired into firmware inputs; this fail-closed
+policy is checked before any build tool is run.
 
 ## Linting
 
