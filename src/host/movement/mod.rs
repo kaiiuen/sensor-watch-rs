@@ -101,6 +101,14 @@ pub mod countdown {
     pub use real::CountdownFace;
 }
 
+/// The REAL `dual_timer` face. Uses LCD output plus the host no-op scheduler
+/// and face-navigation hooks; it has no sensor, game, or settings dependency.
+pub mod dual_timer {
+    #[path = "../../../movement/dual_timer.rs"]
+    pub mod real;
+    pub use real::DualTimerFace;
+}
+
 /// The REAL `flashlight` face. Uses `watch::gpio` for its A2 output.
 pub mod flashlight {
     #[path = "../../../movement/flashlight.rs"]
@@ -225,6 +233,15 @@ pub mod frequency_correction {
     #[path = "../../../movement/frequency_correction.rs"]
     pub mod real;
     pub use real::FrequencyCorrectionFace;
+}
+
+/// The REAL `finetune` face. Uses RTC/LCD/LED/utility shims plus the host
+/// no-op face-navigation hook; it does not touch settings persistence or
+/// sensor/game hardware.
+pub mod finetune {
+    #[path = "../../../movement/finetune.rs"]
+    pub mod real;
+    pub use real::FinetuneFace;
 }
 
 /// The REAL `hello_there` face.

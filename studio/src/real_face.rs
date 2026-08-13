@@ -34,17 +34,17 @@
 use sensor_watch::movement::{
     alarm, astronomy, beats, beeps, blinky, breathing, character_set, close_enough, countdown,
     counter, databank, day_night_percentage, day_one, deadline, decimal_time, demo, discgolf,
-    flashlight, french_revolutionary, frequency_correction, habit, hello_there, interval, invaders,
-    ish, ke_decimal_time, kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time,
-    menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal, moon_phase,
-    morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time, preferences,
-    probability, pulsometer, randonaut, ratemeter, repetition_minute, rpn_calculator,
-    rpn_calculator_alt, sailing, save_load, set_time, set_time_hackwatch, ships_bell, simon,
-    simple_calculator, simple_clock, simple_clock_bin_led, simple_coin_flip, solar_time, solstice,
-    sos, squash, stopwatch, sunrise_sunset, tachymeter, tally, tarot, tempchart,
-    thermistor_logging, thermistor_readout, thermistor_testing, tide, time_left, timer, tomato,
-    toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki, weeknumber, wordle,
-    world_clock, world_clock2, wyoscan,
+    dual_timer, finetune, flashlight, french_revolutionary, frequency_correction, habit,
+    hello_there, interval, invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter,
+    lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
+    minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
+    planetary_hours, planetary_time, preferences, probability, pulsometer, randonaut, ratemeter,
+    repetition_minute, rpn_calculator, rpn_calculator_alt, sailing, save_load, set_time,
+    set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock, simple_clock_bin_led,
+    simple_coin_flip, solar_time, solstice, sos, squash, stopwatch, sunrise_sunset, tachymeter,
+    tally, tarot, tempchart, thermistor_logging, thermistor_readout, thermistor_testing, tide,
+    time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki,
+    weeknumber, wordle, world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -164,6 +164,10 @@ impl_real_face_trait!(decimal_time::DecimalTimeFace);
 impl_real_face_trait!(french_revolutionary::FrenchRevolutionaryFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(frequency_correction::FrequencyCorrectionFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(finetune::FinetuneFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(dual_timer::DualTimerFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(hello_there::HelloThereFace);
 #[cfg(feature = "real-faces")]
@@ -563,6 +567,8 @@ pub(crate) const REAL_FACE_NAMES: &[&str] = &[
     "STOPWATCH",
     "TIMER",
     "COUNTDOWN",
+    "DUAL_TIMER",
+    "FINETUNE",
     "FLASHLIGHT",
     "BEEPS",
     "BLINKY",
@@ -659,6 +665,8 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "STOPWATCH" => Some(Box::new(stopwatch::StopwatchFace::new())),
         "TIMER" => Some(Box::new(timer::TimerFace::new())),
         "COUNTDOWN" => Some(Box::new(countdown::CountdownFace::new_static())),
+        "DUAL_TIMER" => Some(Box::new(dual_timer::DualTimerFace::new_static())),
+        "FINETUNE" => Some(Box::new(finetune::FinetuneFace::new_static())),
         "FLASHLIGHT" => Some(Box::new(flashlight::FlashlightFace::new_static())),
         "BEEPS" => Some(Box::new(beeps::BeepsFace::new_static())),
         "BLINKY" => Some(Box::new(blinky::BlinkyFace::new_static())),
@@ -785,6 +793,8 @@ fn new_face_name(face_name: &str) -> &'static str {
         "STOPWATCH" => "STOPWATCH",
         "TIMER" => "TIMER",
         "COUNTDOWN" => "COUNTDOWN",
+        "DUAL_TIMER" => "DUAL_TIMER",
+        "FINETUNE" => "FINETUNE",
         "FLASHLIGHT" => "FLASHLIGHT",
         "BEEPS" => "BEEPS",
         "BLINKY" => "BLINKY",
@@ -1118,6 +1128,23 @@ mod tests {
             let snapshot = render_real_face(name, 2024, 2, 29, 15, 4, 0, 4, true, false, false)
                 .unwrap_or_else(|| panic!("{name} should render through the host seam"));
             assert!(snapshot.chars.iter().any(|character| *character != '\0'));
+        }
+    }
+
+    #[test]
+    fn dual_timer_and_finetune_activate_through_the_host_seam() {
+        for name in ["DUAL_TIMER", "FINETUNE"] {
+            let mut face = RealFace::new(name).unwrap_or_else(|| panic!("{name} is migrated"));
+            assert!(face.set_time(2024, 2, 29, 15, 4, 0));
+            face.activate(true);
+            assert!(face.is_activated());
+            assert!(face
+                .snapshot()
+                .chars
+                .iter()
+                .any(|character| *character != '\0'));
+            face.press(true, false);
+            face.tick();
         }
     }
 
