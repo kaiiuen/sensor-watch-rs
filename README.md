@@ -254,11 +254,11 @@ validation.
 - No complete repository warning total is claimed here because the full
   workspace does not reach a clean build.
 
-This snapshot is for commit `0230f32` (2026-08-12). The all-in-one Studio CLI
-is available on top of the reusable Rust tools library. UART-jig transport,
-protocol-only optical and transfer foundations, panic-map and host-side recovery
-validation, and default-enabled Studio real-face coverage remain software/host
-capabilities; no on-silicon validation has been run.
+The all-in-one Studio CLI is available on top of the reusable Rust tools
+library. UART-jig transport, protocol-only optical and transfer foundations,
+panic-map and host-side recovery validation, and default-enabled Studio
+real-face coverage remain software/host capabilities; no on-silicon validation
+has been run.
 
 ## Documentation
 

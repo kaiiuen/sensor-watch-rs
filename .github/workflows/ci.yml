@@ -40,13 +40,27 @@ jobs:
           targets: thumbv6m-none-eabi
           components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Clippy (firmware)
+      - name: Clippy (firmware, informational)
         # The firmware exposes the full C-reference HAL API and many ported
         # faces, which carry intentional dead-code and pedantic style lints.
         # Keep this informational; the core crate below is the strict gate.
         run: cargo clippy --target thumbv6m-none-eabi -p sensor-watch
-      - name: Clippy (core)
+      - name: Clippy (core, strict)
         run: cargo clippy -p sensor-watch-core --target x86_64-unknown-linux-gnu -- -D warnings
+
+  firmware-host:
+    name: Test firmware host seam
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          channel: '1.97.1'
+      - uses: Swatinem/rust-cache@v2
+      - name: Run firmware host-seam tests
+        # Exercise real firmware faces through the host mock and std library
+        # seam; this does not validate physical hardware.
+        run: cargo test -p sensor-watch --lib --features hostmock,std
 
   test:
     name: Test (host)

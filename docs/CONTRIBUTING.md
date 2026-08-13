@@ -37,15 +37,22 @@ The `core` crate contains pure logic that can be tested on the host:
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 ```
 
-(On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin`.)
+The firmware library also exposes the real face and HAL host seam. Run its
+mock-backed tests with the host-only `hostmock` and `std` features:
 
-The source tree currently contains 239 `#[test]` attributes across core,
-firmware host seams, and Studio. The core host command currently passes 67 tests
-covering date math, settings bit-packing, DateTime pack/unpack, UF2 encoding,
-event logging, transfer validation, optical protocol validation, and other pure
-logic. The Studio package test command currently passes 70 tests, and the tools
-package test command currently passes 6 tests. Passing host tests provide
-confidence in pure logic; they do not validate physical hardware.
+```sh
+cargo test -p sensor-watch --lib --features hostmock,std
+```
+
+(On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin` for
+commands that specify a target.)
+
+The current host suites pass 93 firmware host-seam tests, 67 core tests, 73
+Studio tests, and 7 tools tests, for 240 tests total. The core suite covers date
+math, settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging,
+transfer validation, optical protocol validation, and other pure logic.
+Passing host tests provide confidence in software and mock seams; they do not
+validate physical hardware.
 
 ## Building a UF2
 
@@ -72,8 +79,8 @@ cargo clippy -p sensor-watch-core -- -D warnings
 
 The firmware clippy job is informational because the full C-reference HAL API
 and many ported faces carry intentional dead-code and pedantic style lints. The
-The `core` clippy job is the strict gate (`-D warnings`). The Studio and tools
-host test commands pass; these results are separate from physical hardware
+`core` clippy job is the strict gate (`-D warnings`). The firmware host-seam,
+Studio, and tools host test commands are separate from physical hardware
 validation.
 
 ## Formatting
@@ -87,8 +94,9 @@ cargo fmt --check
 A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
 
 - Build (thumbv6m)
-- Clippy (`-D warnings`)
-- Host tests
+- Clippy (informational for firmware; `-D warnings` for core)
+- Firmware host-seam tests (`hostmock` + `std`)
+- Core and tooling host tests
 - Format check
 
 ---
