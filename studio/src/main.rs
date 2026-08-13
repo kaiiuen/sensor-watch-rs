@@ -1224,6 +1224,8 @@ impl eframe::App for StudioApp {
                     ConfirmKind::DeletePreset(name) => {
                         self.snapshot_before("Before deleting preset");
                         self.presets.delete_active();
+                        self.selected_preset_face = None;
+                        self.save_settings_internal();
                         self.faces_log.log(format!("Deleted preset {name}"));
                     }
                     ConfirmKind::DeleteFaceFromPreset(index) => {
@@ -1235,6 +1237,8 @@ impl eframe::App for StudioApp {
                             .cloned()
                             .unwrap_or_default();
                         self.presets.remove_face(index);
+                        self.selected_preset_face = None;
+                        self.save_settings_internal();
                         self.faces_log
                             .log(format!("Removed {face} from active preset"));
                     }
@@ -1242,10 +1246,31 @@ impl eframe::App for StudioApp {
                         self.snapshot_before("Before deleting face");
                         match editor::delete_face(&name) {
                             Ok(_) => {
-                                self.log.log(format!("Deleted face {name}"));
+                                let module_result = editor::unregister_face(&name);
+                                let removed = self.presets.remove_face_from_all(&name);
+                                self.selected_face = None;
+                                self.selected_preset_face = None;
+                                self.sim_face_idx = 0;
                                 self.face_list = faces::discover_faces();
+                                self.save_settings_internal();
+                                match module_result {
+                                    Ok(()) => {
+                                        self.status = format!("Deleted face {name}");
+                                        self.log.log(format!(
+                                            "Deleted face {name}; removed {removed} preset entries"
+                                        ));
+                                    }
+                                    Err(error) => {
+                                        let message = format!("Deleted face {name}, but module cleanup failed: {error}");
+                                        self.status = message.clone();
+                                        self.log_error(&message);
+                                    }
+                                }
                             }
-                            Err(e) => self.log.log(format!("Delete failed: {e}")),
+                            Err(error) => {
+                                self.status = format!("Delete failed: {error}");
+                                self.log_error(&self.status.clone());
+                            }
                         }
                     }
                     ConfirmKind::RemoveModule(name) => {
@@ -1632,14 +1657,14 @@ impl StudioApp {
                 // Show the fetched time.
                 if let Some(ts) = self.ntp_time {
                     let secs = ts as i64;
-                    let days = secs.div_euclid(86400);
                     let rem = secs.rem_euclid(86400);
                     let h = (rem / 3600) % 24;
                     let m = (rem / 60) % 60;
                     let s = rem % 60;
-                    // Day of week: 1970-01-01 was Thursday.
-                    let dow = ((days + 4).rem_euclid(7)) as usize;
-                    let weekday = ["Thu", "Fri", "Sat", "Sun", "Mon", "Tue", "Wed"][dow];
+                    // Use the same Sunday-first weekday convention as the
+                    // firmware and the local dashboard clock.
+                    let dow = ntp::weekday_from_unix_seconds(ts) as usize;
+                    let weekday = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][dow];
                     ui.add_space(8.0);
                     ui.monospace(format!(
                         "{weekday}  {:02}:{:02}:{:02} UTC   (ping {:.1} ms, offset {:+.2} ms)",
@@ -1933,17 +1958,28 @@ impl StudioApp {
                 });
         });
         ui.separator();
+        // Work from a snapshot so preset mutations can be persisted immediately
+        // without holding an immutable borrow of the catalog during UI callbacks.
+        let catalog_faces = std::mem::take(&mut self.face_list);
 
         // Preset management: tab selectors, name field, and action buttons on
         // one row to save vertical space.
         ui.horizontal(|ui| {
             ui.label("Presets:");
-            for (i, preset) in self.presets.presets.iter().enumerate() {
+            let preset_names: Vec<String> = self
+                .presets
+                .presets
+                .iter()
+                .map(|preset| preset.name.clone())
+                .collect();
+            for (i, name) in preset_names.iter().enumerate() {
                 if ui
-                    .selectable_label(self.presets.active == i, &preset.name)
+                    .selectable_label(self.presets.active == i, name)
                     .clicked()
                 {
                     self.presets.active = i;
+                    self.selected_preset_face = None;
+                    self.save_settings_internal();
                 }
             }
             ui.separator();
@@ -1954,6 +1990,7 @@ impl StudioApp {
                 .clicked()
             {
                 self.presets.add_preset(&self.new_preset_name);
+                self.save_settings_internal();
                 self.faces_log
                     .log(format!("Added preset {}", self.new_preset_name));
                 self.new_preset_name.clear();
@@ -1966,6 +2003,7 @@ impl StudioApp {
                 let name = self.new_preset_name.clone();
                 if !name.is_empty() {
                     self.presets.rename_active(&name);
+                    self.save_settings_internal();
                     self.new_preset_name.clear();
                 }
             }
@@ -2057,7 +2095,7 @@ impl StudioApp {
                         // Bulk add every face currently passing the search+category
                         // filter to the active preset.
                         let mut filtered: Vec<&str> = Vec::new();
-                        for face in &self.face_list {
+                        for face in &catalog_faces {
                             if !self.catalog_category.is_empty()
                                 && face.category != self.catalog_category
                             {
@@ -2089,6 +2127,7 @@ impl StudioApp {
                                     self.presets.add_face(name);
                                     added += 1;
                                 }
+                                self.save_settings_internal();
                                 self.status = format!("Added {added} faces to the active preset");
                                 self.faces_log
                                     .log(format!("Added {added} filtered faces to preset"));
@@ -2108,7 +2147,7 @@ impl StudioApp {
                                         ui.strong("Description");
                                         ui.strong("Add");
                                         ui.end_row();
-                                        for (i, face) in self.face_list.iter().enumerate() {
+                                        for (i, face) in catalog_faces.iter().enumerate() {
                                             // Filter by category.
                                             if !self.catalog_category.is_empty()
                                                 && face.category != self.catalog_category
@@ -2149,6 +2188,7 @@ impl StudioApp {
                                                 let face_name = face.name.clone();
                                                 if ui.button("Add to preset").clicked() {
                                                     self.presets.add_face(&face_name);
+                                                    self.save_settings_internal();
                                                     self.log.log(format!(
                                                         "Added {face_name} to preset"
                                                     ));
@@ -2172,6 +2212,7 @@ impl StudioApp {
                                                     }
                                                     if idx.is_none() {
                                                         self.presets.add_face(&face_name);
+                                                        self.save_settings_internal();
                                                         let len = self.presets.active_faces().len();
                                                         if len > 0 {
                                                             idx = Some(len - 1);
@@ -2223,6 +2264,7 @@ impl StudioApp {
                                                 .clicked()
                                             {
                                                 self.presets.add_face(&face.name);
+                                                self.save_settings_internal();
                                                 self.log
                                                     .log(format!("Added {} to preset", face.name));
                                             }
@@ -2244,6 +2286,7 @@ impl StudioApp {
                         );
                         if drop.hovered() {
                             self.presets.add_face(&name);
+                            self.save_settings_internal();
                             self.drag_catalog_face = None;
                             self.log.log(format!("Added {name} to preset (drag)"));
                         }
@@ -2253,10 +2296,14 @@ impl StudioApp {
                         ui.separator();
                         // Add selected catalog face to the preset.
                         if let Some(i) = self.selected_face {
-                            let face = self.face_list[i].name.clone();
-                            if ui.button(format!("Add {face}")).clicked() {
-                                self.presets.add_face(&face);
-                                self.log.log(format!("Added {face} to preset"));
+                            if let Some(face) = self.face_list.get(i).map(|face| face.name.clone()) {
+                                if ui.button(format!("Add {face}")).clicked() {
+                                    self.presets.add_face(&face);
+                                    self.save_settings_internal();
+                                    self.log.log(format!("Added {face} to preset"));
+                                }
+                            } else {
+                                self.selected_face = None;
                             }
                         }
                     });
@@ -2341,10 +2388,12 @@ impl StudioApp {
                                             ui.separator();
                                             if ui.button("Move up").clicked() {
                                                 self.presets.move_face_up(i);
+                                                self.save_settings_internal();
                                                 ui.close_menu();
                                             }
                                             if ui.button("Move down").clicked() {
                                                 self.presets.move_face_down(i);
+                                                self.save_settings_internal();
                                                 ui.close_menu();
                                             }
                                             if ui.button("Remove").clicked() {
@@ -2368,6 +2417,7 @@ impl StudioApp {
                                             .clicked()
                                         {
                                             self.presets.move_face_up(i);
+                                            self.save_settings_internal();
                                         }
                                         if ui
                                             .small_button("Dn")
@@ -2375,6 +2425,7 @@ impl StudioApp {
                                             .clicked()
                                         {
                                             self.presets.move_face_down(i);
+                                            self.save_settings_internal();
                                         }
                                         if ui
                                             .small_button("Del")
@@ -2396,12 +2447,14 @@ impl StudioApp {
                                         (self.drag_preset_from, drop_target)
                                     {
                                         self.presets.move_face(from, to);
+                                        self.save_settings_internal();
                                         self.drag_preset_from = None;
                                     }
                                 });
                         });
                 });
             });
+        self.face_list = catalog_faces;
 
         // Right column: watch settings.
         egui::CentralPanel::default().show_inside(ui, |ui| {
@@ -2962,6 +3015,7 @@ impl StudioApp {
                 if !name.is_empty() && !self.editor_source.is_empty() {
                     match editor::write_face(&name, &self.editor_source) {
                         Ok(_) => {
+                            self.status = format!("Saved face {name}");
                             // Best-effort visibility: add a `pub mod <name>;`
                             // declaration so the face shows up in Watch Faces. A
                             // registration failure is non-fatal - the file is
@@ -2974,7 +3028,8 @@ impl StudioApp {
                                     let path = editor::face_path(&name)
                                         .display()
                                         .to_string();
-                                    self.log.log(format!(
+                                    self.status = format!("Face saved but registration failed: {e}");
+                                    self.log_error(&format!(
                                         "Face saved to {path} but not yet registered \
                                          (manual step needed): {e}"
                                     ));
@@ -2982,7 +3037,10 @@ impl StudioApp {
                             }
                             self.face_list = faces::discover_faces();
                         }
-                        Err(e) => self.log.log(format!("Save failed: {e}")),
+                        Err(e) => {
+                            self.status = format!("Save failed: {e}");
+                            self.log_error(&self.status.clone());
+                        }
                     }
                 }
             }
@@ -2994,8 +3052,14 @@ impl StudioApp {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() {
                     match editor::read_face(&name) {
-                        Ok(src) => self.editor_source = src,
-                        Err(e) => self.log.log(format!("Load failed: {e}")),
+                        Ok(src) => {
+                            self.editor_source = src;
+                            self.status = format!("Loaded face {name}");
+                        }
+                        Err(e) => {
+                            self.status = format!("Load failed: {e}");
+                            self.log_error(&self.status.clone());
+                        }
                     }
                 }
             }
@@ -4128,8 +4192,10 @@ impl StudioApp {
                 format!("{:02}{:02}{:02}{:02}{:02}{:02}", y % 100, mo, d, h, mi, s)
             }
             "settime" => {
-                let payload = cmd.trim().split_whitespace().nth(1).unwrap_or("");
-                match parse_settime(payload) {
+                let mut fields = cmd.trim().split_whitespace();
+                let payload = fields.next().and_then(|_| fields.next()).unwrap_or("");
+                let valid_shape = fields.next().is_none();
+                match valid_shape.then(|| parse_settime(payload)).flatten() {
                     Some((year, month, day, hour, minute)) => {
                         self.shell_hw_log.log(format!(
                             "RTC_clock <- write {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
@@ -4147,21 +4213,23 @@ impl StudioApp {
                     }
                 }
             }
-            "drift" => {
-                let ppm: i16 = cmd
-                    .split_whitespace()
-                    .nth(1)
-                    .unwrap_or("0")
-                    .parse()
-                    .unwrap_or(0);
-                let sign = if ppm < 0 { "+" } else { "-" };
-                self.shell_hw_log.log(format!(
-                    "RTC_FREQCORR <- sign={} value={} step=0.95ppm",
-                    sign,
-                    ppm.unsigned_abs()
-                ));
-                "OK".to_string()
-            }
+            "drift" => match parse_drift_command(cmd) {
+                Some(ppm) => {
+                    let sign = if ppm < 0 { "+" } else { "-" };
+                    self.shell_hw_log.log(format!(
+                        "RTC_FREQCORR <- sign={} value={} step=0.95ppm",
+                        sign,
+                        ppm.unsigned_abs()
+                    ));
+                    "OK".to_string()
+                }
+                None => {
+                    self.shell_hw_log.log(
+                        "RTC_FREQCORR <- write FAILED: malformed or out-of-range ppm".to_string(),
+                    );
+                    "ERR".to_string()
+                }
+            },
             _ => {
                 self.shell_hw_log
                     .log("shell dispatcher: no match -> '?'".to_string());
@@ -7364,6 +7432,26 @@ fn sim_hold_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
         );
     }
     response
+}
+
+/// Parses the simulated/firmware-compatible `drift N` command.
+fn parse_drift_command(command: &str) -> Option<i16> {
+    let mut fields = command.trim().split_whitespace();
+    if fields.next()?.eq_ignore_ascii_case("drift")
+        && fields.next().is_some()
+        && fields.next().is_none()
+    {
+        let ppm = command
+            .trim()
+            .split_whitespace()
+            .nth(1)?
+            .parse::<i16>()
+            .ok()?;
+        if (-1000..=1000).contains(&ppm) {
+            return Some(ppm);
+        }
+    }
+    None
 }
 
 /// Parses a `YYMMDDHHMMSS` settime payload into (year, month, day, hour,

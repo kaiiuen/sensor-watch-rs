@@ -89,6 +89,17 @@ impl PresetManager {
         }
     }
 
+    /// Removes every occurrence of a face from every preset.
+    pub fn remove_face_from_all(&mut self, face: &str) -> usize {
+        let mut removed = 0;
+        for preset in &mut self.presets {
+            let before = preset.faces.len();
+            preset.faces.retain(|candidate| candidate != face);
+            removed += before - preset.faces.len();
+        }
+        removed
+    }
+
     /// Moves a face up (toward the front) in the active preset.
     pub fn move_face_up(&mut self, index: usize) {
         if let Some(preset) = self.presets.get_mut(self.active) {
@@ -146,5 +157,26 @@ impl PresetManager {
 impl Default for PresetManager {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PresetManager;
+
+    #[test]
+    fn removes_deleted_face_from_every_preset() {
+        let mut manager = PresetManager::new();
+        manager.add_face("CUSTOM");
+        manager.add_preset("Other");
+        manager.add_face("CUSTOM");
+        manager.add_face("KEEP");
+
+        assert_eq!(manager.remove_face_from_all("CUSTOM"), 2);
+        assert!(manager
+            .presets
+            .iter()
+            .all(|preset| { !preset.faces.iter().any(|face| face == "CUSTOM") }));
+        assert_eq!(manager.presets[1].faces, vec!["KEEP"]);
     }
 }

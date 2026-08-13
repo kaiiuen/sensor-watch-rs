@@ -25,6 +25,12 @@ pub const SERVERS: [(&str, &str); 8] = [
     ("Asia Pool", "asia.pool.ntp.org"),
 ];
 
+/// Returns the weekday for a Unix timestamp using the firmware convention
+/// `0=Sunday..6=Saturday`. Unix day zero was Thursday, so the offset is four.
+pub fn weekday_from_unix_seconds(unix_seconds: u64) -> u32 {
+    (((unix_seconds / 86_400) + 4) % 7) as u32
+}
+
 /// Formats the exact shell command for setting a UTC Unix timestamp.
 ///
 /// The shell accepts `settime YYMMDDHHMMSS`; callers should send it at the
@@ -186,5 +192,11 @@ mod tests {
     #[test]
     fn formats_two_digit_year() {
         assert_eq!(settime_command(1_704_067_200), "settime 240101000000");
+    }
+
+    #[test]
+    fn uses_unix_epoch_weekday_offset() {
+        assert_eq!(weekday_from_unix_seconds(0), 4); // Thursday
+        assert_eq!(weekday_from_unix_seconds(86_400 * 3), 0); // Sunday
     }
 }

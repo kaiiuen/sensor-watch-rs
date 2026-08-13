@@ -127,6 +127,37 @@ pub fn delete_face(name: &str) -> Result<(), String> {
     }
 }
 
+/// Removes a face's exact module declaration from `movement/mod.rs`.
+///
+/// This is intentionally best-effort for older projects: a missing declaration
+/// is already the desired state, while malformed or unsafe module files fail.
+pub fn unregister_face(name: &str) -> Result<(), String> {
+    validate_face_name(name)?;
+    let movement = crate::build::firmware_dir().join("src/movement");
+    let root = movement
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve face directory: {e}"))?;
+    let path = root.join("mod.rs");
+    if std::fs::symlink_metadata(&path)
+        .map(|metadata| metadata.file_type().is_symlink() || !metadata.is_file())
+        .unwrap_or(false)
+    {
+        return Err("movement module must be a regular file, not a symlink or directory".into());
+    }
+    let content =
+        std::fs::read_to_string(&path).map_err(|e| format!("cannot read movement module: {e}"))?;
+    let declaration = format!("pub mod {name};");
+    let updated: String = content
+        .lines()
+        .filter(|line| line.trim() != declaration)
+        .map(|line| format!("{line}\n"))
+        .collect();
+    if updated == content {
+        return Ok(());
+    }
+    std::fs::write(&path, updated).map_err(|e| format!("cannot update movement module: {e}"))
+}
+
 /// Registers a face so it becomes visible to `discover_faces` and compiles into
 /// the firmware.
 ///

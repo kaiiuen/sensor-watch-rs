@@ -162,7 +162,7 @@ fn is_allowed_uart_command(command: &str) -> bool {
         "help" | "status" | "time" | "events" | "events clear" | "panic" | "optical" => true,
         value if value.starts_with("drift ") => value[6..]
             .parse::<i32>()
-            .map(|ppm| (-1000..=1000).contains(&ppm))
+            .map(|ppm| (-127..=127).contains(&ppm))
             .unwrap_or(false),
         value if value.starts_with("settime ") => {
             let timestamp = &value[8..];
@@ -311,7 +311,8 @@ mod tests {
         assert_eq!(encode_command("panic").unwrap(), b"panic\r\n");
         assert_eq!(encode_command("events clear").unwrap(), b"events clear\r\n");
         assert!(encode_command("drift 100").is_ok());
-        assert!(encode_command("drift 1001").is_err());
+        assert!(encode_command("drift 127").is_ok());
+        assert!(encode_command("drift 128").is_err());
         assert!(matches!(
             encode_command(""),
             Err(TransportError::InvalidCommand(_))
