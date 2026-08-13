@@ -997,11 +997,23 @@ impl eframe::App for StudioApp {
                     }
                     Ok(Err(e)) => {
                         self.ntp_busy = false;
+                        invalidate_ntp_reference(
+                            &mut self.ntp_time,
+                            &mut self.ntp_ping,
+                            &mut self.ntp_offset,
+                        );
+                        self.beep_armed = false;
                         self.status = format!("NTP error: {e}");
                         self.log_error(&format!("NTP error: {e}"));
                     }
                     Err(_) => {
                         self.ntp_busy = false;
+                        invalidate_ntp_reference(
+                            &mut self.ntp_time,
+                            &mut self.ntp_ping,
+                            &mut self.ntp_offset,
+                        );
+                        self.beep_armed = false;
                         self.status = "NTP thread panicked".to_string();
                     }
                 }
@@ -1136,20 +1148,10 @@ impl eframe::App for StudioApp {
                 ui.label("Watch:");
                 ui.monospace(format!("{selected} faces selected"));
                 ui.separator();
-                ui.monospace(format!(
-                    "Estimate: ~{} KB flash",
-                    self.estimate_flash_kb(selected)
-                ));
-                ui.separator();
-                ui.monospace(format!(
-                    "Estimate: ~{} KB RAM",
-                    self.estimate_ram_kb(selected)
-                ));
-                ui.separator();
-                ui.monospace(format!(
-                    "Estimate: ~{} KB compiled",
-                    self.estimate_compiled_kb(selected)
-                ));
+                ui.monospace(
+                    "Build estimates unavailable: configuration input contract incomplete",
+                )
+                .on_hover_text(build::CONFIGURATION_BUILD_BLOCKED);
                 ui.separator();
                 // Window size.
                 let size = ctx.screen_rect().size();
@@ -2063,6 +2065,14 @@ impl StudioApp {
 
     /// Starts exactly one background firmware build.
     fn start_build(&mut self) {
+        if let Err(reason) = build::validate_configuration_inputs() {
+            self.build_message = reason.to_string();
+            self.status = "Build unavailable: configuration input contract incomplete".to_string();
+            self.log.log(reason);
+            self.build_log.log(reason);
+            self.push_terminal(reason);
+            return;
+        }
         if self.shutting_down || self.building || self.pending_build.is_some() {
             self.push_terminal("Build already running");
             return;
@@ -2082,6 +2092,10 @@ impl StudioApp {
         if self.ntp_busy {
             return;
         }
+        // A refresh replaces the previous reference. Do not allow a failed or
+        // in-flight refresh to leave calibration actions using stale time.
+        invalidate_ntp_reference(&mut self.ntp_time, &mut self.ntp_ping, &mut self.ntp_offset);
+        self.beep_armed = false;
         // Build the combined server list (built-in + custom) and resolve the
         // selected index safely. A stale index from a settings file is clamped.
         let mut all: Vec<String> = ntp::SERVERS.iter().map(|(_, h)| h.to_string()).collect();
@@ -3132,9 +3146,9 @@ impl StudioApp {
                      4. Click \"Generate from template\" to fill the editor.\n\
                      5. Edit the Rust source. The WatchFace trait has five methods:\n\
                         setup, activate, loop_, resign, and new_static.\n\
-                     6. Click \"Save face\" to write it to src/movement/.\n\
-                     7. Add it to the active preset in Watch Faces, then Build & Flash.\n\
-                     The simulator reflects faces that are in the active preset.",
+                     6. Click \"Save face\" to write the file to src/movement/.\n\
+                     7. Add it to the active preset in Watch Faces, then try it in Simulator.\n\
+                     Firmware build and flash remain unavailable until the build input contract is complete.",
                 );
                 ui.add_space(4.0);
                 ui.weak(
@@ -3304,9 +3318,9 @@ impl StudioApp {
             .show(ui, |ui| {
                 ui.heading("Build & Flash");
                 ui.label(
-                    "Build the firmware into a .uf2, then flash it to the watch.\n\
-                     Build compiles the firmware; Flash copies the .uf2 to the\n\
-                     watch's USB drive (bootloader mode).",
+                    "Build & Flash is unavailable: Studio does not yet provide the\n\
+                     configuration input contract required to produce a configured UF2.\n\
+                     Complete the missing contract inputs below before retrying.",
                 );
                 ui.add_space(8.0);
 
@@ -3343,19 +3357,30 @@ impl StudioApp {
                 );
                 ui.add_space(8.0);
 
-                // Estimated times.
-                let selected = self.presets.active_faces().len();
-                let est_compile = 30 + (selected as u32) * 2;
-                ui.monospace(format!(
-                    "Estimated compile: ~{est_compile} s   Estimated flash: ~2 s"
-                ));
+                ui.weak(
+                    "Build and flash estimates are unavailable: the Studio-to-firmware\n\
+                     configuration input contract is incomplete.",
+                )
+                .on_hover_text(build::CONFIGURATION_BUILD_BLOCKED);
                 ui.add_space(8.0);
 
-                // Build.
+                // Build is intentionally disabled until Studio supplies the full
+                // configuration input contract consumed by the firmware builder.
                 ui.strong("Build");
                 if self.building {
                     ui.spinner();
                     ui.label(tr(self.language, Key::Building));
+                } else if build::validate_configuration_inputs().is_err() {
+                    ui.add_enabled(false, egui::Button::new("Build unavailable"));
+                    ui.colored_label(
+                        egui::Color32::from_rgb(220, 160, 80),
+                        "Build disabled: complete the Studio-to-firmware configuration input contract first.",
+                    );
+                    ui.collapsing("Missing contract inputs", |ui| {
+                        for input in build::missing_configuration_inputs() {
+                            ui.label(format!("• {input}"));
+                        }
+                    });
                 } else if !self.shutting_down
                     && self.pending_build.is_none()
                     && ui
@@ -3880,6 +3905,25 @@ impl StudioApp {
     }
 
     fn run_full_diagnostic(&mut self) {
+        // Diagnostics exercise the live shell/simulator code, including a
+        // settime round-trip. Preserve the user's simulator state so the
+        // offline check cannot unexpectedly move their clock.
+        let simulator_snapshot = (
+            self.watch.time_offset,
+            self.watch.time_mode,
+            self.watch.light,
+            self.watch.display,
+            self.watch.weekday_override,
+            self.watch.override_text.clone(),
+            self.sim_face_idx,
+            self.sim_year,
+            self.sim_month,
+            self.sim_day,
+            self.sim_hour,
+            self.sim_minute,
+            self.sim_weekday,
+        );
+
         self.diagnostics.reset();
         self.diagnostics
             .log("mode=Simulated; UART jig not connected; no hardware access");
@@ -4033,6 +4077,36 @@ impl StudioApp {
         self.diagnostics.log(format!("optical -> {optical}"));
         self.diagnostics.log(optical::self_test());
         self.diagnostics.finish("Simulated");
+
+        let (
+            time_offset,
+            time_mode,
+            light,
+            display,
+            weekday_override,
+            override_text,
+            sim_face_idx,
+            sim_year,
+            sim_month,
+            sim_day,
+            sim_hour,
+            sim_minute,
+            sim_weekday,
+        ) = simulator_snapshot;
+        self.watch.time_offset = time_offset;
+        self.watch.time_mode = time_mode;
+        self.watch.light = light;
+        self.watch.display = display;
+        self.watch.weekday_override = weekday_override;
+        self.watch.override_text = override_text;
+        self.sim_face_idx = sim_face_idx;
+        self.sim_year = sim_year;
+        self.sim_month = sim_month;
+        self.sim_day = sim_day;
+        self.sim_hour = sim_hour;
+        self.sim_minute = sim_minute;
+        self.sim_weekday = sim_weekday;
+
         self.status = "Simulated diagnostics complete; no UART hardware queried".to_string();
     }
 
@@ -4755,7 +4829,7 @@ impl StudioApp {
                 egui::CollapsingHeader::new("Your first face")
                     .default_open(true)
                     .show(ui, |ui| {
-                        ui.label("Follow these steps to make and install your first face:");
+                        ui.label("Follow these steps to make and simulate your first face:");
                         ui.add_space(4.0);
                         for (n, step) in [
                             "Open the Editor tab.",
@@ -4764,7 +4838,7 @@ impl StudioApp {
                             "Click Generate from template to fill in the code.",
                             "Click Save face. This writes the file and registers it.",
                             "Open the Watch Faces tab and add your face to the active preset.",
-                            "Open Build & Flash, click Build .uf2, then Copy to watch.",
+                            "Try the face in Simulator. Firmware build and flash are unavailable until the build input contract is complete.",
                         ]
                         .iter()
                         .enumerate()
@@ -7110,12 +7184,6 @@ impl StudioApp {
         None
     }
 
-    /// Estimate of the firmware flash size in KB for the selected faces.
-    /// The watch OS/framework baseline is ~40 KB; each face adds ~2 KB.
-    fn estimate_flash_kb(&self, selected: usize) -> u32 {
-        40 + (selected as u32) * 2
-    }
-
     /// The label for the current stats sampling rate.
     fn stats_rate_label(&self) -> &'static str {
         match self.stats_rate_ms {
@@ -7124,18 +7192,6 @@ impl StudioApp {
             2000 => "2s",
             _ => "1s",
         }
-    }
-
-    /// Estimate of the firmware RAM usage in KB for the selected faces.
-    /// The OS baseline is ~4 KB; each face adds ~0.4 KB.
-    fn estimate_ram_kb(&self, selected: usize) -> u32 {
-        4 + (selected as u32) / 2
-    }
-
-    /// Estimate of the compiled .uf2 size in KB for the selected faces.
-    fn estimate_compiled_kb(&self, selected: usize) -> u32 {
-        // UF2 adds ~512-byte headers; estimate flash + 10% overhead.
-        self.estimate_flash_kb(selected) + self.estimate_flash_kb(selected) / 10
     }
 }
 
@@ -7769,11 +7825,31 @@ fn is_valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.is_ascii() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
+/// Clears a reference that is no longer safe to use after a refresh starts or fails.
+fn invalidate_ntp_reference(ntp_time: &mut Option<u64>, ntp_ping: &mut f64, ntp_offset: &mut f64) {
+    *ntp_time = None;
+    *ntp_ping = 0.0;
+    *ntp_offset = 0.0;
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         credit_matches, first_run_start_panel, CreditEntry, Panel, CREDIT_GROUPS, FIRST_RUN_STEPS,
     };
+
+    #[test]
+    fn failed_ntp_refresh_cannot_leave_a_stale_reference() {
+        let mut time = Some(1_700_000_000);
+        let mut ping = 12.5;
+        let mut offset = -0.25;
+
+        super::invalidate_ntp_reference(&mut time, &mut ping, &mut offset);
+
+        assert_eq!(time, None);
+        assert_eq!(ping, 0.0);
+        assert_eq!(offset, 0.0);
+    }
 
     #[test]
     fn first_run_steps_describe_a_non_build_beginner_path() {
@@ -7783,6 +7859,15 @@ mod tests {
         assert!(steps.contains("currently unavailable"));
         assert!(!steps.contains("Build UF2"));
         assert!(!steps.contains("Copy to watch"));
+    }
+
+    #[test]
+    fn build_contract_is_fail_closed_and_ui_does_not_promise_artifacts() {
+        assert!(super::build::validate_configuration_inputs().is_err());
+        assert!(
+            super::build::CONFIGURATION_BUILD_BLOCKED.contains("no configured UF2 was generated")
+        );
+        assert!(super::build::missing_configuration_inputs().len() >= 5);
     }
 
     #[test]

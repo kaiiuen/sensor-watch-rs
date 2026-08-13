@@ -175,12 +175,14 @@ Build the GUI with:
 cargo build --release
 ```
 
-The same binary also provides host-side build, UF2, recovery, and probe-flash
-commands. Use `help` to see the complete command surface:
+The same binary also provides host-side UF2, recovery, and probe-flash commands.
+Its `build` command is intentionally fail-closed for configured Studio builds:
+it rejects the request until preset, board, and component selections are wired
+into firmware build inputs. Use `help` to see the complete command surface:
 
 ```sh
 cargo run -p sensor-watch-studio -- help
-cargo run -p sensor-watch-studio -- build
+cargo run -p sensor-watch-studio -- build  # rejects configured builds for now
 cargo run -p sensor-watch-studio -- verify path/to/sensor-watch.uf2
 cargo run -p sensor-watch-studio -- backup input.uf2 recovery/known-good.uf2
 cargo run -p sensor-watch-studio -- rollback input.uf2 staged.uf2 TRUSTED_SHA256
@@ -188,9 +190,12 @@ cargo run -p sensor-watch-studio -- report input.uf2 TRUSTED_SHA256
 cargo run -p sensor-watch-studio -- flash [ELF]
 ```
 
-These commands operate on the host. `flash` requires a probe-rs-compatible SWD
-probe, the CLI does not add USB CDC, modify the UF2 bootloader, or provide
-device-side rollback. With no command, Firmware Studio starts its GUI.
+These commands operate on the host. The stock `sensor-watch-tools -- build`
+path remains the command for producing an unconfigured firmware UF2; Studio does
+not apply its selections to that artifact. `flash` requires a
+probe-rs-compatible SWD probe, the CLI does not add USB CDC, modify the UF2
+bootloader, or provide device-side rollback. With no command, Firmware Studio
+starts its GUI.
 
 The binary is `target/release/sensor-watch-studio`. It is fully self-contained
 (the watch SVG is embedded), so it can be copied anywhere and run. The app
@@ -213,7 +218,9 @@ and its real-face coverage are available through Studio's default `real-faces`
 feature because it requires the firmware host lib to compile as a host
  dependency. If the feature is disabled, the Simulator falls back to the
  hand-written `face_sim` engine. This remains host-side coverage, not physical
- hardware validation.
+ hardware validation. The current workspace baseline is 279 passing host tests:
+106 firmware host-seam, 67 core, 90 Studio, and 16 tools. None of these totals
+represent on-silicon validation.
 
 ## Dependencies
 
