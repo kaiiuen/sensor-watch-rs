@@ -1,5 +1,15 @@
 # Hardware Test Plan
 
+## Artifact verification boundaries
+
+Before flashing, keep these checks distinct: UF2 structural validation, local
+manifest/digest consistency, optional trusted release SHA-256 matching, and
+publisher authenticity. The host tools implement the first three. A `sha256:`
+value and the legacy `.sig` sidecar are not signatures. When no trusted release
+SHA-256 is supplied, tooling reports trusted provenance as **not provided**; it
+must not imply authenticity. Publisher authenticity requires a separately
+verified signing/provenance system and is not provided by these tools.
+
 This document defines the formal test procedure for validating the firmware on
 real Sensor Watch hardware. The firmware has host-side seam and real-face
 coverage, but physical testing remains unexecuted. This plan closes that gap.

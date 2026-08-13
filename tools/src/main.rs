@@ -7,6 +7,9 @@ fn usage() -> ! {
 }
 fn help() {
     println!("usage: sensor-watch-tools <build|uf2|verify|backup|rollback|report|flash> ...");
+    println!(
+        "verify checks UF2 structure, local manifest consistency, and optional trusted release SHA-256 matching; SHA-256 is not a signature."
+    );
 }
 fn ensure_no_extra(args: &mut impl Iterator<Item = String>) {
     if let Some(extra) = args.next() {
@@ -68,6 +71,10 @@ fn main() -> ExitCode {
             if !output.exists() {
                 tools::write_manifest(&output, &result).unwrap_or_else(|e| fail(e));
             }
+            eprintln!(
+                "artifact validation: structural and local digest checks passed; trusted release SHA-256: {}",
+                tools::trusted_release_status(trusted.as_deref())
+            );
             print_manifest(&result);
         }
         "backup" => {
@@ -157,10 +164,40 @@ mod tests {
         assert_ne!(tools::manifest_value(&m, "sha256"), original);
         assert_ne!(
             tools::manifest_value(&m, "signature"),
-            tools::sign_manifest(&m)
+            tools::manifest_digest(&m)
         );
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn missing_trusted_provenance_is_reported_without_claiming_authenticity() {
+        assert_eq!(tools::trusted_release_status(None), "not provided");
+        assert_eq!(
+            tools::trusted_release_status(Some(&"a".repeat(64))),
+            "matched"
+        );
+    }
+
+    #[test]
+    fn verification_accepts_local_digest_but_requires_trusted_sha_for_provenance() {
+        let root = temp_dir("provenance");
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("good.uf2");
+        fs::write(&artifact, fixture()).unwrap();
+        let manifest_path = root.join("good.uf2.json");
+        let manifest = tools::create_manifest(&artifact, None, None).unwrap();
+        tools::write_manifest(&manifest_path, &manifest).unwrap();
+        let verified = tools::verify_uf2(&artifact, Some(&manifest_path), None).unwrap();
+        assert_eq!(
+            tools::manifest_value(&verified, "sha256"),
+            tools::sha256(&fixture())
+        );
+        assert_eq!(tools::trusted_release_status(None), "not provided");
+        let error =
+            tools::verify_uf2(&artifact, Some(&manifest_path), Some(&"0".repeat(64))).unwrap_err();
+        assert!(error.contains("trusted release SHA-256"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn verification_rejects_a_tampered_signature_sidecar() {
         let root = temp_dir("sidecar");

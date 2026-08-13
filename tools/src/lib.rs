@@ -115,13 +115,25 @@ pub fn manifest_value(manifest: &Manifest, key: &str) -> String {
         .unwrap_or_default()
         .to_owned()
 }
-pub fn sign_manifest(manifest: &Manifest) -> String {
+/// Returns a local consistency digest for the manifest fields.
+///
+/// This is not a cryptographic signature and does not establish provenance or
+/// authenticity. The `signature` field remains accepted as a legacy alias.
+pub fn manifest_digest(manifest: &Manifest) -> String {
     let mut unsigned = manifest.clone();
+    unsigned.remove("manifest_digest");
     unsigned.remove("signature");
     let canonical = serde_json::to_vec(&Value::Object(unsigned))
         .map_err(|e| e.to_string())
         .unwrap_or_default();
     format!("sha256:{}", sha256(&canonical))
+}
+
+/// Compatibility alias for callers of the pre-v3 API. This value is a local
+/// digest, not a signature.
+#[deprecated(note = "use manifest_digest; this is not a cryptographic signature")]
+pub fn sign_manifest(manifest: &Manifest) -> String {
+    manifest_digest(manifest)
 }
 
 pub fn inspect_uf2(path: &Path) -> ToolResult<Uf2Inspection> {
@@ -177,8 +189,10 @@ pub fn create_manifest(
         "artifact".into(),
         artifact.unwrap_or(path).display().to_string().into(),
     );
-    let signature = sign_manifest(&m);
-    m.insert("signature".into(), signature.into());
+    let digest = manifest_digest(&m);
+    m.insert("manifest_digest".into(), digest.clone().into());
+    // Keep the old key for manifests produced by older tooling.
+    m.insert("signature".into(), digest.into());
     Ok(m)
 }
 fn write_json(path: &Path, value: &Value) -> ToolResult<()> {
@@ -231,7 +245,7 @@ pub fn write_manifest(path: &Path, m: &Manifest) -> ToolResult<()> {
     write_json(path, &Value::Object(m.clone()))?;
     write_text_new(
         &signature_path(path),
-        &(manifest_value(m, "signature") + "\n"),
+        &(manifest_digest_value(m).to_owned() + "\n"),
     )
 }
 pub fn write_binary(path: &Path, data: &[u8]) -> ToolResult<()> {
@@ -254,12 +268,31 @@ fn load_manifest(path: &Path) -> ToolResult<Manifest> {
     let data = read_file(path, 512 * 1024)?;
     serde_json::from_slice(&data).map_err(|e| format!("cannot parse manifest: {e}"))
 }
+fn manifest_digest_value(m: &Manifest) -> &str {
+    m.get("manifest_digest")
+        .and_then(Value::as_str)
+        .or_else(|| m.get("signature").and_then(Value::as_str))
+        .unwrap_or_default()
+}
+
+/// Checks only the optional trusted release provenance. A missing value is
+/// deliberately not treated as authenticity; callers should report it.
+pub fn trusted_release_status(trusted: Option<&str>) -> &'static str {
+    if trusted.is_some() {
+        "matched"
+    } else {
+        "not provided"
+    }
+}
+
 fn trusted_match(m: &Manifest, trusted: Option<&str>) -> ToolResult<()> {
-    if let Some(expected) = trusted
-        && (expected.len() != 64
-            || !expected.bytes().all(|b| b.is_ascii_hexdigit())
-            || !manifest_value(m, "sha256").eq_ignore_ascii_case(expected))
-    {
+    let Some(expected) = trusted else {
+        return Ok(());
+    };
+    if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err("trusted release SHA-256 must be exactly 64 hexadecimal characters".into());
+    }
+    if !manifest_value(m, "sha256").eq_ignore_ascii_case(expected) {
         return Err("UF2 does not match the trusted release SHA-256".into());
     }
     Ok(())
@@ -299,15 +332,13 @@ pub fn verify_uf2(
     }
     let m = load_manifest(&mpath)?;
     if manifest_value(&m, "format") != MANIFEST_FORMAT
-        || manifest_value(&m, "signature") != sign_manifest(&m)
+        || manifest_digest_value(&m) != manifest_digest(&m)
     {
-        return Err("manifest signature is invalid".into());
+        return Err("manifest local digest is invalid".into());
     }
     let sidecar = read_file(&signature_path(&mpath), 128)?;
-    if std::str::from_utf8(&sidecar).map(str::trim).ok()
-        != Some(manifest_value(&m, "signature").as_str())
-    {
-        return Err("manifest signature sidecar is invalid".into());
+    if std::str::from_utf8(&sidecar).map(str::trim).ok() != Some(manifest_digest_value(&m)) {
+        return Err("manifest digest sidecar is invalid".into());
     }
     let actual = create_manifest(path, Some(manifest_value(&m, "generation_id")), None)?;
     trusted_match(&actual, trusted)?;
@@ -328,6 +359,11 @@ pub fn verify_uf2(
         if actual.get(key) != m.get(key) {
             return Err(format!("manifest mismatch for {key}"));
         }
+    }
+    if m.contains_key("manifest_digest")
+        && actual.get("manifest_digest") != m.get("manifest_digest")
+    {
+        return Err("manifest local digest mismatch".into());
     }
     Ok(m)
 }
@@ -370,6 +406,10 @@ pub fn recovery_report(path: &Path, trusted: &str) -> ToolResult<Value> {
     let mut r = Map::new();
     r.insert("format".into(), "sensor-watch-recovery-report-v1".into());
     r.insert("artifact".into(), path.display().to_string().into());
+    r.insert(
+        "trusted_release_sha256".into(),
+        trusted_release_status(Some(trusted)).into(),
+    );
     r.insert(
         "generation_id".into(),
         manifest_value(&m, "generation_id").into(),
