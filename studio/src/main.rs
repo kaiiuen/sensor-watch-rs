@@ -405,7 +405,15 @@ fn country_label(index: u8) -> &'static str {
     COUNTRIES.get(index as usize).copied().unwrap_or("UTC")
 }
 
-/// The navigation panels.
+/// The first-run walkthrough steps.
+const FIRST_RUN_STEPS: [&str; 5] = [
+    "1. Open Editor and choose Blocks",
+    "2. Give your face a name and arrange a few starter blocks",
+    "3. Generate source, choose Load into Rust editor, then Save face",
+    "4. Add the saved face to a preset and try it in Simulator",
+    "5. Build & Flash is currently unavailable until Studio has configured build inputs",
+];
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Panel {
     Dashboard,
@@ -1342,12 +1350,7 @@ impl eframe::App for StudioApp {
                     ui.add_space(6.0);
                     ui.label("Here's how to get started:");
                     ui.add_space(6.0);
-                    for step in [
-                        "1. Add watch faces in the Watch Faces tab",
-                        "2. Try them in the Simulator tab",
-                        "3. Click Build & Flash, then Build UF2",
-                        "4. Plug the watch into USB in bootloader mode and click Copy to watch",
-                    ] {
+                    for step in FIRST_RUN_STEPS {
                         ui.label(step);
                     }
                     ui.add_space(10.0);
@@ -3082,6 +3085,11 @@ impl StudioApp {
             }
         });
         if self.block_editor.is_blocks_mode() {
+            ui.separator();
+            ui.strong("Face identity");
+            self.editor_identity(ui);
+            self.editor_actions(ui);
+            ui.add_space(8.0);
             self.block_editor.show_blocks(ui, &mut self.editor_source);
             return;
         }
@@ -3164,12 +3172,35 @@ impl StudioApp {
         });
 
         ui.add_space(4.0);
+        self.editor_identity(ui);
+
+        ui.add_space(8.0);
+        self.editor_actions(ui);
+
+        ui.add_space(8.0);
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                egui::TextEdit::multiline(&mut self.editor_source)
+                    .code_editor()
+                    .desired_rows(24)
+                    .desired_width(f32::INFINITY)
+                    .show(ui);
+            });
+    }
+
+    fn editor_identity(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("Face name (snake_case):");
+            ui.text_edit_singleline(&mut self.editor_name);
+        });
         ui.horizontal(|ui| {
             ui.label("Description (shown in catalog):");
             ui.text_edit_singleline(&mut self.editor_description);
         });
+    }
 
-        ui.add_space(8.0);
+    fn editor_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             if ui
                 .button("Save face")
@@ -3187,12 +3218,10 @@ impl StudioApp {
                             // saved, just not wired up yet.
                             match editor::register_face(&name) {
                                 Ok(_) => {
-                                    self.log.log(format!("Face saved and registered"));
+                                    self.log.log("Face saved and registered");
                                 }
                                 Err(e) => {
-                                    let path = editor::face_path(&name)
-                                        .display()
-                                        .to_string();
+                                    let path = editor::face_path(&name).display().to_string();
                                     self.status = format!("Face saved but registration failed: {e}");
                                     self.log_error(&format!(
                                         "Face saved to {path} but not yet registered \
@@ -3242,17 +3271,6 @@ impl StudioApp {
                 }
             }
         });
-
-        ui.add_space(8.0);
-        egui::ScrollArea::vertical()
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                egui::TextEdit::multiline(&mut self.editor_source)
-                    .code_editor()
-                    .desired_rows(24)
-                    .desired_width(f32::INFINITY)
-                    .show(ui);
-            });
     }
 
     /// The combined build & flash panel.
@@ -7722,7 +7740,17 @@ fn is_valid_sha256(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{credit_matches, CreditEntry, CREDIT_GROUPS};
+    use super::{credit_matches, CreditEntry, CREDIT_GROUPS, FIRST_RUN_STEPS};
+
+    #[test]
+    fn first_run_steps_describe_a_non_build_beginner_path() {
+        let steps = FIRST_RUN_STEPS.join(" ");
+        assert!(steps.contains("choose Blocks"));
+        assert!(steps.contains("Simulator"));
+        assert!(steps.contains("currently unavailable"));
+        assert!(!steps.contains("Build UF2"));
+        assert!(!steps.contains("Copy to watch"));
+    }
 
     #[test]
     fn credits_search_matches_names_and_details_case_insensitively() {
