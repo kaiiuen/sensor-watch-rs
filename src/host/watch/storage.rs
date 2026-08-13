@@ -212,6 +212,34 @@ fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
     }
 }
 
+/// Legacy rows have no namespace in their header. Their payload magic is the
+/// one-time ownership claim used during migration, so unrelated objects cannot
+/// interpret the same old bytes.
+fn legacy_magic(namespace: u32) -> Option<u32> {
+    match namespace {
+        CRC_NAMESPACE | SETTINGS_NAMESPACE => Some(namespace),
+        _ => None,
+    }
+}
+
+fn read_owned_legacy(namespace: u32, offset: u32, buffer: &mut [u8], entry: WearEntry) -> bool {
+    let Some(magic) = legacy_magic(namespace) else {
+        return false;
+    };
+    if offset != 0 || buffer.len() < core::mem::size_of::<u32>() {
+        return false;
+    }
+    let Some(data_offset) = entry.data_offset.checked_add(offset) else {
+        return false;
+    };
+    let mut stored_magic = [0u8; 4];
+    if !read(entry.row, data_offset, &mut stored_magic) || u32::from_le_bytes(stored_magic) != magic
+    {
+        return false;
+    }
+    read(entry.row, data_offset, buffer)
+}
+
 /// Writes an independently rotating record for a known namespace.
 pub fn wear_leveled_write_namespaced(namespace: u32, offset: u32, buffer: &[u8]) -> bool {
     let Some((row_start, row_count)) = namespace_rows(namespace) else {
@@ -243,14 +271,17 @@ pub fn wear_leveled_read_namespaced(namespace: u32, offset: u32, buffer: &mut [u
     let Some((row_start, row_count)) = namespace_rows(namespace) else {
         return false;
     };
-    let Some(entry) = find_last_entry(Some(namespace), row_start, row_count)
-        .or_else(|| find_last_entry(None, 0, WEAR_ROWS))
-    else {
-        return false;
-    };
-    offset
-        .checked_add(entry.data_offset)
-        .is_some_and(|offset| read(entry.row, offset, buffer))
+    if let Some(entry) = find_last_entry(Some(namespace), row_start, row_count) {
+        return offset
+            .checked_add(entry.data_offset)
+            .is_some_and(|offset| read(entry.row, offset, buffer));
+    }
+
+    // Only expose an old record when its payload explicitly claims this
+    // namespace. Otherwise the legacy bytes remain unreadable through every
+    // namespaced API.
+    find_last_entry(None, 0, WEAR_ROWS)
+        .is_some_and(|entry| read_owned_legacy(namespace, offset, buffer, entry))
 }
 
 #[cfg(test)]
@@ -369,6 +400,47 @@ mod tests {
         assert_eq!(settings, [0x33]);
         assert_eq!(crc, [0x22]);
         assert!(!wear_leveled_read_namespaced(0xDEAD_BEEF, 0, &mut settings));
+    }
+
+    #[test]
+    fn legacy_records_are_read_only_by_their_owned_namespace() {
+        let _lock = TestLock::acquire();
+        for row in 0..WEAR_ROWS {
+            assert!(erase(row));
+        }
+        unsafe { WEAR_ROW = 0 };
+
+        let mut settings_payload = [0u8; 8];
+        settings_payload[..4].copy_from_slice(&SETTINGS_NAMESPACE.to_le_bytes());
+        settings_payload[4..].copy_from_slice(&0xA5A5_5A5Au32.to_le_bytes());
+        assert!(wear_leveled_write(0, &settings_payload));
+
+        let mut settings = [0u8; 8];
+        let mut crc = [0u8; 8];
+        assert!(wear_leveled_read_namespaced(
+            SETTINGS_NAMESPACE,
+            0,
+            &mut settings
+        ));
+        assert_eq!(settings, settings_payload);
+        assert!(!wear_leveled_read_namespaced(CRC_NAMESPACE, 0, &mut crc));
+
+        for row in 0..WEAR_ROWS {
+            assert!(erase(row));
+        }
+        unsafe { WEAR_ROW = 0 };
+        let mut crc_payload = [0u8; 8];
+        crc_payload[..4].copy_from_slice(&CRC_NAMESPACE.to_le_bytes());
+        crc_payload[4..].copy_from_slice(&0x1234_5678u32.to_le_bytes());
+        assert!(wear_leveled_write(0, &crc_payload));
+
+        assert!(wear_leveled_read_namespaced(CRC_NAMESPACE, 0, &mut crc));
+        assert_eq!(crc, crc_payload);
+        assert!(!wear_leveled_read_namespaced(
+            SETTINGS_NAMESPACE,
+            0,
+            &mut settings
+        ));
     }
 
     #[test]

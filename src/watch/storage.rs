@@ -423,6 +423,38 @@ fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
     }
 }
 
+/// Returns the payload magic that proves ownership of an old unnamespaced
+/// record. Legacy rows have no namespace in their header, so falling back to
+/// one for every namespaced reader would let unrelated objects interpret the
+/// same bytes. The two legacy payload formats already carry distinct magics.
+fn legacy_magic(namespace: u32) -> Option<u32> {
+    match namespace {
+        CRC_NAMESPACE | SETTINGS_NAMESPACE => Some(namespace),
+        _ => None,
+    }
+}
+
+fn read_owned_legacy(namespace: u32, offset: u32, buffer: &mut [u8], entry: WearEntry) -> bool {
+    let Some(magic) = legacy_magic(namespace) else {
+        return false;
+    };
+    // Ownership cannot be established for a payload that does not include its
+    // four-byte object magic. Do not expose it through a namespaced API.
+    if offset != 0 || buffer.len() < core::mem::size_of::<u32>() {
+        return false;
+    }
+    let data_offset = match entry.data_offset.checked_add(offset) {
+        Some(offset) => offset,
+        None => return false,
+    };
+    let mut stored_magic = [0u8; 4];
+    if !read(entry.row, data_offset, &mut stored_magic) || u32::from_le_bytes(stored_magic) != magic
+    {
+        return false;
+    }
+    read(entry.row, data_offset, buffer)
+}
+
 /// Writes one independently wear-levelled object. The namespace is persisted
 /// in the commit header, so records sharing an offset cannot collide.
 pub fn wear_leveled_write_namespaced(namespace: u32, offset: u32, buffer: &[u8]) -> bool {
@@ -459,16 +491,19 @@ pub fn wear_leveled_read_namespaced(namespace: u32, offset: u32, buffer: &mut [u
     let Some((row_start, row_count)) = namespace_rows(namespace) else {
         return false;
     };
-    let entry = find_last_entry(Some(namespace), row_start, row_count)
-        .or_else(|| find_last_entry(None, 0, WEAR_ROWS));
-    let Some(entry) = entry else {
-        return false;
-    };
-    let data_offset = match offset.checked_add(entry.data_offset) {
-        Some(offset) => offset,
-        None => return false,
-    };
-    read(entry.row, data_offset, buffer)
+    if let Some(entry) = find_last_entry(Some(namespace), row_start, row_count) {
+        let data_offset = match offset.checked_add(entry.data_offset) {
+            Some(offset) => offset,
+            None => return false,
+        };
+        return read(entry.row, data_offset, buffer);
+    }
+
+    // Upgrade compatibility is deliberately limited to an owned legacy
+    // payload. A legacy record without the requested object's magic is not a
+    // record for this namespace, even if its offset and shape happen to fit.
+    find_last_entry(None, 0, WEAR_ROWS)
+        .is_some_and(|entry| read_owned_legacy(namespace, offset, buffer, entry))
 }
 
 /// Writes a 32-bit word with SECDED ECC protection.
