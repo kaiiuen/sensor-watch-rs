@@ -52,12 +52,12 @@ cargo test -p sensor-watch --lib --features hostmock,std
 (On Linux/macOS, use `x86_64-unknown-linux-gnu` or `x86_64-apple-darwin` for
 commands that specify a target.)
 
-The current host suites pass 99 firmware host-seam tests, 67 core tests, 84
-Studio tests, and 14 tools tests, for 264 tests total. The core suite covers date
+The current host suites pass 106 firmware host-seam tests, 67 core tests, 90
+Studio tests, and 16 tools tests, for 279 tests total. The core suite covers date
 math, settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging,
 transfer validation, optical protocol validation, and other pure logic.
-Passing host tests provide confidence in software and mock seams, they do not
-validate physical hardware.
+Passing host tests provide confidence in software and mock seams; they do not
+validate physical hardware or count as on-silicon validation.
 
 ## Building a UF2
 
@@ -68,12 +68,14 @@ cargo run -p sensor-watch-tools -- build
 ```
 
 The output is `target/thumbv6m-none-eabi/release/sensor-watch.uf2`. The Rust
-host tool builds the release firmware, extracts the raw binary with `rust-objcopy`
-(or `arm-none-eabi-objcopy`), converts it to UF2, and writes the recovery
-manifest. `build.sh` remains a compatibility launcher. The same build, UF2,
-verification, recovery-staging, and probe-flash operations are available through
-`cargo run -p sensor-watch-studio -- help`, with no command that binary starts the
-GUI.
+host tool builds the stock release firmware, extracts the raw binary with
+`rust-objcopy` (or `arm-none-eabi-objcopy`), converts it to UF2, and writes the
+recovery manifest. It does not apply Studio profile selections. `build.sh`
+remains a compatibility launcher. The same host-side UF2 verification,
+recovery-staging, and probe-flash operations are available through
+`cargo run -p sensor-watch-studio -- help`; Studio's configured `build` command
+is fail-closed until preset, board, and component selections become firmware
+build inputs.
 
 The `build` CLI resolves the workspace from the executable location, with the
 tool crate's manifest as a verified fallback, so it does not depend on the
@@ -92,7 +94,8 @@ The firmware clippy job is informational because the full C-reference HAL API
 and many ported faces carry intentional dead-code and pedantic style lints. The
 `core` clippy job is the strict gate (`-D warnings`). The firmware host-seam,
 Studio, and tools host test commands are separate from physical hardware
-validation.
+validation; simulated diagnostics and a successful ARM build
+have the same boundary. No on-silicon validation is implied by these checks.
 
 ## Formatting
 

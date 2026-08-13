@@ -166,14 +166,18 @@ Produce a `.uf2` for drag-and-drop flashing:
 cargo run -p sensor-watch-tools -- build
 ```
 
-The same host operations are also available through the all-in-one Studio binary:
+The same host operations are also exposed by the all-in-one Studio binary, but
+Studio's configured Build & Flash path is fail-closed until preset, board, and
+component selections are wired into firmware build inputs:
 
 ```
-cargo run -p sensor-watch-studio -- build
+cargo run -p sensor-watch-studio -- build  # rejects configured builds for now
 cargo run -p sensor-watch-studio -- help
 ```
 
-With no command, Studio starts the GUI. The CLI is host-side tooling: it does not
+The `sensor-watch-tools` command above produces the stock firmware UF2; it does
+not apply Studio selections. With no command, Studio starts the GUI. The CLI is
+host-side tooling: it does not
 turn the UF2 USB drive into a serial link or provide device-side recovery. The
 `flash` command uses a probe-rs-compatible SWD probe, normal UF2 flashing remains
 drag-and-drop or the GUI Build & Flash panel.
@@ -192,8 +196,9 @@ The `core` crate holds pure logic that is host-testable:
 ```
 cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-studio --target x86_64-pc-windows-msvc
+cargo test -p sensor-watch --lib --features hostmock,std
 cargo test -p sensor-watch-tools --target x86_64-pc-windows-msvc
-# Test counts vary as coverage evolves, run the commands to get the current totals.
+# Current baseline: 106 firmware + 67 core + 90 Studio + 16 tools = 279 passing tests.
 ```
 
 Lint and format:
@@ -251,11 +256,13 @@ validation.
 
 ## Status and validation snapshot
 
-- The current workspace validation passes 99 firmware host-seam tests, 67 core
-  tests, 84 Studio tests, and 14 tools tests, for 264 passing tests total.
-- The passing host suites and ARM build do not validate physical hardware.
-- The Studio and tools package test targets pass their host suites, these
-  results are separate from embedded hardware validation.
+- The current host validation passes 106 firmware host-seam tests, 67 core
+  tests, 90 Studio tests, and 16 tools tests, for 279 passing tests total.
+- `sensor-watch-tools -- build` produces a stock firmware UF2; Studio's
+  configured Build & Flash path remains fail-closed until its selections become
+  firmware build inputs.
+- Host tests, simulated diagnostics, and the ARM build do not validate physical
+  hardware. No on-silicon validation has been run.
 - No complete repository warning total is claimed here because the full
   workspace does not reach a clean build.
 

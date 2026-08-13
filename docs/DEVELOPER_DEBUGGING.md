@@ -127,8 +127,11 @@ the 24-bit fingerprint of the panic `file:line`.
 
 Firmware Studio's **Bugs** panel accepts the `Pxxxxxx` value from the shell and
 scans the firmware Rust source tree for matching `file:line:column` candidates.
-A successful Studio build writes `sensor-watch.panic-map.json` beside the ELF.
-That manifest records the SHA-256 of the ELF and of every `src/**/*.rs` and
+A successful firmware build through a path that generates the panic map writes
+`sensor-watch.panic-map.json` beside the ELF. Studio's configured Build & Flash
+path is currently fail-closed and does not publish a configured UF2 until its
+preset, board, and component selections become firmware build inputs. That
+manifest records the SHA-256 of the ELF and of every `src/**/*.rs` and
 `core/src/**/*.rs` path/content pair, so the resolver refuses a missing,
 replaced, or source-mismatched build rather than producing a misleading match.
 The resolver uses the exact firmware algorithm: FNV-1a with offset basis
@@ -234,6 +237,13 @@ or disconnected UART jig is **NOT AVAILABLE**, not FAIL. Use **NOT TESTED** when
 no attempt was made.
 
 ## Summary
+
+The current host validation baseline is 279 passing tests: 106 firmware
+host-seam, 67 core, 90 Studio, and 16 tools. These are host, mock, or simulated
+checks; the ARM build and SWD/UART procedures document ways to exercise real
+hardware, but no on-silicon validation has been run. Report physical results
+only with the explicit `PASS`, `FAIL`, `NOT AVAILABLE`, or `NOT TESTED` labels
+above.
 
 - Optional, purely additive dev tooling: `sensor-watch-tools`, `scripts/flash.sh`, `scripts/flash.ps1`,
   `.vscode/launch.json`, and this document.
