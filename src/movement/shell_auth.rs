@@ -15,6 +15,7 @@ pub const AUTH_WINDOW_TICKS: u16 = 128 * 30;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShellAuthorization {
     held: bool,
+    started_at: u16,
     expires_at: u16,
 }
 
@@ -22,6 +23,7 @@ impl ShellAuthorization {
     pub const fn new() -> Self {
         Self {
             held: false,
+            started_at: 0,
             expires_at: 0,
         }
     }
@@ -31,9 +33,10 @@ impl ShellAuthorization {
         match event {
             Event::Button(SERVICE_BUTTON, ButtonEvent::Down) => {
                 self.held = true;
-                // FAST_TICKS is u16 and wraps. Store the window end; the
-                // comparison below uses wrapping subtraction and remains
-                // correct because the window is much shorter than one wrap.
+                // FAST_TICKS is u16 and wraps. The elapsed-time check below
+                // remains unambiguous because the authorization window is
+                // much shorter than one wrap.
+                self.started_at = now;
                 self.expires_at = now.wrapping_add(AUTH_WINDOW_TICKS);
             }
             Event::Button(SERVICE_BUTTON, ButtonEvent::Up | ButtonEvent::LongUp) => {
@@ -46,7 +49,7 @@ impl ShellAuthorization {
     /// Returns true only while the service button is held and the window lives.
     /// Expiry also clears the held state, so an old press cannot authorize later.
     pub fn is_authorized(&mut self, now: u16) -> bool {
-        if !self.held || now.wrapping_sub(self.expires_at) < u16::MAX / 2 {
+        if !self.held || now.wrapping_sub(self.started_at) >= AUTH_WINDOW_TICKS {
             self.revoke();
             false
         } else {
@@ -64,6 +67,7 @@ impl ShellAuthorization {
 
     pub fn revoke(&mut self) {
         self.held = false;
+        self.started_at = 0;
         self.expires_at = 0;
     }
 }
@@ -108,5 +112,28 @@ mod tests {
         let mut auth = ShellAuthorization::new();
         auth.observe(Event::Button(Button::Mode, ButtonEvent::Down), 1);
         assert!(!auth.is_authorized(1));
+    }
+
+    #[test]
+    fn delayed_check_beyond_half_wrap_stays_expired() {
+        let mut auth = ShellAuthorization::new();
+        let pressed_at = u16::MAX - 10;
+        auth.observe(Event::Button(SERVICE_BUTTON, ButtonEvent::Down), pressed_at);
+
+        let delayed_check = pressed_at
+            .wrapping_add(AUTH_WINDOW_TICKS)
+            .wrapping_add(u16::MAX / 2 + 1);
+        assert!(!auth.is_authorized(delayed_check));
+        assert!(!auth.held());
+    }
+
+    #[test]
+    fn authorization_remains_wrap_safe() {
+        let mut auth = ShellAuthorization::new();
+        let pressed_at = u16::MAX - 10;
+        auth.observe(Event::Button(SERVICE_BUTTON, ButtonEvent::Down), pressed_at);
+
+        assert!(auth.is_authorized(pressed_at.wrapping_add(AUTH_WINDOW_TICKS - 1)));
+        assert!(!auth.is_authorized(pressed_at.wrapping_add(AUTH_WINDOW_TICKS)));
     }
 }
