@@ -12,6 +12,8 @@ use crate::watch::buzzer::Note;
 use crate::watch::slcd::Indicator;
 
 const SECONDS_TO_RECORD: u8 = 15;
+const STORAGE_PAGE_SIZE: i16 = 64;
+const SAMPLE_SIZE: i16 = 6;
 const MODE_IDLE: u8 = 0;
 const MODE_COUNTDOWN: u8 = 1;
 const MODE_SENSING: u8 = 2;
@@ -197,7 +199,8 @@ impl AccelerometerDataAcquisitionFace {
             // present and there is flash room).
             if crate::movement::accelerometer_begin() {
                 let r = crate::watch::lis2dw::get_raw_reading();
-                if self.next_available_page >= 0 {
+                if let Some(next_page) = normalize_storage_pointer(self.next_available_page) {
+                    self.next_available_page = next_page;
                     let mut buf = [0u8; 6];
                     buf[0..2].copy_from_slice(&r.x.to_le_bytes());
                     buf[2..4].copy_from_slice(&r.y.to_le_bytes());
@@ -205,7 +208,7 @@ impl AccelerometerDataAcquisitionFace {
                     let row = (self.next_available_page / 256) as u32;
                     let off = (self.next_available_page % 256) as u32;
                     if crate::watch::storage::write(row, off, &buf) {
-                        self.next_available_page -= 6;
+                        self.next_available_page -= SAMPLE_SIZE;
                     }
                 }
             }
@@ -216,6 +219,32 @@ impl AccelerometerDataAcquisitionFace {
                 self.repeat_ticks = self.repeat_interval;
             }
         }
+    }
+}
+
+/// Move a sample pointer back to the last offset where a 6-byte write fits in
+/// the current 64-byte NVM page. The storage driver deliberately rejects page
+/// crossing writes, so leaving the pointer at (for example) offset 62 would
+/// otherwise make recording retry the same failed write forever.
+fn normalize_storage_pointer(pointer: i16) -> Option<i16> {
+    if pointer < 0 {
+        return None;
+    }
+    let offset = pointer % STORAGE_PAGE_SIZE;
+    Some(pointer - (offset + SAMPLE_SIZE - STORAGE_PAGE_SIZE).max(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_storage_pointer;
+
+    #[test]
+    fn normalizes_sample_pointer_at_page_boundary() {
+        assert_eq!(normalize_storage_pointer(64), Some(64));
+        assert_eq!(normalize_storage_pointer(58), Some(58));
+        assert_eq!(normalize_storage_pointer(62), Some(58));
+        assert_eq!(normalize_storage_pointer(60), Some(58));
+        assert_eq!(normalize_storage_pointer(-4), None);
     }
 }
 
