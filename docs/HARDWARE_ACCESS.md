@@ -105,11 +105,12 @@ verification of the physical sensor, display, or other hardware.
 - `help` - list the commands.
 
 Commands use strict ASCII forms: `settime` requires exactly 12 decimal digits,
-and drift values must be signed decimal values in the hardware range. Builds with
-the optional Cargo feature `shell-auth` start with mutating commands locked; board
-code must call `Shell::set_mutation_authorized` after a physical-presence check
-(such as a held service button). The standard build leaves this policy disabled to
-preserve the UART jig workflow.
+and drift values must be signed decimal values in the hardware range. Mutating
+commands are locked by default in every firmware build. Board code must
+call `Shell::set_mutation_authorized` only after a physical-presence check (such
+as a held service button) or another reviewed authentication decision. Tests and
+development tools may use the same explicit hook; a connected UART jig alone
+must not unlock mutations.
 
 This is how clock setting and drift correction can be driven from a PC, for
 example by the companion app during calibration. Studio's **Shell Access**

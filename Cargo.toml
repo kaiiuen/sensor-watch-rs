@@ -67,8 +67,8 @@ hostmock = ["dep:sensor-watch-core"]
 # and `#[global_allocator]` lang items. Without it (ARM firmware, host `cargo
 # test`), the lib stays `no_std` and provides its own minimal lang items.
 std = []
-# Require an explicit physical-presence integration to authorize mutating shell
-# commands. The default remains unlocked to preserve the UART jig workflow.
+# Marker for integrations that provide an explicit physical-presence/auth hook
+# for mutating shell commands. The shell remains locked until that hook runs.
 shell-auth = []
 # Reserve the native SAM L22 USB CDC application path. It is intentionally
 # disabled by default because USB raises the clock/power floor and the current

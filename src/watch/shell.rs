@@ -61,8 +61,8 @@ pub struct Shell {
     discarding_line: bool,
     invalid_line: bool,
     last_was_terminator: bool,
-    /// Mutation commands are enabled by default for backwards-compatible jig use.
-    /// Builds with `shell-auth` must explicitly authorize them.
+    /// Mutation commands remain locked until an explicit authorization hook
+    /// confirms physical presence or an equivalent development/test condition.
     mutation_authorized: bool,
 }
 
@@ -75,23 +75,26 @@ impl Shell {
             discarding_line: false,
             invalid_line: false,
             last_was_terminator: false,
-            mutation_authorized: !cfg!(feature = "shell-auth"),
+            // Fail closed in every production configuration. Integrations must
+            // explicitly authorize mutations through `set_mutation_authorized`.
+            mutation_authorized: false,
         }
+    }
+
+    /// Set whether mutating commands may run for the current shell session.
+    ///
+    /// A board integration should call this only after its physical-presence
+    /// check (for example, a held service button). Tests and development tools
+    /// may use the same explicit hook. The shell starts locked and callers can
+    /// revoke authorization at any time.
+    pub fn set_mutation_authorized(&mut self, authorized: bool) {
+        self.mutation_authorized = authorized;
     }
 
     /// Processes any pending input from the UART.
     ///
     /// Call this from a tick or background task. It reads available bytes,
     /// accumulates a line, and executes the command when a newline arrives.
-    /// Authorizes mutation commands for the current shell session.
-    ///
-    /// A board integration can call this only after its physical-presence check
-    /// (for example, a held service button). In `shell-auth` builds the default
-    /// is locked; normal builds retain the UART-jig behavior.
-    pub fn set_mutation_authorized(&mut self, authorized: bool) {
-        self.mutation_authorized = authorized;
-    }
-
     pub fn poll(&mut self) {
         transport_service();
         if transport_rx_overflowed() {
@@ -292,6 +295,26 @@ fn parse_signed(s: &[u8]) -> Option<i16> {
         return None;
     }
     Some(if negative { -value } else { value })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_starts_locked() {
+        assert!(!Shell::new_static().mutation_authorized);
+    }
+
+    #[test]
+    fn authorization_requires_explicit_hook() {
+        let mut shell = Shell::new_static();
+        shell.set_mutation_authorized(true);
+        assert!(shell.mutation_authorized);
+
+        shell.set_mutation_authorized(false);
+        assert!(!shell.mutation_authorized);
+    }
 }
 
 fn parse_settime(s: &[u8]) -> Option<DateTime> {
