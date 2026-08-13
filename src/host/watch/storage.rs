@@ -79,24 +79,205 @@ pub fn sync() -> bool {
     true
 }
 
-/// Writes data with log-structured wear leveling. Host: a plain write at the
-/// given offset (the highest row acts as the "most recent" row).
-pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
-    offset
-        .checked_add(4)
-        .is_some_and(|offset| write(0, offset, buffer))
+/// The host model uses the same bounded log as the firmware. Keeping the
+/// records in rows (rather than a map) is important: tests can then exercise
+/// the same erase-before-reuse and interrupted-write behavior as the device.
+const WEAR_ROWS: u32 = 8;
+const WEAR_MAGIC: u32 = 0x574C_0001;
+const WEAR_HEADER_SIZE: u32 = 20;
+const LEGACY_WEAR_HEADER_SIZE: u32 = 12;
+const NAMESPACE_ROWS: u32 = WEAR_ROWS / 2;
+const CRC_NAMESPACE: u32 = 0x4352_4301;
+const SETTINGS_NAMESPACE: u32 = 0x5357_0001;
+
+static mut WEAR_ROW: u32 = 0;
+
+#[derive(Clone, Copy)]
+struct WearEntry {
+    row: u32,
+    generation: u32,
+    data_offset: u32,
 }
 
-/// Reads data written with log-structured wear leveling. Host: reads row 0.
-pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
+fn generation_is_newer(candidate: u32, current: u32) -> bool {
+    candidate != current && candidate.wrapping_sub(current) < 0x8000_0000
+}
+
+/// Validate a record before erasing its destination. A record must fit in one
+/// row so a partial/corrupt write cannot spill into another record's row.
+fn valid_wear_entry(offset: u32, len: usize, header_size: u32) -> bool {
+    let Ok(len) = u32::try_from(len) else {
+        return false;
+    };
     offset
-        .checked_add(4)
-        .is_some_and(|offset| read(0, offset, buffer))
+        .checked_add(header_size)
+        .and_then(|offset| offset.checked_add(len))
+        .is_some_and(|end| end <= ROW_SIZE)
+}
+
+fn find_last_entry(namespace: Option<u32>, row_start: u32, row_count: u32) -> Option<WearEntry> {
+    let mut newest = None;
+    for row in row_start..row_start + row_count {
+        let mut header = [0u8; WEAR_HEADER_SIZE as usize];
+        if !read(row, 0, &mut header[..4])
+            || u32::from_le_bytes(header[..4].try_into().unwrap()) != WEAR_MAGIC
+        {
+            continue;
+        }
+        if !read(row, 4, &mut header[4..12]) {
+            continue;
+        }
+        let generation = u32::from_le_bytes(header[4..8].try_into().unwrap());
+        let generation_complement = u32::from_le_bytes(header[8..12].try_into().unwrap());
+        let (generation, data_offset) = if generation ^ generation_complement == u32::MAX {
+            if let Some(namespace) = namespace {
+                if !read(row, 12, &mut header[12..])
+                    || u32::from_le_bytes(header[12..16].try_into().unwrap()) != namespace
+                    || u32::from_le_bytes(header[16..20].try_into().unwrap()) != !namespace
+                {
+                    continue;
+                }
+                (generation, WEAR_HEADER_SIZE)
+            } else {
+                // A complete namespaced header is not an unnamespaced record.
+                if read(row, 12, &mut header[12..])
+                    && u32::from_le_bytes(header[12..16].try_into().unwrap())
+                        ^ u32::from_le_bytes(header[16..20].try_into().unwrap())
+                        == u32::MAX
+                {
+                    continue;
+                }
+                (generation, LEGACY_WEAR_HEADER_SIZE)
+            }
+        } else if namespace.is_none() {
+            // The oldest format had only a magic word. It remains readable.
+            (0, 4)
+        } else {
+            continue;
+        };
+        if newest.is_none_or(|entry: WearEntry| generation_is_newer(generation, entry.generation)) {
+            newest = Some(WearEntry {
+                row,
+                generation,
+                data_offset,
+            });
+        }
+    }
+    newest
+}
+
+/// Writes data with log-structured wear leveling across eight rows.
+pub fn wear_leveled_write(offset: u32, buffer: &[u8]) -> bool {
+    if !valid_wear_entry(offset, buffer.len(), LEGACY_WEAR_HEADER_SIZE) {
+        return false;
+    }
+    let row = unsafe {
+        if WEAR_ROW == 0 {
+            WEAR_ROW =
+                find_last_entry(None, 0, WEAR_ROWS).map_or(0, |entry| (entry.row + 1) % WEAR_ROWS);
+        }
+        WEAR_ROW % WEAR_ROWS
+    };
+    let generation =
+        find_last_entry(None, 0, WEAR_ROWS).map_or(1, |entry| entry.generation.wrapping_add(1));
+    if !erase(row) {
+        return false;
+    }
+    let mut header = [0u8; LEGACY_WEAR_HEADER_SIZE as usize];
+    header[..4].copy_from_slice(&WEAR_MAGIC.to_le_bytes());
+    header[4..8].copy_from_slice(&generation.to_le_bytes());
+    header[8..].copy_from_slice(&(!generation).to_le_bytes());
+    if !write(row, 0, &header) || !write(row, offset + LEGACY_WEAR_HEADER_SIZE, buffer) {
+        return false;
+    }
+    unsafe { WEAR_ROW = (row + 1) % WEAR_ROWS };
+    true
+}
+
+/// Reads the newest valid unnamespaced record, ignoring partial/corrupt rows.
+pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
+    let Some(entry) = find_last_entry(None, 0, WEAR_ROWS) else {
+        return false;
+    };
+    offset
+        .checked_add(entry.data_offset)
+        .is_some_and(|offset| read(entry.row, offset, buffer))
+}
+
+fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
+    match namespace {
+        CRC_NAMESPACE => Some((0, NAMESPACE_ROWS)),
+        SETTINGS_NAMESPACE => Some((NAMESPACE_ROWS, NAMESPACE_ROWS)),
+        _ => None,
+    }
+}
+
+/// Writes an independently rotating record for a known namespace.
+pub fn wear_leveled_write_namespaced(namespace: u32, offset: u32, buffer: &[u8]) -> bool {
+    let Some((row_start, row_count)) = namespace_rows(namespace) else {
+        return false;
+    };
+    if !valid_wear_entry(offset, buffer.len(), WEAR_HEADER_SIZE) {
+        return false;
+    }
+    let previous = find_last_entry(Some(namespace), row_start, row_count);
+    let row = previous.map_or(row_start, |entry| {
+        row_start + (entry.row - row_start + 1) % row_count
+    });
+    let generation = previous.map_or(1, |entry| entry.generation.wrapping_add(1));
+    if !erase(row) {
+        return false;
+    }
+    let mut header = [0u8; WEAR_HEADER_SIZE as usize];
+    header[..4].copy_from_slice(&WEAR_MAGIC.to_le_bytes());
+    header[4..8].copy_from_slice(&generation.to_le_bytes());
+    header[8..12].copy_from_slice(&(!generation).to_le_bytes());
+    header[12..16].copy_from_slice(&namespace.to_le_bytes());
+    header[16..20].copy_from_slice(&(!namespace).to_le_bytes());
+    write(row, 0, &header) && write(row, offset + WEAR_HEADER_SIZE, buffer)
+}
+
+/// Reads the newest valid namespaced record, with firmware-compatible legacy
+/// fallback for upgrades where an old unnamespaced record is still present.
+pub fn wear_leveled_read_namespaced(namespace: u32, offset: u32, buffer: &mut [u8]) -> bool {
+    let Some((row_start, row_count)) = namespace_rows(namespace) else {
+        return false;
+    };
+    let Some(entry) = find_last_entry(Some(namespace), row_start, row_count)
+        .or_else(|| find_last_entry(None, 0, WEAR_ROWS))
+    else {
+        return false;
+    };
+    offset
+        .checked_add(entry.data_offset)
+        .is_some_and(|offset| read(entry.row, offset, buffer))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static TEST_LOCK: AtomicBool = AtomicBool::new(false);
+
+    struct TestLock;
+
+    impl TestLock {
+        fn acquire() -> Self {
+            while TEST_LOCK
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+            {
+                core::hint::spin_loop();
+            }
+            Self
+        }
+    }
+
+    impl Drop for TestLock {
+        fn drop(&mut self) {
+            TEST_LOCK.store(false, Ordering::Release);
+        }
+    }
 
     #[test]
     fn rejects_overflowing_and_out_of_range_ranges() {
@@ -126,5 +307,81 @@ mod tests {
         let mut readback = [0];
         assert!(read(30, 0, &mut readback));
         assert_eq!(readback, [0x00]);
+    }
+
+    #[test]
+    fn wear_leveling_rotates_and_ignores_corrupt_latest_header() {
+        let _lock = TestLock::acquire();
+        for row in 0..WEAR_ROWS {
+            assert!(erase(row));
+        }
+        unsafe { WEAR_ROW = 0 };
+
+        for value in 1u8..=9 {
+            assert!(wear_leveled_write(0, &[value]));
+        }
+        let mut latest = [0];
+        assert!(wear_leveled_read(0, &mut latest));
+        assert_eq!(latest, [9]);
+
+        // The newest record is row 0 after the ninth write. Damage its
+        // generation complement as an interrupted header write would do.
+        assert!(write(0, 8, &[0]));
+        let mut recovered = [0];
+        assert!(wear_leveled_read(0, &mut recovered));
+        assert_eq!(recovered, [8]);
+
+        // A header written without its complement is not a committed record.
+        assert!(erase(2));
+        assert!(write(2, 0, &WEAR_MAGIC.to_le_bytes()));
+        assert!(wear_leveled_read(0, &mut recovered));
+        assert_eq!(recovered, [8]);
+    }
+
+    #[test]
+    fn namespaced_records_rotate_independently_and_reject_unknown_namespaces() {
+        let _lock = TestLock::acquire();
+        for row in 0..WEAR_ROWS {
+            assert!(erase(row));
+        }
+
+        assert!(!wear_leveled_write_namespaced(0xDEAD_BEEF, 0, &[1]));
+        assert!(wear_leveled_write_namespaced(
+            SETTINGS_NAMESPACE,
+            0,
+            &[0x11]
+        ));
+        assert!(wear_leveled_write_namespaced(CRC_NAMESPACE, 0, &[0x22]));
+        assert!(wear_leveled_write_namespaced(
+            SETTINGS_NAMESPACE,
+            0,
+            &[0x33]
+        ));
+
+        let mut settings = [0];
+        let mut crc = [0];
+        assert!(wear_leveled_read_namespaced(
+            SETTINGS_NAMESPACE,
+            0,
+            &mut settings
+        ));
+        assert!(wear_leveled_read_namespaced(CRC_NAMESPACE, 0, &mut crc));
+        assert_eq!(settings, [0x33]);
+        assert_eq!(crc, [0x22]);
+        assert!(!wear_leveled_read_namespaced(0xDEAD_BEEF, 0, &mut settings));
+    }
+
+    #[test]
+    fn malformed_record_sizes_fail_before_erasing_existing_data() {
+        let _lock = TestLock::acquire();
+        for row in 0..WEAR_ROWS {
+            assert!(erase(row));
+        }
+        unsafe { WEAR_ROW = 0 };
+        assert!(wear_leveled_write(0, &[0x5A]));
+        assert!(!wear_leveled_write(ROW_SIZE, &[1]));
+        let mut value = [0];
+        assert!(wear_leveled_read(0, &mut value));
+        assert_eq!(value, [0x5A]);
     }
 }
