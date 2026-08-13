@@ -1609,25 +1609,42 @@ impl StudioApp {
             return;
         }
 
-        // A one-row preference still falls back to wrapping when required;
+        // A one-row preference still falls back to wrapping when required,
         // clipping is never preferable to honoring the selected tab.
-        let row_count = preferred_rows.max(natural_rows).max(1);
+        let row_count = preferred_rows
+            .max(natural_rows)
+            .max(1)
+            .min(visible.len().max(1));
         let mut rows: Vec<Vec<Panel>> = vec![Vec::new(); row_count];
         let mut row_widths = vec![0.0; row_count];
-        let mut row = 0usize;
         for (index, panel) in visible.iter().enumerate() {
-            if row_widths[row] > 0.0 && row_widths[row] + widths[index] > available {
-                row += 1;
-                if row == rows.len() {
-                    rows.push(Vec::new());
-                    row_widths.push(0.0);
-                }
-            }
+            // Explicit two/three-row settings must actually distribute tabs,
+            // even when the total label width would fit on one line.
+            let preferred_row = index * row_count / visible.len().max(1);
+            let row = if row_widths[preferred_row] == 0.0
+                || row_widths[preferred_row] + widths[index] <= available
+            {
+                preferred_row
+            } else {
+                row_widths
+                    .iter()
+                    .enumerate()
+                    .min_by(|(_, left), (_, right)| left.total_cmp(right))
+                    .map(|(row, _)| row)
+                    .unwrap_or(preferred_row)
+            };
             rows[row].push(*panel);
             row_widths[row] += widths[index];
         }
-        for panels in rows.into_iter().filter(|panels| !panels.is_empty()) {
-            ui.horizontal(|ui| self.draw_tab_buttons(ui, &panels));
+        for (row_index, panels) in rows.into_iter().enumerate() {
+            if panels.is_empty() {
+                continue;
+            }
+            egui::ScrollArea::horizontal()
+                .id_source(format!("nav_tabs_row_{row_index}"))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| self.draw_tab_buttons(ui, &panels));
+                });
         }
     }
 
