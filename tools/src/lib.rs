@@ -269,13 +269,33 @@ pub fn verify_uf2(
     manifest_path: Option<&Path>,
     trusted: Option<&str>,
 ) -> ToolResult<Manifest> {
+    let manifest_was_supplied = manifest_path.is_some();
     let mpath = manifest_path
         .map(PathBuf::from)
         .unwrap_or_else(|| path.with_extension("uf2.json"));
-    if !mpath.exists() {
-        let m = create_manifest(path, None, None)?;
-        trusted_match(&m, trusted)?;
-        return Ok(m);
+    match fs::symlink_metadata(&mpath) {
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(format!(
+                "refusing symlinked manifest path: {}",
+                mpath.display()
+            ));
+        }
+        Ok(metadata) if !metadata.is_file() => {
+            return Err(format!(
+                "manifest is not a regular file: {}",
+                mpath.display()
+            ));
+        }
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !manifest_was_supplied => {
+            let m = create_manifest(path, None, None)?;
+            trusted_match(&m, trusted)?;
+            return Ok(m);
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Err(format!("manifest not found at {}", mpath.display()));
+        }
+        Err(e) => return Err(format!("cannot inspect manifest {}: {e}", mpath.display())),
     }
     let m = load_manifest(&mpath)?;
     if manifest_value(&m, "format") != MANIFEST_FORMAT
@@ -616,6 +636,22 @@ mod workspace_tests {
             .canonicalize()
             .unwrap();
         assert_eq!(workspace_root().unwrap(), expected);
+    }
+
+    #[test]
+    fn explicit_missing_manifest_is_not_treated_as_unverified_artifact() {
+        let root = temp_root("missing-manifest");
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("firmware.uf2");
+        let manifest = root.join("missing.uf2.json");
+        fs::write(&artifact, uf2::convert_to_uf2(b"known-good")).unwrap();
+
+        let error = verify_uf2(&artifact, Some(&manifest), None).unwrap_err();
+        assert!(
+            error.contains("manifest not found"),
+            "unexpected error: {error}"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
