@@ -72,6 +72,13 @@ impl fmt::Display for TransportError {
 
 impl std::error::Error for TransportError {}
 
+impl TransportError {
+    /// Returns whether the transport can no longer use its current connection.
+    pub fn is_connection_lost(&self) -> bool {
+        matches!(self, Self::Disconnected)
+    }
+}
+
 pub fn discover_ports() -> Result<Vec<PortChoice>, TransportError> {
     serialport::available_ports()
         .map(|ports| {
@@ -346,6 +353,16 @@ mod tests {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn disconnected_error_marks_the_connection_as_lost() {
+        assert!(TransportError::Disconnected.is_connection_lost());
+        assert!(!TransportError::Timeout {
+            operation: "read",
+            timeout: Duration::from_millis(1),
+        }
+        .is_connection_lost());
     }
 
     #[test]

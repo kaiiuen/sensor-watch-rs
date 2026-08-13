@@ -4067,8 +4067,15 @@ impl StudioApp {
             match uart.command(cmd) {
                 Ok(reply) => self.shell_log.log(format!("< {reply}")),
                 Err(error) => {
+                    let connection_lost = error.is_connection_lost();
                     self.shell_log.log(format!("UART error: {error}"));
-                    self.status = error.to_string();
+                    if connection_lost {
+                        self.uart = None;
+                        self.transport_mode = transport::TransportMode::Simulated;
+                        self.status = "UART disconnected; using Simulated shell mode".to_string();
+                    } else {
+                        self.status = error.to_string();
+                    }
                 }
             }
         } else {
