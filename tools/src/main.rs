@@ -169,6 +169,26 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn manifest_digest_does_not_depend_on_local_artifact_path() {
+        let root = temp_dir("digest-path");
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("good.uf2");
+        fs::write(&artifact, fixture()).unwrap();
+        let relative = tools::create_manifest(&artifact, Some("generation".into()), None).unwrap();
+        let alternate = tools::create_manifest(
+            &artifact,
+            Some("generation".into()),
+            Some(&root.join("other-location.uf2")),
+        )
+        .unwrap();
+        assert_eq!(
+            tools::manifest_value(&relative, "manifest_digest"),
+            tools::manifest_value(&alternate, "manifest_digest")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn missing_trusted_provenance_is_reported_without_claiming_authenticity() {
         assert_eq!(tools::trusted_release_status(None), "not provided");
         assert_eq!(

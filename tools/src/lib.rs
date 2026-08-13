@@ -123,6 +123,9 @@ pub fn manifest_digest(manifest: &Manifest) -> String {
     let mut unsigned = manifest.clone();
     unsigned.remove("manifest_digest");
     unsigned.remove("signature");
+    // The path is local metadata and may be absolute, relative, or Windows
+    // extended-length syntax. It must not change the content identity digest.
+    unsigned.remove("artifact");
     let canonical = serde_json::to_vec(&Value::Object(unsigned))
         .map_err(|e| e.to_string())
         .unwrap_or_default();
