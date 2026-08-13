@@ -247,7 +247,7 @@ validation.
 ## Status and validation snapshot
 
 - The current workspace validation passes 93 firmware-library tests, 67 core
-  tests, 73 Studio tests, and 7 tools tests, for 240 passing tests total.
+  tests, 75 Studio tests, and 7 tools tests, for 242 passing tests total.
 - The passing host suites and ARM build do not validate physical hardware.
 - The Studio and tools package test targets pass their host suites; these
   results are separate from embedded hardware validation.
