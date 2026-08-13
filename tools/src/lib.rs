@@ -152,12 +152,11 @@ pub fn inspect_uf2(path: &Path) -> ToolResult<Uf2Inspection> {
     })
 }
 
-pub fn create_manifest(
-    path: &Path,
+fn manifest_from_inspection(
+    inspected: &Uf2Inspection,
     generation: Option<String>,
-    artifact: Option<&Path>,
-) -> ToolResult<Manifest> {
-    let inspected = inspect_uf2(path)?;
+    artifact: &Path,
+) -> Manifest {
     let generation = generation
         .unwrap_or_else(|| format!("g{}-{}", now_nanos(), &sha256(&inspected.data)[..12]));
     let mut m = Map::new();
@@ -185,15 +184,25 @@ pub fn create_manifest(
     );
     m.insert("sha256".into(), sha256(&inspected.data).into());
     m.insert("payload_sha256".into(), sha256(&inspected.image).into());
-    m.insert(
-        "artifact".into(),
-        artifact.unwrap_or(path).display().to_string().into(),
-    );
+    m.insert("artifact".into(), artifact.display().to_string().into());
     let digest = manifest_digest(&m);
     m.insert("manifest_digest".into(), digest.clone().into());
     // Keep the old key for manifests produced by older tooling.
     m.insert("signature".into(), digest.into());
-    Ok(m)
+    m
+}
+
+pub fn create_manifest(
+    path: &Path,
+    generation: Option<String>,
+    artifact: Option<&Path>,
+) -> ToolResult<Manifest> {
+    let inspected = inspect_uf2(path)?;
+    Ok(manifest_from_inspection(
+        &inspected,
+        generation,
+        artifact.unwrap_or(path),
+    ))
 }
 fn write_json(path: &Path, value: &Value) -> ToolResult<()> {
     if path.exists() || path.is_symlink() {
@@ -376,15 +385,27 @@ pub fn convert_uf2(input: &Path, output: &Path) -> ToolResult<()> {
     write_binary(output, &out)
 }
 pub fn backup_uf2(src: &Path, dst: &Path) -> ToolResult<Manifest> {
-    let m = create_manifest(src, None, Some(dst))?;
+    // Keep the validated bytes and the bytes written to the backup identical.
+    // Re-reading `src` after validation would allow a local replacement race to
+    // make the manifest describe different bytes than the preserved artifact.
+    let data = read_file(src, MAX_UF2_BYTES)?;
+    if data.is_empty() || !data.len().is_multiple_of(UF2_BLOCK_SIZE) {
+        return Err("UF2 is not a non-empty multiple of 512 bytes".into());
+    }
+    let parsed = uf2::validate(&data).map_err(|e| format!("{}: {e}", src.display()))?;
+    let inspected = Uf2Inspection {
+        data,
+        image: parsed.image,
+        block_count: parsed.block_count,
+    };
     if dst.exists() || dst.is_symlink() {
         return Err("refusing to overwrite existing backup".into());
     }
     if let Some(p) = dst.parent() {
         fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
-    let data = read_file(src, MAX_UF2_BYTES)?;
-    write_binary(dst, &data)?;
+    write_binary(dst, &inspected.data)?;
+    let m = manifest_from_inspection(&inspected, None, dst);
     write_manifest(&dst.with_extension("uf2.json"), &m)?;
     Ok(m)
 }

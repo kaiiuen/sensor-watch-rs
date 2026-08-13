@@ -240,6 +240,26 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
     #[test]
+    fn backup_manifest_matches_the_single_snapshot_written() {
+        let root = temp_dir("backup-consistency");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.uf2");
+        let backup = root.join("recovery/generation.uf2");
+        let bytes = fixture();
+        fs::write(&source, &bytes).unwrap();
+
+        let manifest = tools::backup_uf2(&source, &backup).unwrap();
+        assert_eq!(fs::read(&backup).unwrap(), bytes);
+        assert_eq!(
+            tools::manifest_value(&manifest, "sha256"),
+            tools::sha256(&fs::read(&backup).unwrap())
+        );
+        let manifest_path = backup.with_extension("uf2.json");
+        tools::verify_uf2(&backup, Some(&manifest_path), None).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn manifest_scope_is_host_side_only() {
         let root = temp_dir("scope");
         fs::create_dir_all(&root).unwrap();
