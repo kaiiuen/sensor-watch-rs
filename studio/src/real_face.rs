@@ -51,8 +51,6 @@ use sensor_watch_core::datetime::DateTime;
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::mock_hw::{Hw, MockHw};
 
-#[cfg(feature = "real-faces")]
-
 /// A snapshot of what a real face wrote to the mock LCD, in Studio terms.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RealFaceSnapshot {

@@ -301,6 +301,12 @@ impl AppSettings {
         if !self.drift_ppm.is_finite() || self.drift_ppm.abs() > 1000.0 {
             return Err("drift correction must be finite and within +/-1000 ppm".into());
         }
+        let current_calibration_version = sensor_watch_core::rtc_calibration::CALIBRATION_VERSION;
+        if self.rtc_calibration.version != 0
+            && self.rtc_calibration.version != current_calibration_version
+        {
+            return Err("unsupported RTC calibration version".into());
+        }
         let mut calibration = self.rtc_calibration.clone();
         calibration.clamp_values();
         if calibration.enabled()
@@ -414,4 +420,28 @@ pub fn default_output_dir() -> String {
         .or_else(|_| std::env::var("HOME"))
         .map(|home| format!("{home}/Documents/FirmwareStudio"))
         .unwrap_or_else(|_| "FirmwareStudio".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{AppSettings, RtcCalibrationSettings};
+
+    #[test]
+    fn rejects_unknown_rtc_calibration_versions() {
+        let mut settings = AppSettings::default();
+        settings.rtc_calibration.version = 255;
+
+        let error = settings.validate().unwrap_err();
+        assert!(error.contains("unsupported RTC calibration version"));
+    }
+
+    #[test]
+    fn accepts_disabled_rtc_calibration_version_zero() {
+        let settings = AppSettings {
+            rtc_calibration: RtcCalibrationSettings::default(),
+            ..AppSettings::default()
+        };
+
+        assert!(settings.validate().is_ok());
+    }
 }

@@ -117,6 +117,8 @@ struct StudioApp {
     /// The name/host being edited for a custom NTP server.
     ntp_edit_name: String,
     ntp_edit_host: String,
+    /// The custom NTP server currently being edited, if any.
+    ntp_edit_index: Option<usize>,
     /// The NTP-derived UTC time (seconds since epoch), if fetched.
     ntp_time: Option<u64>,
     /// The NTP ping latency in ms.
@@ -406,6 +408,8 @@ fn country_label(index: u8) -> &'static str {
 }
 
 /// The first-run walkthrough steps.
+const MAX_CUSTOM_NTP_SERVERS: usize = 64;
+
 const FIRST_RUN_STEPS: [&str; 5] = [
     "1. Start in Blocks and give your face a name",
     "2. Arrange a few starter blocks",
@@ -537,31 +541,131 @@ const UPSTREAM_CREDITS: &[CreditEntry] = &[
 ];
 
 const COMMUNITY_CREDITS: &[CreditEntry] = &[
-    CreditEntry { name: "ZeptoBars / BarsMonster", details: "Precision timing, frequency correction, temperature compensation, RTC investigations, power profiling, and UltraPatch", url: None },
-    CreditEntry { name: "Tahnok", details: "Watch faces, framework work, background tasks, testing, and simulator discussions", url: None },
-    CreditEntry { name: "WJHRDY", details: "Wyoscan face and low-energy animation work", url: None },
-    CreditEntry { name: "Neutralinsomniac", details: "Smallchess/chess face and engine integration", url: None },
-    CreditEntry { name: "Austen Adler / austenadler", details: "Early Rust integration experiments", url: None },
-    CreditEntry { name: "Wesleyac", details: "Link-time optimization and review/merge assistance", url: None },
-    CreditEntry { name: "Matheus Moreira", details: "Feature integration, structured TOTP, deadline/USB/clock work, testing coordination, and preserved attribution", url: None },
-    CreditEntry { name: "Voloved / Devolov / devolov", details: "DST/UTZ, sunrise/sunset, step-count, quiet-hours, LED, battery, and display work", url: None },
-    CreditEntry { name: "Krzysztof Gałka / kshysztof", details: "Debounce and hardware button testing", url: None },
-    CreditEntry { name: "Atax1a", details: "Hardware testing, silicon-errata work, and development support", url: None },
-    CreditEntry { name: "Osresearch / Trammell Hudson", details: "MicroPython porting and power-analysis investigations", url: None },
-    CreditEntry { name: "Alessandro Genova / alesgenova", details: "Counter32, fast stopwatch, optical communications, UltraPatch integration, location faces, and sensor work", url: None },
-    CreditEntry { name: "Ruben Sandwich", details: "Custom display, step-count experimentation, and hardware testing", url: None },
-    CreditEntry { name: "knrd", details: "Step-count algorithms and benchmark testing", url: None },
-    CreditEntry { name: "Gabor / Gugray / eiriksm / soundblaster", details: "Chirpy/Fesk acoustic communications, receiver tools, tone selection, and protocol testing", url: None },
-    CreditEntry { name: "Jim di Griz", details: "Battery-drain and low-voltage investigations", url: None },
-    CreditEntry { name: "Faldor20", details: "Dive-computer and pressure-sensor experiments", url: None },
-    CreditEntry { name: "Nima Kalantar", details: "Prayer-times face work", url: None },
-    CreditEntry { name: "Ucodia", details: "Flowtime face", url: None },
-    CreditEntry { name: "Ganapati", details: "Custom faces and metronome work", url: None },
-    CreditEntry { name: "Aron Hegedus", details: "Sea Shanty face", url: None },
-    CreditEntry { name: "Alessandro and community testers", details: "Dynamic tunes, hourly chimes, and acoustic-transfer experiments", url: None },
-    CreditEntry { name: "James / wryun", details: "Calculator, builder, and simulator/tooling discussions", url: None },
-    CreditEntry { name: "Jeremy", details: "Custom-display simulator and build integration", url: None },
-    CreditEntry { name: "Fgergo, Crim, Jack, Alexis Philip, Michael Shriver, Benny Blue, Monican, Cyberdeath, and Agent-E11", details: "Faces, TOTP/HOTP, display mappings, Rust/Zig experiments, builders, documentation, and review", url: None },
+    CreditEntry {
+        name: "ZeptoBars / BarsMonster",
+        details: "Precision timing, frequency correction, temperature compensation, RTC investigations, power profiling, and UltraPatch",
+        url: None,
+    },
+    CreditEntry {
+        name: "Tahnok",
+        details: "Watch faces, framework work, background tasks, testing, and simulator discussions",
+        url: None,
+    },
+    CreditEntry {
+        name: "WJHRDY",
+        details: "Wyoscan face and low-energy animation work",
+        url: None,
+    },
+    CreditEntry {
+        name: "Neutralinsomniac",
+        details: "Smallchess/chess face and engine integration",
+        url: None,
+    },
+    CreditEntry {
+        name: "Austen Adler / austenadler",
+        details: "Early Rust integration experiments",
+        url: None,
+    },
+    CreditEntry {
+        name: "Wesleyac",
+        details: "Link-time optimization and review/merge assistance",
+        url: None,
+    },
+    CreditEntry {
+        name: "Matheus Moreira",
+        details: "Feature integration, structured TOTP, deadline/USB/clock work, testing coordination, and preserved attribution",
+        url: None,
+    },
+    CreditEntry {
+        name: "Voloved / Devolov / devolov",
+        details: "DST/UTZ, sunrise/sunset, step-count, quiet-hours, LED, battery, and display work",
+        url: None,
+    },
+    CreditEntry {
+        name: "Krzysztof Gałka / kshysztof",
+        details: "Debounce and hardware button testing",
+        url: None,
+    },
+    CreditEntry {
+        name: "Atax1a",
+        details: "Hardware testing, silicon-errata work, and development support",
+        url: None,
+    },
+    CreditEntry {
+        name: "Osresearch / Trammell Hudson",
+        details: "MicroPython porting and power-analysis investigations",
+        url: None,
+    },
+    CreditEntry {
+        name: "Alessandro Genova / alesgenova",
+        details: "Counter32, fast stopwatch, optical communications, UltraPatch integration, location faces, and sensor work",
+        url: None,
+    },
+    CreditEntry {
+        name: "Ruben Sandwich",
+        details: "Custom display, step-count experimentation, and hardware testing",
+        url: None,
+    },
+    CreditEntry {
+        name: "knrd",
+        details: "Step-count algorithms and benchmark testing",
+        url: None,
+    },
+    CreditEntry {
+        name: "Gabor / Gugray / eiriksm / soundblaster",
+        details: "Chirpy/Fesk acoustic communications, receiver tools, tone selection, and protocol testing",
+        url: None,
+    },
+    CreditEntry {
+        name: "Jim di Griz",
+        details: "Battery-drain and low-voltage investigations",
+        url: None,
+    },
+    CreditEntry {
+        name: "Faldor20",
+        details: "Dive-computer and pressure-sensor experiments",
+        url: None,
+    },
+    CreditEntry {
+        name: "Nima Kalantar",
+        details: "Prayer-times face work",
+        url: None,
+    },
+    CreditEntry {
+        name: "Ucodia",
+        details: "Flowtime face",
+        url: None,
+    },
+    CreditEntry {
+        name: "Ganapati",
+        details: "Custom faces and metronome work",
+        url: None,
+    },
+    CreditEntry {
+        name: "Aron Hegedus",
+        details: "Sea Shanty face",
+        url: None,
+    },
+    CreditEntry {
+        name: "Alessandro and community testers",
+        details: "Dynamic tunes, hourly chimes, and acoustic-transfer experiments",
+        url: None,
+    },
+    CreditEntry {
+        name: "James / wryun",
+        details: "Calculator, builder, and simulator/tooling discussions",
+        url: None,
+    },
+    CreditEntry {
+        name: "Jeremy",
+        details: "Custom-display simulator and build integration",
+        url: None,
+    },
+    CreditEntry {
+        name: "Fgergo, Crim, Jack, Alexis Philip, Michael Shriver, Benny Blue, Monican, Cyberdeath, and Agent-E11",
+        details: "Faces, TOTP/HOTP, display mappings, Rust/Zig experiments, builders, documentation, and review",
+        url: None,
+    },
 ];
 
 const TOOL_CREDITS: &[CreditEntry] = &[
@@ -690,6 +794,7 @@ impl Default for StudioApp {
             ntp_servers: Vec::new(),
             ntp_edit_name: String::new(),
             ntp_edit_host: String::new(),
+            ntp_edit_index: None,
             ntp_time: None,
             ntp_ping: 0.0,
             ntp_offset: 0.0,
@@ -1438,7 +1543,9 @@ impl eframe::App for StudioApp {
                                         ));
                                     }
                                     Err(error) => {
-                                        let message = format!("Deleted face {name}, but module cleanup failed: {error}");
+                                        let message = format!(
+                                            "Deleted face {name}, but module cleanup failed: {error}"
+                                        );
                                         self.status = message.clone();
                                         self.log_error(&message);
                                     }
@@ -1809,16 +1916,41 @@ impl StudioApp {
                         ui.text_edit_singleline(&mut self.ntp_edit_name);
                         ui.label("Host:");
                         ui.text_edit_singleline(&mut self.ntp_edit_host);
-                        if ui.button("Add").clicked() {
+                        let editing = self.ntp_edit_index.is_some();
+                        if ui.button(if editing { "Save" } else { "Add" }).clicked() {
                             let name = self.ntp_edit_name.trim().to_string();
                             let host = self.ntp_edit_host.trim().to_string();
-                            if !name.is_empty() && !host.is_empty() {
+                            if name.is_empty() || host.is_empty() {
+                                self.status = "NTP name and host are required".to_string();
+                            } else if let Some(index) = self.ntp_edit_index {
+                                if let Some(server) = self.ntp_servers.get_mut(index) {
+                                    *server = (name, host);
+                                    self.status = "Custom NTP server updated".to_string();
+                                    self.log.log("Updated custom NTP server");
+                                    self.ntp_edit_index = None;
+                                    self.ntp_edit_name.clear();
+                                    self.ntp_edit_host.clear();
+                                    self.save_settings_internal();
+                                } else {
+                                    self.ntp_edit_index = None;
+                                    self.status = "NTP server no longer exists".to_string();
+                                }
+                            } else if self.ntp_servers.len() >= MAX_CUSTOM_NTP_SERVERS {
+                                self.status = format!(
+                                    "Custom NTP server limit reached ({MAX_CUSTOM_NTP_SERVERS})"
+                                );
+                            } else {
                                 self.ntp_servers.push((name, host));
                                 self.ntp_edit_name.clear();
                                 self.ntp_edit_host.clear();
                                 self.log.log("Added custom NTP server");
                                 self.save_settings_internal();
                             }
+                        }
+                        if editing && ui.button("Cancel").clicked() {
+                            self.ntp_edit_index = None;
+                            self.ntp_edit_name.clear();
+                            self.ntp_edit_host.clear();
                         }
                     });
                     // List custom servers with edit/delete.
@@ -1829,7 +1961,7 @@ impl StudioApp {
                             if ui.small_button("Edit").clicked() {
                                 self.ntp_edit_name = name.clone();
                                 self.ntp_edit_host = host.clone();
-                                to_delete = Some(i); // reuse: remove then re-add on Add
+                                self.ntp_edit_index = Some(i);
                             }
                             if ui.small_button("Del").clicked() {
                                 to_delete = Some(i);
@@ -1838,10 +1970,15 @@ impl StudioApp {
                     }
                     if let Some(i) = to_delete {
                         if i < self.ntp_servers.len() {
+                            let absolute_index = ntp::SERVERS.len() + i;
                             self.ntp_servers.remove(i);
-                            if self.ntp_server >= ntp::SERVERS.len() + self.ntp_servers.len() {
-                                self.ntp_server = 0;
+                            if self.ntp_edit_index == Some(i) {
+                                self.ntp_edit_index = None;
+                                self.ntp_edit_name.clear();
+                                self.ntp_edit_host.clear();
                             }
+                            self.ntp_server =
+                                selection_after_custom_ntp_removal(self.ntp_server, absolute_index);
                             self.log.log("Removed custom NTP server");
                             self.save_settings_internal();
                         }
@@ -3260,7 +3397,8 @@ impl StudioApp {
                                 }
                                 Err(e) => {
                                     let path = editor::face_path(&name).display().to_string();
-                                    self.status = format!("Face saved but registration failed: {e}");
+                                    self.status =
+                                        format!("Face saved but registration failed: {e}");
                                     self.log_error(&format!(
                                         "Face saved to {path} but not yet registered \
                                          (manual step needed): {e}"
@@ -3303,7 +3441,9 @@ impl StudioApp {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() {
                     self.pending_confirm = Some((
-                        format!("Delete face '{name}'? This deletes the file from the firmware project."),
+                        format!(
+                            "Delete face '{name}'? This deletes the file from the firmware project."
+                        ),
                         ConfirmKind::DeleteFaceFile(name),
                     ));
                 }
@@ -4726,7 +4866,8 @@ impl StudioApp {
             ) {
                 Ok(matches) if matches.is_empty() => format!(
                     "No source location matched {} under {}. Check that the source tree matches the ELF build.",
-                    self.panic_fingerprint_input.trim(), root.display()
+                    self.panic_fingerprint_input.trim(),
+                    root.display()
                 ),
                 Ok(matches) => matches
                     .iter()
@@ -6905,6 +7046,9 @@ impl StudioApp {
         self.presets.clamp_active();
         self.ntp_server = s.ntp_server;
         self.ntp_servers = s.ntp_servers;
+        self.ntp_edit_index = None;
+        self.ntp_edit_name.clear();
+        self.ntp_edit_host.clear();
         self.sim_scale = s.sim_scale;
         self.watch_config = s.watch_config;
         self.text_size = s.text_size;
@@ -7825,7 +7969,17 @@ fn is_valid_sha256(value: &str) -> bool {
     value.len() == 64 && value.is_ascii() && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-/// Clears a reference that is no longer safe to use after a refresh starts or fails.
+/// Returns the selected combined-server index after removing one custom server.
+fn selection_after_custom_ntp_removal(selected: usize, removed: usize) -> usize {
+    if selected == removed {
+        0
+    } else if selected > removed {
+        selected - 1
+    } else {
+        selected
+    }
+}
+
 fn invalidate_ntp_reference(ntp_time: &mut Option<u64>, ntp_ping: &mut f64, ntp_offset: &mut f64) {
     *ntp_time = None;
     *ntp_ping = 0.0;
@@ -7837,6 +7991,13 @@ mod tests {
     use super::{
         credit_matches, first_run_start_panel, CreditEntry, Panel, CREDIT_GROUPS, FIRST_RUN_STEPS,
     };
+
+    #[test]
+    fn removing_a_custom_ntp_server_preserves_or_resets_selection() {
+        assert_eq!(super::selection_after_custom_ntp_removal(2, 2), 0);
+        assert_eq!(super::selection_after_custom_ntp_removal(4, 2), 3);
+        assert_eq!(super::selection_after_custom_ntp_removal(1, 2), 1);
+    }
 
     #[test]
     fn failed_ntp_refresh_cannot_leave_a_stale_reference() {

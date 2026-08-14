@@ -218,8 +218,8 @@ and its real-face coverage are available through Studio's default `real-faces`
 feature because it requires the firmware host lib to compile as a host
  dependency. If the feature is disabled, the Simulator falls back to the
  hand-written `face_sim` engine. This remains host-side coverage, not physical
- hardware validation. The current workspace baseline is 279 passing host tests:
-106 firmware host-seam, 67 core, 90 Studio, and 16 tools. None of these totals
+ hardware validation. The current workspace baseline is 284 passing host tests:
+109 firmware host-seam, 67 core, 94 Studio, and 14 tools. None of these totals
 represent on-silicon validation.
 
 ## Dependencies
