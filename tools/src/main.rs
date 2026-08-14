@@ -195,6 +195,7 @@ mod tests {
             tools::trusted_release_status(Some(&"a".repeat(64))),
             "matched"
         );
+        assert_eq!(tools::trusted_release_status(Some("not-a-hash")), "invalid");
     }
 
     #[test]
@@ -238,12 +239,40 @@ mod tests {
     }
 
     #[test]
+    fn manifest_write_does_not_leave_json_when_sidecar_is_blocked() {
+        let root = temp_dir("sidecar-preflight");
+        fs::create_dir_all(&root).unwrap();
+        let manifest_path = root.join("good.uf2.json");
+        let sidecar = manifest_path.with_extension("json.sig");
+        fs::write(&sidecar, b"preserve\n").unwrap();
+        let artifact = root.join("good.uf2");
+        fs::write(&artifact, fixture()).unwrap();
+        let manifest = tools::create_manifest(&artifact, None, None).unwrap();
+        assert!(tools::write_manifest(&manifest_path, &manifest).is_err());
+        assert!(!manifest_path.exists());
+        assert_eq!(fs::read(&sidecar).unwrap(), b"preserve\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn existing_rollback_destination_is_not_overwritten() {
         let root = temp_dir("rollback");
         fs::create_dir_all(&root).unwrap();
         let destination = root.join("staged.uf2");
         fs::write(&destination, b"do not replace").unwrap();
         assert_eq!(fs::read(&destination).unwrap(), b"do not replace");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn conversion_creates_missing_output_parent() {
+        let root = temp_dir("nested-output");
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("firmware.bin");
+        let output = root.join("nested/firmware.uf2");
+        fs::write(&input, b"firmware").unwrap();
+        tools::convert_uf2(&input, &output).unwrap();
+        assert!(output.is_file());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -259,6 +288,21 @@ mod tests {
         assert_eq!(fs::read(&output).unwrap(), b"do not replace");
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn rollback_stages_the_verified_snapshot() {
+        let root = temp_dir("rollback-snapshot");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.uf2");
+        let staged = root.join("nested/staged.uf2");
+        let bytes = fixture();
+        fs::write(&source, &bytes).unwrap();
+        let trusted = tools::sha256(&bytes);
+        let manifest = tools::rollback_uf2(&source, &staged, &trusted).unwrap();
+        assert_eq!(fs::read(&staged).unwrap(), bytes);
+        assert_eq!(tools::manifest_value(&manifest, "sha256"), trusted);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn backup_manifest_matches_the_single_snapshot_written() {
         let root = temp_dir("backup-consistency");

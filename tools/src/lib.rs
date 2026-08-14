@@ -139,8 +139,7 @@ pub fn sign_manifest(manifest: &Manifest) -> String {
     manifest_digest(manifest)
 }
 
-pub fn inspect_uf2(path: &Path) -> ToolResult<Uf2Inspection> {
-    let data = read_file(path, MAX_UF2_BYTES)?;
+fn inspect_data(path: &Path, data: Vec<u8>) -> ToolResult<Uf2Inspection> {
     if data.is_empty() || !data.len().is_multiple_of(UF2_BLOCK_SIZE) {
         return Err(format!(
             "UF2 is {} bytes; expected a non-empty multiple of 512",
@@ -153,6 +152,10 @@ pub fn inspect_uf2(path: &Path) -> ToolResult<Uf2Inspection> {
         image: parsed.image,
         block_count: parsed.block_count,
     })
+}
+
+pub fn inspect_uf2(path: &Path) -> ToolResult<Uf2Inspection> {
+    inspect_data(path, read_file(path, MAX_UF2_BYTES)?)
 }
 
 fn manifest_from_inspection(
@@ -254,11 +257,23 @@ fn signature_path(path: &Path) -> PathBuf {
 }
 
 pub fn write_manifest(path: &Path, m: &Manifest) -> ToolResult<()> {
+    let sidecar = signature_path(path);
+    // Preflight both paths so a pre-existing sidecar cannot leave behind a
+    // manifest that claims to have been written successfully.
+    for output in [path, sidecar.as_path()] {
+        if fs::symlink_metadata(output).is_ok() {
+            return Err(format!(
+                "refusing to overwrite existing file: {}",
+                output.display()
+            ));
+        }
+    }
     write_json(path, &Value::Object(m.clone()))?;
-    write_text_new(
-        &signature_path(path),
-        &(manifest_digest_value(m).to_owned() + "\n"),
-    )
+    if let Err(error) = write_text_new(&sidecar, &(manifest_digest_value(m).to_owned() + "\n")) {
+        let _ = remove_regular_file(path);
+        return Err(error);
+    }
+    Ok(())
 }
 pub fn write_binary(path: &Path, data: &[u8]) -> ToolResult<()> {
     if let Ok(metadata) = fs::symlink_metadata(path)
@@ -268,6 +283,10 @@ pub fn write_binary(path: &Path, data: &[u8]) -> ToolResult<()> {
             "refusing non-regular output path: {}",
             path.display()
         ));
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|e| format!("cannot create output directory {}: {e}", parent.display()))?;
     }
     fs::OpenOptions::new()
         .write(true)
@@ -290,10 +309,12 @@ fn manifest_digest_value(m: &Manifest) -> &str {
 /// Checks only the optional trusted release provenance. A missing value is
 /// deliberately not treated as authenticity; callers should report it.
 pub fn trusted_release_status(trusted: Option<&str>) -> &'static str {
-    if trusted.is_some() {
-        "matched"
-    } else {
-        "not provided"
+    match trusted {
+        None => "not provided",
+        Some(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
+            "matched"
+        }
+        Some(_) => "invalid",
     }
 }
 
@@ -309,12 +330,14 @@ fn trusted_match(m: &Manifest, trusted: Option<&str>) -> ToolResult<()> {
     }
     Ok(())
 }
-pub fn verify_uf2(
+fn verify_snapshot(
     path: &Path,
+    data: Vec<u8>,
     manifest_path: Option<&Path>,
     trusted: Option<&str>,
 ) -> ToolResult<Manifest> {
     let manifest_was_supplied = manifest_path.is_some();
+    let inspected = inspect_data(path, data)?;
     let mpath = manifest_path
         .map(PathBuf::from)
         .unwrap_or_else(|| path.with_extension("uf2.json"));
@@ -333,7 +356,7 @@ pub fn verify_uf2(
         }
         Ok(_) => {}
         Err(e) if e.kind() == std::io::ErrorKind::NotFound && !manifest_was_supplied => {
-            let m = create_manifest(path, None, None)?;
+            let m = manifest_from_inspection(&inspected, None, path);
             trusted_match(&m, trusted)?;
             return Ok(m);
         }
@@ -343,7 +366,13 @@ pub fn verify_uf2(
         Err(e) => return Err(format!("cannot inspect manifest {}: {e}", mpath.display())),
     }
     let m = load_manifest(&mpath)?;
+    if let (Some(digest), Some(signature)) = (m.get("manifest_digest"), m.get("signature"))
+        && digest != signature
+    {
+        return Err("manifest digest fields disagree".into());
+    }
     if manifest_value(&m, "format") != MANIFEST_FORMAT
+        || manifest_digest_value(&m).is_empty()
         || manifest_digest_value(&m) != manifest_digest(&m)
     {
         return Err("manifest local digest is invalid".into());
@@ -352,7 +381,8 @@ pub fn verify_uf2(
     if std::str::from_utf8(&sidecar).map(str::trim).ok() != Some(manifest_digest_value(&m)) {
         return Err("manifest digest sidecar is invalid".into());
     }
-    let actual = create_manifest(path, Some(manifest_value(&m, "generation_id")), None)?;
+    let actual =
+        manifest_from_inspection(&inspected, Some(manifest_value(&m, "generation_id")), path);
     trusted_match(&actual, trusted)?;
     for key in [
         "format",
@@ -379,6 +409,20 @@ pub fn verify_uf2(
     }
     Ok(m)
 }
+
+pub fn verify_uf2(
+    path: &Path,
+    manifest_path: Option<&Path>,
+    trusted: Option<&str>,
+) -> ToolResult<Manifest> {
+    verify_snapshot(
+        path,
+        read_file(path, MAX_UF2_BYTES)?,
+        manifest_path,
+        trusted,
+    )
+}
+
 pub fn convert_uf2(input: &Path, output: &Path) -> ToolResult<()> {
     let data = read_file(input, MAX_APPLICATION_BYTES)?;
     let out = uf2::convert_to_uf2(&data);
@@ -413,16 +457,18 @@ pub fn backup_uf2(src: &Path, dst: &Path) -> ToolResult<Manifest> {
     Ok(m)
 }
 pub fn rollback_uf2(src: &Path, dst: &Path, trusted: &str) -> ToolResult<Manifest> {
-    let m = verify_uf2(src, None, Some(trusted))?;
+    // Verify and stage the same source snapshot. A second read here could
+    // produce a rollback artifact different from the trusted artifact.
+    let data = read_file(src, MAX_UF2_BYTES)?;
+    let m = verify_snapshot(src, data.clone(), None, Some(trusted))?;
     if dst.exists() || dst.is_symlink() {
         return Err("refusing to overwrite existing rollback staging path".into());
     }
     if let Some(p) = dst.parent() {
         fs::create_dir_all(p).map_err(|e| e.to_string())?;
     }
-    let data = read_file(src, MAX_UF2_BYTES)?;
     write_binary(dst, &data)?;
-    inspect_uf2(dst)?;
+    inspect_data(dst, data)?;
     Ok(m)
 }
 pub fn recovery_report(path: &Path, trusted: &str) -> ToolResult<Value> {
@@ -598,10 +644,7 @@ pub fn build_firmware() -> ToolResult<BuildResult> {
         let backup = dir
             .join("recovery/generations")
             .join(format!("{}.uf2", now_nanos()));
-        let m = create_manifest(&uf2_path, None, Some(&backup))?;
-        fs::create_dir_all(backup.parent().unwrap()).map_err(|e| e.to_string())?;
-        fs::copy(&uf2_path, &backup).map_err(|e| e.to_string())?;
-        write_manifest(&backup.with_extension("uf2.json"), &m)?;
+        backup_uf2(&uf2_path, &backup)?;
     }
     let image = read_file(&bin, MAX_APPLICATION_BYTES)?;
     let encoded = uf2::convert_to_uf2(&image);
