@@ -1194,7 +1194,8 @@ impl eframe::App for StudioApp {
             }
         }
 
-        // Top navigation bar.
+        // Top navigation bar. Keep the title/update controls separate from the
+        // tab layout so scrolling owns the full available tab width.
         egui::TopBottomPanel::top("nav").show(ctx, |ui| {
             ui.horizontal(|ui| {
                 // Clicking the title opens the project's GitHub repo.
@@ -1218,10 +1219,9 @@ impl eframe::App for StudioApp {
                     }
                     ui.separator();
                 }
-                self.tab_bar(ui);
-                // Update notification.
+                // Update notification stays in the control row, never beside
+                // or inside the scrollable tab strip.
                 if let Some(commit) = &self.latest_commit {
-                    ui.separator();
                     let ts = self.update_time.map(|t| {
                         let secs = (t as i64).rem_euclid(86400);
                         let h = (secs / 3600) % 24;
@@ -1239,6 +1239,8 @@ impl eframe::App for StudioApp {
                         );
                 }
             });
+            ui.separator();
+            self.tab_bar(ui);
         });
 
         // Status bar at the bottom.
