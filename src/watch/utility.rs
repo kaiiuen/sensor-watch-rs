@@ -173,7 +173,8 @@ pub fn convert_to_unix_time(
     timestamp += hour as i64 * 3600;
     timestamp += minute as i64 * 60;
     timestamp += second as i64;
-    timestamp -= utc_offset as i64;
+    // Offsets may be negative values encoded through the legacy u32 API.
+    timestamp -= (utc_offset as i32) as i64;
 
     timestamp as u32
 }
@@ -208,7 +209,7 @@ pub fn date_time_from_unix_time(timestamp: u32, utc_offset: u32) -> DateTime {
     };
     const DAYS_IN_MONTH: [i64; 12] = [31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31, 29];
 
-    let timestamp = timestamp as i64 + utc_offset as i64;
+    let timestamp = timestamp as i64 + (utc_offset as i32) as i64;
 
     let secs = timestamp - LEAPOCH;
     let mut days = secs / 86400;

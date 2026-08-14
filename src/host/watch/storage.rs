@@ -199,9 +199,19 @@ pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
     let Some(entry) = find_last_entry(None, 0, WEAR_ROWS) else {
         return false;
     };
-    offset
-        .checked_add(entry.data_offset)
-        .is_some_and(|offset| read(entry.row, offset, buffer))
+    valid_entry_read(entry, offset, buffer.len())
+        && read(entry.row, entry.data_offset + offset, buffer)
+}
+
+fn valid_entry_read(entry: WearEntry, offset: u32, len: usize) -> bool {
+    let Ok(len) = u32::try_from(len) else {
+        return false;
+    };
+    entry
+        .data_offset
+        .checked_add(offset)
+        .and_then(|start| start.checked_add(len))
+        .is_some_and(|end| end <= ROW_SIZE)
 }
 
 fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
@@ -229,9 +239,10 @@ fn read_owned_legacy(namespace: u32, offset: u32, buffer: &mut [u8], entry: Wear
     if offset != 0 || buffer.len() < core::mem::size_of::<u32>() {
         return false;
     }
-    let Some(data_offset) = entry.data_offset.checked_add(offset) else {
+    if !valid_entry_read(entry, offset, buffer.len()) {
         return false;
-    };
+    }
+    let data_offset = entry.data_offset + offset;
     let mut stored_magic = [0u8; 4];
     if !read(entry.row, data_offset, &mut stored_magic) || u32::from_le_bytes(stored_magic) != magic
     {
@@ -272,9 +283,8 @@ pub fn wear_leveled_read_namespaced(namespace: u32, offset: u32, buffer: &mut [u
         return false;
     };
     if let Some(entry) = find_last_entry(Some(namespace), row_start, row_count) {
-        return offset
-            .checked_add(entry.data_offset)
-            .is_some_and(|offset| read(entry.row, offset, buffer));
+        return valid_entry_read(entry, offset, buffer.len())
+            && read(entry.row, entry.data_offset + offset, buffer);
     }
 
     // Only expose an old record when its payload explicitly claims this
@@ -328,6 +338,18 @@ mod tests {
         assert!(read(31, 254, &mut readback));
         assert_eq!(readback, [1, 2]);
         assert!(!write(31, 255, &[1, 2]));
+    }
+
+    #[test]
+    fn wear_level_read_cannot_cross_the_committed_row() {
+        let _lock = TestLock::acquire();
+        for row in 0..WEAR_ROWS {
+            assert!(erase(row));
+        }
+        unsafe { WEAR_ROW = 0 };
+        assert!(wear_leveled_write(0, &[0xA5]));
+        let mut readback = [0; ROW_SIZE as usize];
+        assert!(!wear_leveled_read(0, &mut readback));
     }
 
     #[test]

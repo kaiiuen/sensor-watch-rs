@@ -408,11 +408,21 @@ pub fn wear_leveled_read(offset: u32, buffer: &mut [u8]) -> bool {
     let Some(entry) = find_last_entry(None, 0, WEAR_ROWS) else {
         return false;
     };
-    let data_offset = match offset.checked_add(entry.data_offset) {
-        Some(offset) => offset,
-        None => return false,
+    if !valid_entry_read(entry, offset, buffer.len()) {
+        return false;
+    }
+    read(entry.row, entry.data_offset + offset, buffer)
+}
+
+fn valid_entry_read(entry: WearEntry, offset: u32, len: usize) -> bool {
+    let Ok(len) = u32::try_from(len) else {
+        return false;
     };
-    read(entry.row, data_offset, buffer)
+    entry
+        .data_offset
+        .checked_add(offset)
+        .and_then(|start| start.checked_add(len))
+        .is_some_and(|end| end <= ROW_SIZE)
 }
 
 fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
@@ -443,10 +453,10 @@ fn read_owned_legacy(namespace: u32, offset: u32, buffer: &mut [u8], entry: Wear
     if offset != 0 || buffer.len() < core::mem::size_of::<u32>() {
         return false;
     }
-    let data_offset = match entry.data_offset.checked_add(offset) {
-        Some(offset) => offset,
-        None => return false,
-    };
+    if !valid_entry_read(entry, offset, buffer.len()) {
+        return false;
+    }
+    let data_offset = entry.data_offset + offset;
     let mut stored_magic = [0u8; 4];
     if !read(entry.row, data_offset, &mut stored_magic) || u32::from_le_bytes(stored_magic) != magic
     {
@@ -492,11 +502,10 @@ pub fn wear_leveled_read_namespaced(namespace: u32, offset: u32, buffer: &mut [u
         return false;
     };
     if let Some(entry) = find_last_entry(Some(namespace), row_start, row_count) {
-        let data_offset = match offset.checked_add(entry.data_offset) {
-            Some(offset) => offset,
-            None => return false,
-        };
-        return read(entry.row, data_offset, buffer);
+        if !valid_entry_read(entry, offset, buffer.len()) {
+            return false;
+        }
+        return read(entry.row, entry.data_offset + offset, buffer);
     }
 
     // Upgrade compatibility is deliberately limited to an owned legacy

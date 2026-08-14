@@ -173,7 +173,8 @@ pub fn convert_to_unix_time(
     timestamp += hour as i64 * 3600;
     timestamp += minute as i64 * 60;
     timestamp += second as i64;
-    timestamp -= utc_offset as i64;
+    // Offsets may be negative values encoded through the legacy u32 API.
+    timestamp -= (utc_offset as i32) as i64;
 
     timestamp as u32
 }
@@ -208,7 +209,7 @@ pub fn date_time_from_unix_time(timestamp: u32, utc_offset: u32) -> DateTime {
     };
     const DAYS_IN_MONTH: [i64; 12] = [31, 30, 31, 30, 31, 31, 30, 31, 30, 31, 31, 29];
 
-    let timestamp = timestamp as i64 + utc_offset as i64;
+    let timestamp = timestamp as i64 + (utc_offset as i32) as i64;
 
     let secs = timestamp - LEAPOCH;
     let mut days = secs / 86400;
@@ -378,12 +379,20 @@ mod tests {
 
     #[test]
     fn timezone_conversion() {
-        // 12:00 UTC -> 07:00 EST (UTC-5, i.e. -300 min = -18000 s).
-        // A positive utc_offset means the local time is ahead of UTC.
         let d = dt(2025, 1, 1, 12, 0, 0);
-        // Convert from UTC (offset 0) to a zone 5 hours behind (offset -18000).
         let converted = date_time_convert_zone(d, 0, 18000);
         assert_eq!(converted.hour, 17);
+    }
+
+    #[test]
+    fn signed_offset_round_trip_supports_western_zones() {
+        let d = dt(2025, 1, 1, 12, 0, 0);
+        let western = date_time_convert_zone(d, 0, (-5_i32 * 3600) as u32);
+        assert_eq!(western, dt(2025, 1, 1, 7, 0, 0));
+        assert_eq!(
+            date_time_convert_zone(western, (-5_i32 * 3600) as u32, 0),
+            d
+        );
     }
 
     #[test]

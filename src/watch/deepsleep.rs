@@ -66,7 +66,7 @@ pub fn register_extwake_callback(pin: Pin, callback: rtc::Callback, level: bool)
 
     // Disable the RTC.
     rtc_mode2().ctrla().modify(|_, w| w.enable().clear_bit());
-    if wait_until(|| rtc_mode2().syncbusy().read().enable().bit_is_set()).is_err() {
+    if wait_until(|| !rtc_mode2().syncbusy().read().enable().bit_is_set()).is_err() {
         crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
         return;
     }
@@ -221,7 +221,10 @@ pub fn enter_standby() {
 pub fn init_bod33() {
     // BOD33 must be disabled to change its configuration.
     supc().bod33().modify(|_, w| w.enable().clear_bit());
-    while !supc().status().read().b33srdy().bit_is_set() {}
+    if wait_until(|| supc().status().read().b33srdy().bit_is_set()).is_err() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return;
+    }
 
     supc().bod33().modify(|_, w| {
         w.vmon().set_bit(); // monitor VDD
@@ -238,7 +241,10 @@ pub fn init_bod33() {
         w.hyst().clear_bit(); // no hysteresis
         w.enable().set_bit()
     });
-    while !supc().status().read().b33srdy().bit_is_set() {}
+    if wait_until(|| supc().status().read().b33srdy().bit_is_set()).is_err() {
+        crate::movement::fault::record_fault(crate::movement::fault::Fault::RtcLostTime);
+        return;
+    }
 
     // Enable the BOD33 detect interrupt.
     supc().intenset().modify(|_, w| w.bod33det().set_bit());
