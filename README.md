@@ -198,7 +198,7 @@ cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-studio --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch --lib --features hostmock,std
 cargo test -p sensor-watch-tools --target x86_64-pc-windows-msvc
-# Current baseline: 106 firmware + 67 core + 90 Studio + 16 tools = 279 passing tests.
+# Current baseline: 109 firmware + 67 core + 94 Studio + 14 tools = 284 passing tests.
 ```
 
 Lint and format:
@@ -244,8 +244,8 @@ validation.
       UART jig path for command execution.
 - [x] Optical command framing and validation exist as a protocol-only core module.
       no optical receiver integration is claimed.
-- [x] 95 real firmware faces are wired into the Studio host seam, which is
-      enabled by default by Studio's `real-faces` feature. The remaining 16
+- [x] 91 real firmware faces are wired into the Studio host seam, which is
+      enabled by default by Studio's `real-faces` feature. The remaining 20
       firmware faces use the simulated engine; this is host coverage, not
       hardware coverage.
 - [ ] Firmware component profiles for board-wide hardware presets. Studio has
@@ -256,8 +256,8 @@ validation.
 
 ## Status and validation snapshot
 
-- The current host validation passes 106 firmware host-seam tests, 67 core
-  tests, 90 Studio tests, and 16 tools tests, for 279 passing tests total.
+- The current host validation passes 109 firmware host-seam tests, 67 core
+  tests, 94 Studio tests, and 14 tools tests, for 284 passing tests total.
 - `sensor-watch-tools -- build` produces a stock firmware UF2; Studio's
   configured Build & Flash path remains fail-closed until its selections become
   firmware build inputs.
@@ -274,7 +274,9 @@ has been run.
 
 ## Documentation
 
-See [`docs/`](docs/README.md) for the full documentation set:
+See [`docs/`](docs/README.md) for the full documentation set. The latest
+coverage and integration-contract findings are in
+[`docs/COVERAGE_AUDIT.md`](docs/COVERAGE_AUDIT.md):
 
 | Document | Contents |
 |----------|----------|

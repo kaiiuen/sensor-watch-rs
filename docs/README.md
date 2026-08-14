@@ -12,6 +12,7 @@ rewrite in Rust.
 | [POWER.md](POWER.md) | Power-management deep-dive: states, event-driven model, and the control mechanisms. |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to build, test, and contribute, including how to add a new watch face. |
 | [TESTING.md](TESTING.md) | The hardware test plan: power, RTC accuracy, flash wear, faces, faults, and peripherals. |
+| [COVERAGE_AUDIT.md](COVERAGE_AUDIT.md) | Current host test counts, feature-gate combinations, integration failures, and unvalidated boundaries. |
 | [BACKBURNER.md](BACKBURNER.md) | Unfinished work reserved for future implementation. |
 | [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) | How to talk to the board: the USB-is-file-transfer-only constraint, the ROM UF2 bootloader, the UART jig, and the SWD probe. |
 | [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) | Optional on-silicon debugging via SWD / probe-rs for developers with bench hardware. |
