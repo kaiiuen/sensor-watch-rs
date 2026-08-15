@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "arm"))]
+use object::{Object, ObjectSegment};
 use sensor_watch_core::uf2::{
     self, APP_START_ADDR, MAX_APPLICATION_BYTES, SAML22_FAMILY_ID, UF2_BLOCK_SIZE, UF2_PAYLOAD_SIZE,
 };
@@ -210,15 +212,79 @@ pub fn create_manifest(
         artifact.unwrap_or(path),
     ))
 }
+fn ensure_safe_parent(path: &Path) -> ToolResult<()> {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut current = if parent.is_absolute() {
+        PathBuf::from(std::path::MAIN_SEPARATOR.to_string())
+    } else {
+        env::current_dir().map_err(|e| format!("cannot resolve output directory: {e}"))?
+    };
+    for component in parent.components() {
+        match component {
+            std::path::Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            std::path::Component::RootDir => {}
+            std::path::Component::CurDir => {}
+            std::path::Component::ParentDir => {
+                current.pop();
+            }
+            std::path::Component::Normal(name) => current.push(name),
+        }
+        match fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(format!(
+                    "refusing symlinked output directory: {}",
+                    current.display()
+                ));
+            }
+            Ok(metadata) if !metadata.is_dir() => {
+                return Err(format!(
+                    "output parent is not a directory: {}",
+                    current.display()
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(format!(
+                    "cannot inspect output directory {}: {error}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    fs::create_dir_all(parent)
+        .map_err(|e| format!("cannot create output directory {}: {e}", parent.display()))?;
+    // Re-check after creation: create_dir_all follows a path component that
+    // could have been swapped in concurrently.
+    let mut current = if parent.is_absolute() {
+        PathBuf::from(std::path::MAIN_SEPARATOR.to_string())
+    } else {
+        env::current_dir().map_err(|e| format!("cannot resolve output directory: {e}"))?
+    };
+    for component in parent.components() {
+        if let std::path::Component::Normal(name) = component {
+            current.push(name);
+            let metadata = fs::symlink_metadata(&current).map_err(|e| {
+                format!("cannot inspect output directory {}: {e}", current.display())
+            })?;
+            if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                return Err(format!(
+                    "refusing unsafe output directory: {}",
+                    current.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn write_json(path: &Path, value: &Value) -> ToolResult<()> {
+    ensure_safe_parent(path)?;
     if path.exists() || path.is_symlink() {
         return Err(format!(
             "refusing to overwrite existing file: {}",
             path.display()
         ));
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     let mut file = fs::OpenOptions::new()
         .write(true)
@@ -230,14 +296,12 @@ fn write_json(path: &Path, value: &Value) -> ToolResult<()> {
     Ok(())
 }
 fn write_text_new(path: &Path, text: &str) -> ToolResult<()> {
+    ensure_safe_parent(path)?;
     if path.exists() || path.is_symlink() {
         return Err(format!(
             "refusing to overwrite existing file: {}",
             path.display()
         ));
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::OpenOptions::new()
         .write(true)
@@ -276,6 +340,7 @@ pub fn write_manifest(path: &Path, m: &Manifest) -> ToolResult<()> {
     Ok(())
 }
 pub fn write_binary(path: &Path, data: &[u8]) -> ToolResult<()> {
+    ensure_safe_parent(path)?;
     if let Ok(metadata) = fs::symlink_metadata(path)
         && (metadata.file_type().is_symlink() || !metadata.is_file())
     {
@@ -283,10 +348,6 @@ pub fn write_binary(path: &Path, data: &[u8]) -> ToolResult<()> {
             "refusing non-regular output path: {}",
             path.display()
         ));
-    }
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| format!("cannot create output directory {}: {e}", parent.display()))?;
     }
     fs::OpenOptions::new()
         .write(true)
@@ -312,9 +373,17 @@ pub fn trusted_release_status(trusted: Option<&str>) -> &'static str {
     match trusted {
         None => "not provided",
         Some(value) if value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) => {
-            "matched"
+            // Syntax validation alone cannot establish that a release matches.
+            "provided"
         }
         Some(_) => "invalid",
+    }
+}
+
+fn trusted_release_match_status(manifest: &Manifest, trusted: Option<&str>) -> &'static str {
+    match trusted {
+        Some(value) if trusted_match(manifest, Some(value)).is_ok() => "matched",
+        _ => trusted_release_status(trusted),
     }
 }
 
@@ -448,27 +517,48 @@ pub fn backup_uf2(src: &Path, dst: &Path) -> ToolResult<Manifest> {
     if dst.exists() || dst.is_symlink() {
         return Err("refusing to overwrite existing backup".into());
     }
-    if let Some(p) = dst.parent() {
-        fs::create_dir_all(p).map_err(|e| e.to_string())?;
-    }
     write_binary(dst, &inspected.data)?;
     let m = manifest_from_inspection(&inspected, None, dst);
-    write_manifest(&dst.with_extension("uf2.json"), &m)?;
+    if let Err(error) = write_manifest(&dst.with_extension("uf2.json"), &m) {
+        let _ = remove_regular_file(dst);
+        return Err(error);
+    }
     Ok(m)
 }
 pub fn rollback_uf2(src: &Path, dst: &Path, trusted: &str) -> ToolResult<Manifest> {
     // Verify and stage the same source snapshot. A second read here could
     // produce a rollback artifact different from the trusted artifact.
     let data = read_file(src, MAX_UF2_BYTES)?;
-    let m = verify_snapshot(src, data.clone(), None, Some(trusted))?;
-    if dst.exists() || dst.is_symlink() {
-        return Err("refusing to overwrite existing rollback staging path".into());
+    let mut m = verify_snapshot(src, data.clone(), None, Some(trusted))?;
+    let manifest_path = dst.with_extension("uf2.json");
+    let sidecar_path = signature_path(&manifest_path);
+
+    // Preflight every destination artifact so a pre-existing sidecar cannot
+    // leave a newly staged UF2 or manifest behind.
+    for output in [dst, manifest_path.as_path(), sidecar_path.as_path()] {
+        if fs::symlink_metadata(output).is_ok() {
+            return Err(format!(
+                "refusing to overwrite existing rollback artifact: {}",
+                output.display()
+            ));
+        }
     }
-    if let Some(p) = dst.parent() {
-        fs::create_dir_all(p).map_err(|e| e.to_string())?;
+
+    // `data` is the exact snapshot already validated above. Do not reread the
+    // destination: a replacement between write and reread would turn a
+    // validation check into a race and could make us inspect attacker bytes.
+    if let Err(error) = write_binary(dst, &data) {
+        let _ = remove_regular_file(dst);
+        return Err(error);
     }
-    write_binary(dst, &data)?;
-    inspect_data(dst, data)?;
+
+    // The manifest digest excludes the local artifact path, so retargeting the
+    // verified manifest keeps its content identity while describing staging.
+    m.insert("artifact".into(), dst.display().to_string().into());
+    if let Err(error) = write_manifest(&manifest_path, &m) {
+        let _ = remove_regular_file(dst);
+        return Err(error);
+    }
     Ok(m)
 }
 pub fn recovery_report(path: &Path, trusted: &str) -> ToolResult<Value> {
@@ -478,7 +568,7 @@ pub fn recovery_report(path: &Path, trusted: &str) -> ToolResult<Value> {
     r.insert("artifact".into(), path.display().to_string().into());
     r.insert(
         "trusted_release_sha256".into(),
-        trusted_release_status(Some(trusted)).into(),
+        trusted_release_match_status(&m, Some(trusted)).into(),
     );
     r.insert(
         "generation_id".into(),
@@ -661,6 +751,78 @@ pub fn build_firmware() -> ToolResult<BuildResult> {
     Ok(BuildResult { uf2_path })
 }
 
+#[cfg(not(target_arch = "arm"))]
+pub fn validate_flash_elf(elf: &Path) -> ToolResult<()> {
+    let data = read_file(elf, 16 * 1024 * 1024)?;
+    let file = object::File::parse(data.as_slice())
+        .map_err(|e| format!("{} is not a valid ELF: {e}", elf.display()))?;
+    if file.format() != object::BinaryFormat::Elf {
+        return Err(format!("{} is not an ELF file", elf.display()));
+    }
+    if file.is_64() {
+        return Err("firmware ELF must be 32-bit".into());
+    }
+    if !file.is_little_endian() {
+        return Err("firmware ELF must be little-endian".into());
+    }
+    if file.architecture() != object::Architecture::Arm {
+        return Err("firmware ELF must target ARM".into());
+    }
+
+    let app_start = u64::from(APP_START_ADDR);
+    let app_end = app_start
+        .checked_add(MAX_APPLICATION_BYTES as u64)
+        .ok_or_else(|| "application address range overflowed".to_owned())?;
+    let mut loadable_segments = 0;
+    let mut nonempty_loadable_segments = 0;
+    for segment in file.segments() {
+        loadable_segments += 1;
+        let (file_offset, file_size) = segment.file_range();
+        let memory_size = segment.size();
+        if file_size > memory_size {
+            return Err("ELF loadable segment file size exceeds memory size".into());
+        }
+        let file_end = file_offset
+            .checked_add(file_size)
+            .ok_or_else(|| "ELF loadable segment file range overflowed".to_owned())?;
+        if file_end > data.len() as u64 {
+            return Err("ELF loadable segment file range exceeds ELF data".into());
+        }
+        if memory_size != 0 {
+            nonempty_loadable_segments += 1;
+        }
+
+        let start = segment.address();
+        let end = start
+            .checked_add(memory_size)
+            .ok_or_else(|| "ELF loadable segment address range overflowed".to_owned())?;
+        if start < app_start {
+            return Err(format!(
+                "ELF loadable segment starts at 0x{start:08x}, before application start 0x{APP_START_ADDR:08x}"
+            ));
+        }
+        if end > app_end {
+            return Err(format!(
+                "ELF loadable segment ends at 0x{end:08x}, beyond application end 0x{app_end:08x}"
+            ));
+        }
+    }
+    if loadable_segments == 0 {
+        return Err("ELF has no loadable segments".into());
+    }
+    if nonempty_loadable_segments == 0 {
+        return Err("ELF has no non-empty loadable segments".into());
+    }
+
+    let entry = file.entry();
+    if entry < app_start || entry >= app_end {
+        return Err(format!(
+            "ELF entry point 0x{entry:08x} is outside application range 0x{APP_START_ADDR:08x}..0x{app_end:08x}"
+        ));
+    }
+    Ok(())
+}
+
 pub fn flash_firmware(elf: &Path) -> ToolResult<()> {
     match fs::symlink_metadata(elf) {
         Ok(metadata) if metadata.file_type().is_symlink() => {
@@ -678,6 +840,8 @@ pub fn flash_firmware(elf: &Path) -> ToolResult<()> {
         Ok(_) => {}
         Err(e) => return Err(format!("firmware ELF not found at {}: {e}", elf.display())),
     }
+    #[cfg(not(target_arch = "arm"))]
+    validate_flash_elf(elf)?;
     let mut c = Command::new("probe-rs");
     c.args([
         "run",
@@ -777,5 +941,121 @@ mod workspace_tests {
             .unwrap();
         assert!(trusted_runtime_root(&root, &trusted).is_none());
         fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[cfg(all(test, not(target_arch = "arm")))]
+mod elf_validation_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static NEXT_PATH: AtomicUsize = AtomicUsize::new(0);
+
+    fn fixture(entry: u32, segment_start: u32, segment_size: u32, machine: u16) -> Vec<u8> {
+        let mut elf = vec![0u8; 0x104];
+        elf[0..4].copy_from_slice(b"\x7fELF");
+        elf[4] = 1; // ELFCLASS32
+        elf[5] = 1; // ELFDATA2LSB
+        elf[6] = 1; // EV_CURRENT
+        elf[16..18].copy_from_slice(&2u16.to_le_bytes()); // ET_EXEC
+        elf[18..20].copy_from_slice(&machine.to_le_bytes());
+        elf[24..28].copy_from_slice(&entry.to_le_bytes());
+        elf[28..32].copy_from_slice(&52u32.to_le_bytes()); // e_phoff
+        elf[40..42].copy_from_slice(&52u16.to_le_bytes());
+        elf[42..44].copy_from_slice(&32u16.to_le_bytes());
+        elf[44..46].copy_from_slice(&1u16.to_le_bytes());
+        elf[52..56].copy_from_slice(&1u32.to_le_bytes()); // PT_LOAD
+        elf[56..60].copy_from_slice(&0x100u32.to_le_bytes());
+        elf[60..64].copy_from_slice(&segment_start.to_le_bytes());
+        elf[64..68].copy_from_slice(&segment_start.to_le_bytes());
+        elf[68..72].copy_from_slice(&4u32.to_le_bytes());
+        elf[72..76].copy_from_slice(&segment_size.to_le_bytes());
+        elf[76..80].copy_from_slice(&5u32.to_le_bytes());
+        elf[80..84].copy_from_slice(&4u32.to_le_bytes());
+        elf[0x100..0x104].copy_from_slice(&[0, 0, 0, 0]);
+        elf
+    }
+
+    fn check(data: &[u8]) -> ToolResult<()> {
+        let path = env::temp_dir().join(format!(
+            "sensor-watch-structural-validation-{}-{}.elf",
+            std::process::id(),
+            NEXT_PATH.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, data).unwrap();
+        let result = validate_flash_elf(&path);
+        fs::remove_file(path).unwrap();
+        result
+    }
+
+    #[test]
+    fn accepts_valid_arm_elf_fixture() {
+        assert_eq!(
+            check(&fixture(APP_START_ADDR, APP_START_ADDR, 4, 40)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn rejects_non_elf_and_wrong_targets() {
+        assert!(check(b"not an elf").is_err());
+        assert!(check(&fixture(APP_START_ADDR, APP_START_ADDR, 4, 3)).is_err());
+        let mut big_endian = fixture(APP_START_ADDR, APP_START_ADDR, 4, 40);
+        big_endian[5] = 2;
+        assert!(check(&big_endian).is_err());
+        let mut elf64 = fixture(APP_START_ADDR, APP_START_ADDR, 4, 40);
+        elf64[4] = 2;
+        assert!(check(&elf64).is_err());
+    }
+
+    #[test]
+    fn rejects_missing_or_out_of_range_loadable_segments() {
+        let mut no_segments = fixture(APP_START_ADDR, APP_START_ADDR, 4, 40);
+        no_segments[44..46].copy_from_slice(&0u16.to_le_bytes());
+        assert!(check(&no_segments).is_err());
+        assert!(check(&fixture(APP_START_ADDR, APP_START_ADDR - 1, 4, 40)).is_err());
+        let end = APP_START_ADDR + MAX_APPLICATION_BYTES as u32;
+        assert!(check(&fixture(APP_START_ADDR, end, 1, 40)).is_err());
+    }
+
+    #[test]
+    fn rejects_malformed_loadable_segment_file_ranges() {
+        let mut filesz_exceeds_memsz = fixture(APP_START_ADDR, APP_START_ADDR, 4, 40);
+        filesz_exceeds_memsz[68..72].copy_from_slice(&5u32.to_le_bytes());
+        assert_eq!(
+            check(&filesz_exceeds_memsz),
+            Err("ELF loadable segment file size exceeds memory size".into())
+        );
+
+        let mut file_range_exceeds_elf = fixture(APP_START_ADDR, APP_START_ADDR, 4, 40);
+        file_range_exceeds_elf[56..60].copy_from_slice(&0x103u32.to_le_bytes());
+        assert_eq!(
+            check(&file_range_exceeds_elf),
+            Err("ELF loadable segment file range exceeds ELF data".into())
+        );
+
+        let mut file_range_offset_overflows = fixture(APP_START_ADDR, APP_START_ADDR, 4, 40);
+        file_range_offset_overflows[56..60].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert_eq!(
+            check(&file_range_offset_overflows),
+            Err("ELF loadable segment file range exceeds ELF data".into())
+        );
+    }
+
+    #[test]
+    fn rejects_only_zero_sized_loadable_segments() {
+        let mut zero_sized = fixture(APP_START_ADDR, APP_START_ADDR, 0, 40);
+        zero_sized[68..72].copy_from_slice(&0u32.to_le_bytes());
+        assert_eq!(
+            check(&zero_sized),
+            Err("ELF has no non-empty loadable segments".into())
+        );
+    }
+
+    #[test]
+    fn rejects_entry_outside_application_range() {
+        let end = APP_START_ADDR + MAX_APPLICATION_BYTES as u32;
+        assert!(check(&fixture(APP_START_ADDR - 1, APP_START_ADDR, 4, 40)).is_err());
+        assert!(check(&fixture(end, APP_START_ADDR, 4, 40)).is_err());
     }
 }

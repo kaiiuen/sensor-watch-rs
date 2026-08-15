@@ -73,7 +73,11 @@ fn main() -> ExitCode {
             }
             eprintln!(
                 "artifact validation: structural and local digest checks passed; trusted release SHA-256: {}",
-                tools::trusted_release_status(trusted.as_deref())
+                if trusted.is_some() {
+                    "matched"
+                } else {
+                    "not provided"
+                }
             );
             print_manifest(&result);
         }
@@ -193,7 +197,7 @@ mod tests {
         assert_eq!(tools::trusted_release_status(None), "not provided");
         assert_eq!(
             tools::trusted_release_status(Some(&"a".repeat(64))),
-            "matched"
+            "provided"
         );
         assert_eq!(tools::trusted_release_status(Some("not-a-hash")), "invalid");
     }
@@ -216,6 +220,35 @@ mod tests {
         let error =
             tools::verify_uf2(&artifact, Some(&manifest_path), Some(&"0".repeat(64))).unwrap_err();
         assert!(error.contains("trusted release SHA-256"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verification_rejects_conflicting_manifest_digests() {
+        let root = temp_dir("conflicting-digest");
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("good.uf2");
+        fs::write(&artifact, fixture()).unwrap();
+        let manifest_path = root.join("good.uf2.json");
+        let mut manifest = tools::create_manifest(&artifact, None, None).unwrap();
+        manifest.insert("signature".into(), Value::String("0".repeat(64)));
+        assert!(tools::write_manifest(&manifest_path, &manifest).is_ok());
+        let error = tools::verify_uf2(&artifact, Some(&manifest_path), None).unwrap_err();
+        assert!(error.contains("disagree"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn verification_rejects_missing_sidecar() {
+        let root = temp_dir("missing-sidecar");
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("good.uf2");
+        fs::write(&artifact, fixture()).unwrap();
+        let manifest_path = root.join("good.uf2.json");
+        let manifest = tools::create_manifest(&artifact, None, None).unwrap();
+        tools::write_manifest(&manifest_path, &manifest).unwrap();
+        fs::remove_file(manifest_path.with_extension("json.sig")).unwrap();
+        assert!(tools::verify_uf2(&artifact, Some(&manifest_path), None).is_err());
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -277,6 +310,19 @@ mod tests {
     }
 
     #[test]
+    fn conversion_refuses_symlinked_parent_output() {
+        let root = temp_dir("symlink-parent");
+        fs::create_dir_all(&root).unwrap();
+        let input = root.join("firmware.bin");
+        let parent = root.join("parent-file");
+        fs::write(&input, b"firmware").unwrap();
+        fs::write(&parent, b"not a directory").unwrap();
+        let output = parent.join("firmware.uf2");
+        assert!(tools::convert_uf2(&input, &output).is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn conversion_refuses_existing_output() {
         let root = temp_dir("no-overwrite");
         fs::create_dir_all(&root).unwrap();
@@ -298,8 +344,48 @@ mod tests {
         fs::write(&source, &bytes).unwrap();
         let trusted = tools::sha256(&bytes);
         let manifest = tools::rollback_uf2(&source, &staged, &trusted).unwrap();
+        let manifest_path = staged.with_extension("uf2.json");
+        let sidecar_path = manifest_path.with_extension("json.sig");
         assert_eq!(fs::read(&staged).unwrap(), bytes);
+        assert!(manifest_path.is_file());
+        assert!(sidecar_path.is_file());
         assert_eq!(tools::manifest_value(&manifest, "sha256"), trusted);
+        tools::verify_uf2(&staged, Some(&manifest_path), Some(&trusted)).unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rollback_cleans_up_uf2_when_manifest_staging_is_blocked() {
+        let root = temp_dir("rollback-cleanup");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.uf2");
+        let staged = root.join("nested/staged.uf2");
+        let manifest_path = staged.with_extension("uf2.json");
+        let sidecar_path = manifest_path.with_extension("json.sig");
+        fs::create_dir_all(manifest_path.parent().unwrap()).unwrap();
+        fs::write(&sidecar_path, b"preserve\n").unwrap();
+        let bytes = fixture();
+        fs::write(&source, &bytes).unwrap();
+        let trusted = tools::sha256(&bytes);
+
+        assert!(tools::rollback_uf2(&source, &staged, &trusted).is_err());
+        assert!(!staged.exists());
+        assert!(!manifest_path.exists());
+        assert_eq!(fs::read(&sidecar_path).unwrap(), b"preserve\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn backup_failure_does_not_leave_a_stale_artifact() {
+        let root = temp_dir("backup-cleanup");
+        fs::create_dir_all(&root).unwrap();
+        let source = root.join("source.uf2");
+        let backup = root.join("recovery/generation.uf2");
+        fs::write(&source, fixture()).unwrap();
+        fs::create_dir_all(backup.parent().unwrap()).unwrap();
+        fs::write(backup.with_extension("uf2.json"), b"stale").unwrap();
+        assert!(tools::backup_uf2(&source, &backup).is_err());
+        assert!(!backup.exists());
         fs::remove_dir_all(root).unwrap();
     }
 
