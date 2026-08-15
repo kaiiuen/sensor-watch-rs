@@ -16,74 +16,64 @@ cargo test -p sensor-watch --lib --features usb-cdc --no-fail-fast
 cargo test -p sensor-watch --lib --features hostmock,std,optical,shell-auth,usb-cdc --no-fail-fast
 ```
 
-The passing default workspace run reported:
+The latest validated standard workspace test run reported:
 
 | Package/path | Tests | Boundary covered |
 |---|---:|---|
-| `sensor-watch` host seam | 109 | Real firmware-face and host HAL seam behavior with `hostmock,std` |
-| `sensor-watch-core` | 67 | Pure date/time, settings, UF2, ECC, transfer, optical, and safety logic |
-| `sensor-watch-studio` | 91 | Studio default path, including the default `real-faces` bridge |
-| `sensor-watch-tools` | 16 | Five library tests and eleven CLI tests |
-| **Total** | **283** | Host/software coverage only |
+| `sensor-watch` host seam (`hostmock,std`) | 121 | Real firmware-face and host HAL seam behavior |
+| `sensor-watch-core` | 69 | Pure date/time, settings, UF2, ECC, transfer, optical, and safety logic |
+| `sensor-watch-studio` default features | 145 | Studio default path, including the default `real-faces` bridge |
+| `sensor-watch-studio` `--no-default-features` | 121 | Covered fallback/simulator path; passing |
+| `sensor-watch-tools` | 30 | Tools library and CLI behavior |
+| `sensor-watch` (`usb-cdc` only) | 1 | USB CDC descriptor-contract coverage |
+| `sensor-watch` (`hostmock,std,optical,shell-auth,usb-cdc`) | 122 | Combined firmware host-contract coverage |
+| **Workspace aggregate** | **365** | Host/software coverage only |
 
-The firmware host-seam run without `std` reports 108 tests; enabling `usb-cdc`
-adds one descriptor-contract test, for 109 in the combined command. These are
-not additional unique behaviors and should not be added to the 283 total.
+The separate command-scoped firmware totals are 1 test for `usb-cdc` only
+and 122 tests for `hostmock,std,optical,shell-auth,usb-cdc`; these are not
+additional tests to add to the 365-test workspace aggregate.
 
 No command in this audit validates real watch silicon, USB enumeration, UART
 wiring, SWD probe behavior, power draw, or physical display/peripheral behavior.
 
 ## Concrete gaps found
 
-### 1. Studio `real-faces` disabled mode is claimed but fails to compile
+### 1. Studio `real-faces` disabled mode is covered
 
 `studio/Cargo.toml` documents `real-faces` as optional, and
 `studio/src/real_face.rs` documents a fallback implementation that returns
-`None` so the simulator can use `face_sim`. The reproducible command:
+`None` so the simulator can use `face_sim`. The current reproducible command:
 
 ```text
-cargo test --manifest-path studio/Cargo.toml --no-default-features --no-fail-fast
+cargo test -p sensor-watch-studio --no-default-features
 ```
 
-fails before tests run because the fallback methods still return
-`RealFaceSnapshot`, while that type is only defined under
-`#[cfg(feature = "real-faces")]`:
+passes, and CI now enforces this no-default-features path immediately after
+the default Studio test.
 
-```text
-error[E0425]: cannot find type `RealFaceSnapshot` in this scope
-studio/src/real_face.rs:899
-studio/src/real_face.rs:929
-studio/src/real_face.rs:900
-```
+Historical context: an earlier audit revision recorded this command as failing
+before tests ran because the fallback methods returned `RealFaceSnapshot` while
+that type was only defined under `#[cfg(feature = "real-faces")]`. That stale
+failure report no longer describes the current status.
 
-**Impact:** the default Studio test suite passes while the advertised fallback
-integration path is unbuildable. The fix belongs in the production seam (make
-the snapshot API available to both configurations or provide an equivalent
-fallback type); it was intentionally not made in this docs/tests-only audit.
+### 2. Feature-contract coverage status
 
-### 2. Feature combinations are not CI-matrix coverage
+CI now makes the documented firmware host contracts explicit. The
+`firmware-host` job checks the `hostmock` compile path without `std`, runs the
+`hostmock,std` seam tests, runs the `hostmock,std,optical` tests, exercises
+shell authorization behavior with `hostmock,std,shell-auth`, and runs the
+combined `hostmock,std,optical,shell-auth,usb-cdc` contract tests.
 
-CI exercises the default Studio feature set and the firmware host seam, but it
-does not build/test the following combinations as explicit jobs:
+The `shell-auth` feature remains a marker for integrations that provide an
+explicit physical-presence/auth hook: no source `cfg(feature = "shell-auth")`
+branch was found, so the CI check covers host shell behavior rather than a
+feature-specific implementation. The existing USB CDC contract remains
+metadata-only and does not validate controller transfers, enumeration,
+suspend/resume, or power behavior, consistent with `docs/USB_CDC.md`.
 
-- Studio `--no-default-features` (currently fails as described above).
-- Firmware host seam with `hostmock` without `std` (the local run passes 108,
-  but CI does not make this contract visible).
-- Firmware host seam with `optical` combined with `hostmock,std` (the local
-  combined command passes, but there is no dedicated regression job).
-- Host compile/test behavior for the marker `shell-auth` feature. The feature
-  is declared in `Cargo.toml`, but no source `cfg(feature = "shell-auth")`
-  branch was found; current shell authorization tests exercise the host seam,
-  not a feature-specific implementation.
-- ARM compile coverage for `defmt-log`. The feature is explicitly ARM-only;
-  host use is rejected by a compile error, but this audit environment did not
-  run the ARM command because the required target/toolchain validation is a
-  separate boundary from host tests.
-
-The existing USB CDC contract is deliberately narrow: `--features usb-cdc`
-checks descriptor constants only. It does not test controller transfers,
-enumeration, suspend/resume, or power behavior, consistent with
-`docs/USB_CDC.md`.
+ARM compile coverage for `defmt-log` is kept as a separate ARM check. The
+feature is explicitly ARM-only; host use is rejected by a compile error. This
+ARM check still does not validate SWD/RTT probe behavior.
 
 ### 3. Claimed behaviors with no host substitute
 
@@ -101,22 +91,25 @@ being covered by the passing test counts:
 
 ## Stale documentation corrected by this audit
 
-- The README baseline was `106 + 67 + 90 + 16 = 279`; the current verified
-  baseline is `109 + 67 + 94 + 14 = 284`.
-- The current Studio mapping uses 95 real firmware faces and 16 simulated
-  faces out of 111.
-- `PROJECT_LOG.md` contains private historical snapshots that are intentionally
-not part of the public validation baseline.
-  real faces). Those entries are retained as dated history, not treated as the
-  current validation contract.
+- The README baseline of `106 + 67 + 90 + 16 = 279` and the later audit
+  snapshot of `109 + 67 + 94 + 14 = 284` are historical totals, not the current
+  validation contract. The latest standard workspace run is `121 + 69 + 145 +
+  30 = 365`; the separate Studio no-default-features run reports 121 tests.
+  The command-scoped firmware runs report 1 test for `usb-cdc` only and 122
+  tests for `hostmock,std,optical,shell-auth,usb-cdc`.
+- The current Studio mapping uses 97 real firmware faces and 14 `face_sim`
+  fallback faces out of 111.
+- `PROJECT_LOG.md` contains historical snapshots that are intentionally not
+  part of the public validation baseline. Those entries are retained as dated
+  history, not treated as the current validation contract.
 
 ## Recommended follow-up gates
 
-1. Fix the `real-faces`-off type-gating failure, then add a CI Studio
-   `--no-default-features` job and a deterministic fallback test asserting
-   `RealFace::new("SIMPLE_CLOCK") == None`.
-2. Add a small CI feature matrix for `hostmock`, `std`, `optical`,
-   `shell-auth`, and `usb-cdc`, distinguishing host contract tests from ARM
-   compile checks.
+1. Keep the CI Studio `--no-default-features` gate and add a deterministic
+   fallback test asserting `RealFace::new("SIMPLE_CLOCK") == None` if that
+   behavior needs an explicit regression contract.
+2. Keep the CI feature-contract checks for `hostmock`, `std`, `optical`,
+   `shell-auth`, and `usb-cdc`, distinguishing host contract tests from the
+   separate ARM `defmt-log` compile check.
 3. Keep physical validation results in `docs/TESTING.md` separate from host
    test counts and record each as PASS, FAIL, NOT AVAILABLE, or NOT TESTED.

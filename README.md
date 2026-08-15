@@ -198,7 +198,7 @@ cargo test -p sensor-watch-core --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch-studio --target x86_64-pc-windows-msvc
 cargo test -p sensor-watch --lib --features hostmock,std
 cargo test -p sensor-watch-tools --target x86_64-pc-windows-msvc
-# Current baseline: 109 firmware + 67 core + 94 Studio + 14 tools = 284 passing tests.
+# Latest validated workspace run: 121 firmware + 69 core + 145 Studio + 30 tools = 365 passing tests.
 ```
 
 Lint and format:
@@ -244,9 +244,9 @@ validation.
       UART jig path for command execution.
 - [x] Optical command framing and validation exist as a protocol-only core module.
       no optical receiver integration is claimed.
-- [x] 91 real firmware faces are wired into the Studio host seam, which is
-      enabled by default by Studio's `real-faces` feature. The remaining 20
-      firmware faces use the simulated engine; this is host coverage, not
+- [x] 97 real firmware faces are wired into the Studio host seam, which is
+      enabled by default by Studio's `real-faces` feature. The remaining 14
+      firmware faces use the `face_sim` fallback; this is host coverage, not
       hardware coverage.
 - [ ] Firmware component profiles for board-wide hardware presets. Studio has
       persisted profile/configuration UI and planning estimates, but profiles do
@@ -256,8 +256,8 @@ validation.
 
 ## Status and validation snapshot
 
-- The current host validation passes 109 firmware host-seam tests, 67 core
-  tests, 94 Studio tests, and 14 tools tests, for 284 passing tests total.
+- The latest validated workspace run passes 121 firmware host-seam tests, 69
+  core tests, 145 Studio tests, and 30 tools tests, for 365 passing tests total.
 - `sensor-watch-tools -- build` produces a stock firmware UF2; Studio's
   configured Build & Flash path remains fail-closed until its selections become
   firmware build inputs.

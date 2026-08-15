@@ -23,6 +23,10 @@ jobs:
         # Debug linking can exceed the device flash budget; check validates the
         # ARM compilation without requiring a debug firmware image.
         run: cargo check --target thumbv6m-none-eabi -p sensor-watch
+      - name: Check firmware (ARM defmt-log)
+        # Structured RTT logging is an ARM-only feature; keep this separate from
+        # host feature-contract tests.
+        run: cargo check --target thumbv6m-none-eabi -p sensor-watch --features defmt-log
       - name: Build firmware (release flash image)
         run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch
       - name: Install binutils for release size check
@@ -75,10 +79,22 @@ jobs:
         with:
           channel: '1.97.1'
       - uses: Swatinem/rust-cache@v2
+      - name: Check firmware hostmock seam
+        # Compile the host mock without std to keep the no_std host contract
+        # visible; this does not validate physical hardware.
+        run: cargo check -p sensor-watch --lib --features hostmock
       - name: Run firmware host-seam tests
         # Exercise real firmware faces through the host mock and std library
         # seam; this does not validate physical hardware.
         run: cargo test -p sensor-watch --lib --features hostmock,std
+      - name: Run firmware host-seam optical tests
+        run: cargo test -p sensor-watch --lib --features hostmock,std,optical
+      - name: Run firmware shell-auth host tests
+        # Shell authorization is host-testable behavior; no physical button or
+        # hardware authorization path is implied by this check.
+        run: cargo test -p sensor-watch --lib --features hostmock,std,shell-auth
+      - name: Run firmware combined host feature tests
+        run: cargo test -p sensor-watch --lib --features hostmock,std,optical,shell-auth,usb-cdc
 
   test:
     name: Test (host)
@@ -114,6 +130,8 @@ jobs:
         run: cargo build -p sensor-watch-studio
       - name: Run Studio tests
         run: cargo test -p sensor-watch-studio
+      - name: Run Studio tests without default features
+        run: cargo test -p sensor-watch-studio --no-default-features
 
   uf2:
     name: Build UF2 artifact
@@ -159,10 +177,9 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run cargo audit
         uses: actions-rust-lang/audit@v1
-        # Report-only: pre-existing advisories must not block unrelated changes.
-        # The action self-installs cargo-audit and posts a findings summary to the
-        # step summary; output is still visible even though the step won't fail.
-        continue-on-error: true
+        # Blocking vulnerability gate: audit failures must fail this job.
+        # Unmaintained-crate warnings remain visible but are nonblocking under the
+        # action's existing warning policy.
         with:
           # Don't auto-create GitHub issues for advisories on this run.
           createIssues: false

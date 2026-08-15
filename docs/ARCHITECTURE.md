@@ -151,9 +151,9 @@ With all 111 faces registered (via the `#[used]` face-retain array), a release
 build is roughly **210-230 KB**, so most of the region is used. Each watch face
 adds roughly 1-3 KB, leaving modest headroom for a few more faces, not dozens.
 Adding faces beyond the current count should be validated against the linker
-region on every build. Studio currently wires 91 of those faces into its
-default-enabled `real-faces` host seam, the remaining 20 faces use the simulated
-engine in Studio.
+region on every build. Studio currently wires 97 of those faces into its
+default-enabled `real-faces` host seam, the remaining 14 faces use the
+`face_sim` fallback engine in Studio.
 
 ### RAM (32 KB)
 
@@ -735,7 +735,7 @@ The project has a CI pipeline (GitHub Actions) that runs on every push:
 - **Studio** - build the GUI companion app
 - **UF2** - assemble the firmware `.uf2` artifact
 
-The core crate currently has 67 passing host tests covering date math, settings
+The core crate currently has 68 passing host tests covering date math, settings
 bit-packing, DateTime pack/unpack, UF2 encoding, ECC, event logging, transfer
 validation, optical protocol validation, and other pure logic. These tests
 caught a real `is_leap` bug. Passing host tests do not validate physical hardware.

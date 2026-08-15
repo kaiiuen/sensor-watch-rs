@@ -112,6 +112,14 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
 - Firmware host-seam tests (`hostmock` + `std`)
 - Core and tooling host tests
 - Format check
+- Cargo audit vulnerability gate (blocking for audit failures; warnings remain
+  visible and nonblocking)
+
+The cargo-audit CI job is a blocking vulnerability gate. Its current
+`cargo audit --no-fetch` status includes known unmaintained-crate warnings but
+no vulnerability failures; warnings remain visible and nonblocking under the
+existing warning policy. Local audit results may differ when the advisory
+ database or network is unavailable.
 
 ---
 
