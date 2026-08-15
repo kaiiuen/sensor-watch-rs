@@ -1,6 +1,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use sha2::{Digest, Sha256};
+
 use crate::progress::{Phase, ProgressSink};
 
 const MAX_INFO_UF2_BYTES: u64 = 16 * 1024;
@@ -22,6 +24,8 @@ pub(crate) enum WatchDriveSelection {
 pub(crate) struct FlashRequest {
     pub(crate) path: PathBuf,
     pub(crate) approved: crate::build::ArtifactInspection,
+    /// Identity observed by the UI when Flash was clicked, if detection was unique.
+    pub(crate) selected_drive: Option<WatchDriveCandidate>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,7 +77,26 @@ impl WorkerState {
 }
 
 pub(crate) fn windows_drive_roots() -> impl Iterator<Item = PathBuf> {
-    ('A'..='Z').map(|drive| PathBuf::from(format!("{drive}:\\")))
+    let roots = ('A'..='Z').map(|drive| PathBuf::from(format!("{drive}:\\")));
+    #[cfg(windows)]
+    {
+        return removable_drive_roots(roots, crate::probe::is_removable_drive).into_iter();
+    }
+    #[cfg(not(windows))]
+    {
+        roots
+    }
+}
+
+fn removable_drive_roots<I, F>(roots: I, is_removable: F) -> Vec<PathBuf>
+where
+    I: IntoIterator<Item = PathBuf>,
+    F: Fn(&Path) -> bool,
+{
+    roots
+        .into_iter()
+        .filter(|root| is_removable(root))
+        .collect()
 }
 
 /// Finds Sensor Watch UF2 drives using one identity predicate for both display
@@ -207,63 +230,9 @@ where
         None,
         None,
     );
-    let inspection = match crate::build::inspect_artifact(&request.path) {
-        Ok(inspection) => {
-            progress.emit(
-                Phase::Revalidation,
-                "UF2, manifest, sidecar, and approval metadata revalidated",
-                None,
-                None,
-            );
-            inspection
-        }
-        Err(error) => {
-            progress.emit(
-                Phase::Failure,
-                format!("Artifact validation failed: {error}"),
-                None,
-                None,
-            );
-            return FlashResult {
-                status: FlashStatus::ArtifactInvalid,
-                message: format!("Refusing to copy invalid artifact: {error}"),
-            };
-        }
-    };
-    if inspection != request.approved {
-        progress.emit(
-            Phase::Failure,
-            "Artifact approval binding failed: artifact changed",
-            None,
-            None,
-        );
-        return FlashResult {
-            status: FlashStatus::ArtifactChanged,
-            message: "Refusing to copy: approved artifact changed since approval".to_string(),
-        };
-    }
-    let data = match std::fs::read(&request.path) {
-        Ok(data) => {
-            progress.emit(
-                Phase::Artifact,
-                format!("Artifact bytes loaded: {} bytes", data.len()),
-                Some(data.len() as u64),
-                Some(data.len() as u64),
-            );
-            data
-        }
-        Err(error) => {
-            progress.emit(
-                Phase::Failure,
-                format!("Artifact read failed: {error}"),
-                None,
-                None,
-            );
-            return FlashResult {
-                status: FlashStatus::ArtifactInvalid,
-                message: format!("Refusing to copy artifact: {error}"),
-            };
-        }
+    let data = match read_verified_artifact(&request, progress, read_file, || {}) {
+        Ok(data) => data,
+        Err(result) => return result,
     };
     match select_watch_drive_with_progress(windows_drive_roots(), progress) {
         WatchDriveSelection::Multiple(count) => {
@@ -287,13 +256,155 @@ where
                 message: "Watch not found (is it in bootloader mode?)".to_string(),
             }
         }
-        WatchDriveSelection::One(candidate) => write_to_drive_with_progress(
-            &candidate.root,
-            &data,
-            |path| std::fs::read(path),
-            progress,
-        ),
+        WatchDriveSelection::One(candidate) => {
+            if let Some(selected_drive) = &request.selected_drive {
+                if !drive_identity_matches(selected_drive, &candidate) {
+                    progress.emit(
+                        Phase::Failure,
+                        "Flash refused: selected drive identity changed",
+                        None,
+                        None,
+                    );
+                    return FlashResult {
+                        status: FlashStatus::Failed,
+                        message:
+                            "Refusing to flash: the selected watch drive changed or was replaced"
+                                .to_string(),
+                    };
+                }
+            }
+            write_to_drive_with_identity(
+                Some(&candidate),
+                &candidate.root,
+                &data,
+                |path| std::fs::read(path),
+                progress,
+            )
+        }
     }
+}
+
+fn read_verified_artifact<R, A>(
+    request: &FlashRequest,
+    progress: &ProgressSink,
+    mut read: R,
+    after_inspection: A,
+) -> Result<Vec<u8>, FlashResult>
+where
+    R: FnMut(&Path) -> std::io::Result<Vec<u8>>,
+    A: FnOnce(),
+{
+    let data = read(&request.path).map_err(|error| {
+        progress.emit(
+            Phase::Failure,
+            format!("Artifact read failed: {error}"),
+            None,
+            None,
+        );
+        FlashResult {
+            status: FlashStatus::ArtifactInvalid,
+            message: format!("Refusing to copy artifact: {error}"),
+        }
+    })?;
+    progress.emit(
+        Phase::Artifact,
+        format!("Artifact bytes loaded: {} bytes", data.len()),
+        Some(data.len() as u64),
+        Some(data.len() as u64),
+    );
+
+    let inspected = crate::build::inspect_artifact(&request.path).map_err(|error| {
+        progress.emit(
+            Phase::Failure,
+            format!("Artifact validation failed: {error}"),
+            None,
+            None,
+        );
+        FlashResult {
+            status: FlashStatus::ArtifactInvalid,
+            message: format!("Refusing to copy invalid artifact: {error}"),
+        }
+    })?;
+    after_inspection();
+    let revalidated = crate::build::inspect_artifact(&request.path).map_err(|error| {
+        progress.emit(
+            Phase::Failure,
+            format!("Artifact revalidation failed: {error}"),
+            None,
+            None,
+        );
+        FlashResult {
+            status: FlashStatus::ArtifactChanged,
+            message: format!("Refusing to copy: approved artifact changed ({error})"),
+        }
+    })?;
+    progress.emit(
+        Phase::Revalidation,
+        "UF2, manifest, sidecar, and approval metadata revalidated",
+        None,
+        None,
+    );
+
+    if inspected != revalidated || revalidated != request.approved {
+        progress.emit(
+            Phase::Failure,
+            "Artifact approval binding failed: artifact or sidecar changed",
+            None,
+            None,
+        );
+        return Err(FlashResult {
+            status: FlashStatus::ArtifactChanged,
+            message: "Refusing to copy: approved artifact or sidecar changed since approval"
+                .to_string(),
+        });
+    }
+
+    let parsed = sensor_watch_core::uf2::validate(&data).map_err(|error| {
+        progress.emit(
+            Phase::Failure,
+            format!("Artifact byte validation failed: {error}"),
+            None,
+            None,
+        );
+        FlashResult {
+            status: FlashStatus::ArtifactChanged,
+            message: format!("Refusing to copy: approved artifact bytes changed ({error})"),
+        }
+    })?;
+    let uf2_sha256 = sha256_hex(&data);
+    let payload_sha256 = sha256_hex(&parsed.image);
+    if !uf2_sha256.eq_ignore_ascii_case(&request.approved.sha256)
+        || !payload_sha256.eq_ignore_ascii_case(&request.approved.payload_sha256)
+        || !uf2_sha256.eq_ignore_ascii_case(&revalidated.sha256)
+        || !payload_sha256.eq_ignore_ascii_case(&revalidated.payload_sha256)
+    {
+        progress.emit(
+            Phase::Failure,
+            "Artifact approval binding failed: UF2 or payload bytes changed",
+            None,
+            None,
+        );
+        return Err(FlashResult {
+            status: FlashStatus::ArtifactChanged,
+            message: "Refusing to copy: approved UF2 or payload bytes changed since approval"
+                .to_string(),
+        });
+    }
+    Ok(data)
+}
+
+fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
+    std::fs::read(path)
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 fn write_to_drive(root: &Path, data: &[u8]) -> FlashResult {
@@ -308,6 +419,19 @@ where
 }
 
 fn write_to_drive_with_progress<F>(
+    root: &Path,
+    data: &[u8],
+    read: F,
+    progress: &ProgressSink,
+) -> FlashResult
+where
+    F: FnMut(&Path) -> std::io::Result<Vec<u8>>,
+{
+    write_to_drive_with_identity(None, root, data, read, progress)
+}
+
+fn write_to_drive_with_identity<F>(
+    candidate: Option<&WatchDriveCandidate>,
     root: &Path,
     data: &[u8],
     mut read: F,
@@ -354,6 +478,38 @@ where
             }
             progress.emit(Phase::Transfer, "Staging previous CURRENT.UF2", None, None);
             std::fs::rename(&dest_path, &backup_path).map_err(classify_io)?;
+        }
+        if let Some(expected) = candidate {
+            let Some(info) = read_info_uf2(root.join("INFO_UF2.TXT")) else {
+                if had_old {
+                    let _ = std::fs::rename(&backup_path, &dest_path);
+                }
+                return Err(FlashResult {
+                    status: FlashStatus::DriveDisappeared,
+                    message: "Refusing to publish: watch identity is unavailable".to_string(),
+                });
+            };
+            let actual = WatchDriveCandidate {
+                root: root.to_path_buf(),
+                info,
+            };
+            if !drive_identity_matches(expected, &actual) {
+                if had_old {
+                    let _ = std::fs::rename(&backup_path, &dest_path);
+                }
+                return Err(FlashResult {
+                    status: FlashStatus::Failed,
+                    message:
+                        "Refusing to publish: the selected watch drive changed or was replaced"
+                            .to_string(),
+                });
+            }
+            progress.emit(
+                Phase::Identity,
+                "INFO_UF2 identity revalidated immediately before publication",
+                None,
+                None,
+            );
         }
         progress.emit(
             Phase::Transfer,
@@ -511,6 +667,10 @@ fn regular_or_absent(path: &Path) -> Result<(), FlashResult> {
     }
 }
 
+fn drive_identity_matches(expected: &WatchDriveCandidate, actual: &WatchDriveCandidate) -> bool {
+    expected == actual && crate::probe::is_watch_info(&actual.info)
+}
+
 fn read_info_uf2(path: PathBuf) -> Option<String> {
     let metadata = std::fs::symlink_metadata(&path).ok()?;
     if metadata.file_type().is_symlink()
@@ -534,6 +694,31 @@ fn read_info_uf2(path: PathBuf) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn removable_root_filter_rejects_fixed_drive_and_accepts_removable_watch() {
+        let fixed = PathBuf::from("C:\\");
+        let removable = temp_drive("removable-watch");
+        std::fs::create_dir_all(&removable).unwrap();
+        std::fs::write(
+            removable.join("INFO_UF2.TXT"),
+            "UF2 Bootloader; Board-ID: Sensor Watch Green",
+        )
+        .unwrap();
+
+        let roots =
+            removable_drive_roots([fixed.clone(), removable.clone()], |root| root == removable);
+        assert_eq!(roots, vec![removable.clone()]);
+        assert_eq!(
+            select_watch_drive(roots),
+            WatchDriveSelection::One(WatchDriveCandidate {
+                root: removable.clone(),
+                info: "UF2 Bootloader; Board-ID: Sensor Watch Green".to_string(),
+            })
+        );
+        assert!(removable_drive_roots([fixed], |_| false).is_empty());
+        let _ = std::fs::remove_dir_all(removable);
+    }
 
     #[test]
     fn cached_selection_is_deterministic_and_ambiguous_is_refused() {
@@ -642,10 +827,17 @@ mod tests {
             manifest_digest: String::new(),
         };
         let handle = std::thread::spawn(move || {
-            flash_with_start(FlashRequest { path, approved }, || {
-                started_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-            })
+            flash_with_start(
+                FlashRequest {
+                    path,
+                    approved,
+                    selected_drive: None,
+                },
+                || {
+                    started_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                },
+            )
         });
 
         // The worker has entered before it attempts to read the missing path.
@@ -654,6 +846,65 @@ mod tests {
         assert!(!handle.is_finished());
         release_tx.send(()).unwrap();
         assert_eq!(handle.join().unwrap().status, FlashStatus::ArtifactInvalid);
+    }
+
+    #[test]
+    fn valid_uf2_replacement_is_rejected_before_drive_writes() {
+        let root = temp_drive("artifact-replacement-race");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("recovery.uf2");
+        let original = sensor_watch_core::uf2::convert_to_uf2(&[0x11; 1024]);
+        let replacement = sensor_watch_core::uf2::convert_to_uf2(&[0x22; 1024]);
+        std::fs::write(&path, &original).unwrap();
+        let manifest =
+            sensor_watch_tools::create_manifest(&path, Some("g-race".into()), Some(&path)).unwrap();
+        sensor_watch_tools::write_manifest(&path.with_extension("uf2.json"), &manifest).unwrap();
+        let request = FlashRequest {
+            path: path.clone(),
+            approved: crate::build::inspect_artifact(&path).unwrap(),
+            selected_drive: None,
+        };
+
+        let result = read_verified_artifact(
+            &request,
+            &ProgressSink::disabled(),
+            |path| std::fs::read(path),
+            || std::fs::write(&path, &replacement).unwrap(),
+        )
+        .unwrap_err();
+
+        assert_eq!(result.status, FlashStatus::ArtifactChanged);
+        assert_eq!(std::fs::read(&path).unwrap(), replacement);
+        assert!(!root.join("CURRENT.UF2").exists());
+        assert!(!root.join(".current.uf2.tmp").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn selected_drive_identity_accepts_unchanged_candidate() {
+        let candidate = WatchDriveCandidate {
+            root: PathBuf::from("E:\\"),
+            info: "UF2 Sensor Watch".to_string(),
+        };
+        assert!(drive_identity_matches(&candidate, &candidate));
+    }
+
+    #[test]
+    fn selected_drive_identity_rejects_changed_metadata_and_replacement_root() {
+        let expected = WatchDriveCandidate {
+            root: PathBuf::from("E:\\"),
+            info: "UF2 Sensor Watch green".to_string(),
+        };
+        let changed_metadata = WatchDriveCandidate {
+            root: expected.root.clone(),
+            info: "UF2 Sensor Watch blue".to_string(),
+        };
+        let replacement = WatchDriveCandidate {
+            root: PathBuf::from("F:\\"),
+            info: expected.info.clone(),
+        };
+        assert!(!drive_identity_matches(&expected, &changed_metadata));
+        assert!(!drive_identity_matches(&expected, &replacement));
     }
 
     fn temp_drive(name: &str) -> PathBuf {

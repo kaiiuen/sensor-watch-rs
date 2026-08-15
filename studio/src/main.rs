@@ -79,11 +79,12 @@ struct StudioApp {
     cached_watch: WatchDriveSelection,
     /// The handle to the background drive detection worker.
     pending_detection: Option<(
+        u64,
         std::thread::JoinHandle<WatchDriveSelection>,
         ProgressReceiver,
     )>,
     /// The handle and bounded progress stream for the background flash worker.
-    pending_flash: Option<(std::thread::JoinHandle<FlashResult>, ProgressReceiver)>,
+    pending_flash: Option<(u64, std::thread::JoinHandle<FlashResult>, ProgressReceiver)>,
     /// The latest user-visible flash/detection event.
     current_progress: Option<ProgressEvent>,
     /// Next operation identifier; IDs make overlapping log streams diagnosable.
@@ -342,6 +343,10 @@ struct StudioApp {
     advanced_mode_confirm: bool,
     /// Most recent physical probe report.
     probe_report: Option<probe::ProbeReport>,
+    /// Background physical probe worker and its nonblocking progress channel.
+    pending_probe: Option<std::thread::JoinHandle<probe::ProbeResult<transport::SerialTransport>>>,
+    probe_progress_rx: Option<std::sync::mpsc::Receiver<probe::ProbeProgress>>,
+    probe_progress: Option<probe::ProbeProgress>,
 }
 
 /// The supported Sensor Watch board revisions.
@@ -952,6 +957,9 @@ impl Default for StudioApp {
             advanced_mode: false,
             advanced_mode_confirm: false,
             probe_report: None,
+            pending_probe: None,
+            probe_progress_rx: None,
+            probe_progress: None,
         };
         app.log.log("Firmware Studio starting");
         // Existing output files are inspection/recovery artifacts, not flashable
@@ -1028,6 +1036,7 @@ impl eframe::App for StudioApp {
             || self.pending_ntp.is_some()
             || self.pending_checksum.is_some()
             || self.pending_update.is_some()
+            || self.pending_probe.is_some()
             || self.pending_detection.is_some()
             || self.pending_flash.is_some()
             || self.beep_armed;
@@ -1071,6 +1080,7 @@ impl eframe::App for StudioApp {
                 || self.pending_ntp.is_some()
                 || self.pending_checksum.is_some()
                 || self.pending_update.is_some()
+                || self.pending_probe.is_some()
                 || self.pending_detection.is_some()
                 || self.pending_flash.is_some();
             if active_workers {
@@ -1088,6 +1098,7 @@ impl eframe::App for StudioApp {
         }
 
         self.poll_flash_workers();
+        self.poll_probe_worker();
         self.invalidate_stale_artifact();
 
         // If a build finished, collect its result.
@@ -1673,19 +1684,36 @@ impl eframe::App for StudioApp {
                         self.save_settings_internal();
                     }
                     ConfirmKind::RunPhysicalProbe => {
-                        if self.advanced_mode {
-                            // Follow-up: probe owns the live, boxed UART transport. Keep this
-                            // synchronous until transport ownership can be moved into a worker
-                            // and returned safely without racing connect/disconnect UI actions.
-                            self.probe_report = Some(probe::run(
-                                self.approved_artifact
-                                    .as_ref()
-                                    .map(|artifact| artifact.path.as_path()),
-                                &self.serial_ports,
-                                self.last_uart_error.as_deref(),
-                                self.uart.as_mut(),
-                            ));
-                            self.status = "Physical probe complete".to_string();
+                        if self.advanced_mode && self.pending_probe.is_none() {
+                            let artifact = self
+                                .approved_artifact
+                                .as_ref()
+                                .map(|artifact| artifact.path.clone());
+                            let ports = self.serial_ports.clone();
+                            let connection_error = self.last_uart_error.clone();
+                            let uart = self.uart.take();
+                            let (progress_tx, progress_rx) = std::sync::mpsc::channel();
+                            let handle = std::thread::spawn(move || {
+                                probe::run(
+                                    artifact.as_deref(),
+                                    &ports,
+                                    connection_error.as_deref(),
+                                    uart,
+                                    move |progress| {
+                                        let _ = progress_tx.send(progress);
+                                    },
+                                )
+                            });
+                            self.probe_progress = Some(probe::ProbeProgress {
+                                completed: 0,
+                                total: probe::COMMAND_COUNT,
+                                message: "Starting physical probe; drive count pending".into(),
+                            });
+                            self.probe_progress_rx = Some(progress_rx);
+                            self.pending_probe = Some(handle);
+                            self.status = "Physical probe running in background".to_string();
+                        } else if self.pending_probe.is_some() {
+                            self.status = "A physical probe is already running".to_string();
                         } else {
                             self.status = "Physical probe requires Advanced mode".to_string();
                         }
@@ -4509,6 +4537,46 @@ impl StudioApp {
         self.status = "Simulated diagnostics complete; no UART hardware queried".to_string();
     }
 
+    fn poll_probe_worker(&mut self) {
+        if let Some(receiver) = &self.probe_progress_rx {
+            while let Ok(progress) = receiver.try_recv() {
+                self.probe_progress = Some(progress);
+            }
+        }
+        let Some(handle) = self.pending_probe.take() else {
+            return;
+        };
+        if !handle.is_finished() {
+            self.pending_probe = Some(handle);
+            return;
+        }
+        self.probe_progress_rx = None;
+        match handle.join() {
+            Ok(result) => {
+                self.probe_report = Some(result.report);
+                match result.connection {
+                    probe::ConnectionState::Connected => {
+                        self.uart = result.transport;
+                        self.transport_mode = transport::TransportMode::UartJig;
+                        self.status = "Physical probe complete".to_string();
+                    }
+                    probe::ConnectionState::Disconnected => {
+                        self.uart = None;
+                        self.transport_mode = transport::TransportMode::Simulated;
+                        self.status =
+                            "Physical probe complete; UART connection was lost".to_string();
+                    }
+                }
+            }
+            Err(_) => {
+                self.status = "Physical probe worker panicked".to_string();
+                self.log_error("Physical probe worker panicked");
+                self.transport_mode = transport::TransportMode::Simulated;
+                self.uart = None;
+            }
+        }
+    }
+
     fn refresh_serial_ports(&mut self) {
         match transport::discover_ports() {
             Ok(ports) => {
@@ -4520,6 +4588,10 @@ impl StudioApp {
     }
 
     fn connect_uart(&mut self) {
+        if self.pending_probe.is_some() {
+            self.status = "UART is busy with the physical probe".to_string();
+            return;
+        }
         let Some(name) = self.selected_serial_port.clone() else {
             self.status = transport::TransportError::NoPortSelected.to_string();
             return;
@@ -4544,6 +4616,10 @@ impl StudioApp {
     }
 
     fn disconnect_uart(&mut self) {
+        if self.pending_probe.is_some() {
+            self.status = "UART is busy with the physical probe".to_string();
+            return;
+        }
         if let Some(uart) = self.uart.take() {
             self.shell_log
                 .log(format!("UART disconnected: {}", uart.port_name()));
@@ -4553,6 +4629,10 @@ impl StudioApp {
     }
 
     fn send_shell_command(&mut self, cmd: &str) {
+        if self.pending_probe.is_some() {
+            self.status = "UART is busy with the physical probe".to_string();
+            return;
+        }
         if self.transport_mode == transport::TransportMode::UartJig {
             let Some(uart) = self.uart.as_mut() else {
                 self.shell_log.log("UART unavailable; command was not sent");
@@ -4589,8 +4669,27 @@ impl StudioApp {
             "Advanced physical probe - USB is UF2 mass storage only; it cannot expose sensors or runtime hardware.",
         );
         ui.label("Simulated mode is not a physical result. The action below never sends mutation commands.");
+        if let Some(progress) = &self.probe_progress {
+            ui.add(
+                egui::ProgressBar::new(if progress.total == 0 {
+                    0.0
+                } else {
+                    progress.completed as f32 / progress.total as f32
+                })
+                .text(format!(
+                    "{} ({}/{})",
+                    progress.message, progress.completed, progress.total
+                )),
+            );
+        }
         ui.horizontal(|ui| {
-            if ui.button("Refresh COM ports").clicked() {
+            if ui
+                .add_enabled(
+                    self.pending_probe.is_none(),
+                    egui::Button::new("Refresh COM ports"),
+                )
+                .clicked()
+            {
                 self.refresh_serial_ports();
             }
             ui.label(format!(
@@ -4607,7 +4706,7 @@ impl StudioApp {
             }
         });
         ui.horizontal(|ui| {
-            let enabled = self.advanced_mode;
+            let enabled = self.advanced_mode && self.pending_probe.is_none();
             if ui.add_enabled(enabled, egui::Button::new("Run physical probe")).clicked() {
                 self.pending_confirm = Some((
                     "Run the physical probe? It will inspect removable drives and send only the read-only commands help, time, events, panic, and optical to the already connected selected UART port.".into(),
@@ -4730,14 +4829,26 @@ impl StudioApp {
                         );
                     }
                 });
-            if ui.button("Refresh").clicked() {
+            if ui
+                .add_enabled(self.pending_probe.is_none(), egui::Button::new("Refresh"))
+                .clicked()
+            {
                 self.refresh_serial_ports();
             }
             if self.uart.is_some() {
-                if ui.button("Disconnect").clicked() {
+                if ui
+                    .add_enabled(
+                        self.pending_probe.is_none(),
+                        egui::Button::new("Disconnect"),
+                    )
+                    .clicked()
+                {
                     self.disconnect_uart();
                 }
-            } else if ui.button("Connect").clicked() {
+            } else if ui
+                .add_enabled(self.pending_probe.is_none(), egui::Button::new("Connect"))
+                .clicked()
+            {
                 self.connect_uart();
             }
         });
@@ -4774,7 +4885,11 @@ impl StudioApp {
                     let resp = ui.text_edit_singleline(&mut self.shell_input);
                     let submitted =
                         resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui.button("Send").clicked() || submitted {
+                    if ui
+                        .add_enabled(self.pending_probe.is_none(), egui::Button::new("Send"))
+                        .clicked()
+                        || (submitted && self.pending_probe.is_none())
+                    {
                         let cmd = self.shell_input.trim().to_string();
                         self.shell_input.clear();
                         self.send_shell_command(&cmd);
@@ -7460,6 +7575,11 @@ impl StudioApp {
         self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
         let (progress, receiver) = progress::channel(operation_id);
         let path = approved.path.clone();
+        let selected_drive = match &self.cached_watch {
+            WatchDriveSelection::One(candidate) => Some(candidate.clone()),
+            WatchDriveSelection::None | WatchDriveSelection::Multiple(_) => None,
+        };
+
         let approved_metadata = build::ArtifactInspection {
             path: path.clone(),
             generation: approved.generation.clone(),
@@ -7475,12 +7595,15 @@ impl StudioApp {
             .log(format!("Attempting to flash {}", path.display()));
         self.flash_log
             .log(format!("Attempting to flash {}", path.display()));
+        self.current_progress = None;
         self.pending_flash = Some((
+            operation_id,
             std::thread::spawn(move || {
                 flash::flash_with_start_progress(
                     FlashRequest {
                         path,
                         approved: approved_metadata,
+                        selected_drive,
                     },
                     || {},
                     &progress,
@@ -7507,7 +7630,9 @@ impl StudioApp {
         let operation_id = self.next_operation_id;
         self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
         let (progress, receiver) = progress::channel(operation_id);
+        self.current_progress = None;
         self.pending_detection = Some((
+            operation_id,
             std::thread::spawn(move || {
                 flash::select_watch_drive_with_progress(flash::windows_drive_roots(), &progress)
             }),
@@ -7542,12 +7667,13 @@ impl StudioApp {
     }
 
     fn poll_flash_workers(&mut self) {
-        if let Some((handle, receiver)) = self.pending_detection.take() {
+        if let Some((operation_id, handle, receiver)) = self.pending_detection.take() {
             self.drain_progress(&receiver);
             if handle.is_finished() {
                 match handle.join() {
                     Ok(selection) => {
                         self.flash_worker_state.finish();
+                        self.clear_completed_progress(operation_id);
                         self.cached_watch = selection;
                         if let WatchDriveSelection::One(candidate) = &self.cached_watch {
                             if let Some(board) = board_from_info(&candidate.info) {
@@ -7564,30 +7690,43 @@ impl StudioApp {
                     }
                     Err(_) => {
                         self.flash_worker_state.finish();
+                        self.clear_completed_progress(operation_id);
                         self.status = "Watch detection worker panicked".to_string();
                     }
                 }
             } else {
-                self.pending_detection = Some((handle, receiver));
+                self.pending_detection = Some((operation_id, handle, receiver));
             }
         }
-        if let Some((handle, receiver)) = self.pending_flash.take() {
+        if let Some((operation_id, handle, receiver)) = self.pending_flash.take() {
             self.drain_progress(&receiver);
             if handle.is_finished() {
                 match handle.join() {
                     Ok(result) => {
                         self.flash_worker_state.finish();
+                        self.clear_completed_progress(operation_id);
                         self.apply_flash_result(result);
                     }
                     Err(_) => {
                         self.flash_worker_state.finish();
+                        self.clear_completed_progress(operation_id);
                         self.status = "Flash worker panicked; no completion is assumed".to_string();
                         self.log_error(&self.status.clone());
                     }
                 }
             } else {
-                self.pending_flash = Some((handle, receiver));
+                self.pending_flash = Some((operation_id, handle, receiver));
             }
+        }
+    }
+
+    fn clear_completed_progress(&mut self, operation_id: u64) {
+        if self
+            .current_progress
+            .as_ref()
+            .is_some_and(|event| event.operation_id == operation_id)
+        {
+            self.current_progress = None;
         }
     }
 
@@ -8427,10 +8566,130 @@ mod tests {
     };
     use super::{handle_sim_button, reset_simulator_button_state, ButtonId, SimAction};
     use crate::components;
-    use crate::flash::select_watch_drive;
+    use crate::flash::{select_watch_drive, FlashResult, FlashStatus};
     use crate::modules;
     use crate::presets::PresetManager;
+    use crate::progress::{self, Phase, ProgressEvent};
     use crate::watch_config;
+
+    fn test_progress_event(operation_id: u64, phase: Phase, message: &str) -> ProgressEvent {
+        ProgressEvent {
+            operation_id,
+            sequence: 0,
+            phase,
+            message: message.to_string(),
+            current: None,
+            total: None,
+        }
+    }
+
+    fn poll_until_flash_workers_finish(app: &mut super::StudioApp) {
+        for _ in 0..1000 {
+            app.poll_flash_workers();
+            if app.pending_detection.is_none() && app.pending_flash.is_none() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        panic!("test worker did not finish");
+    }
+
+    #[test]
+    fn completed_detection_clears_spinner_but_keeps_progress_history() {
+        let mut app = super::StudioApp::default();
+        let operation_id = 41;
+        let (progress, receiver) = progress::channel(operation_id);
+        progress.emit(
+            Phase::Selection,
+            "No Sensor Watch drive selected",
+            Some(0),
+            Some(0),
+        );
+        app.current_progress = Some(test_progress_event(
+            operation_id,
+            Phase::Selection,
+            "No Sensor Watch drive selected",
+        ));
+        assert!(app.flash_worker_state.start_detection());
+        app.pending_detection = Some((
+            operation_id,
+            std::thread::spawn(|| WatchDriveSelection::None),
+            receiver,
+        ));
+
+        poll_until_flash_workers_finish(&mut app);
+
+        assert!(app.current_progress.is_none());
+        assert_eq!(app.flash_worker_state, super::flash::WorkerState::Idle);
+        assert!(app
+            .flash_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("op=41")
+                && entry.message.contains("No Sensor Watch drive selected")));
+    }
+
+    #[test]
+    fn failed_flash_clears_spinner_and_uses_final_result_authority() {
+        let mut app = super::StudioApp::default();
+        let operation_id = 42;
+        let (progress, receiver) = progress::channel(operation_id);
+        progress.emit(Phase::Failure, "transfer failed", None, None);
+        app.current_progress = Some(test_progress_event(
+            operation_id,
+            Phase::Failure,
+            "transfer failed",
+        ));
+        assert!(app.flash_worker_state.start_flash());
+        app.pending_flash = Some((
+            operation_id,
+            std::thread::spawn(|| FlashResult {
+                status: FlashStatus::Failed,
+                message: "final flash failure".to_string(),
+            }),
+            receiver,
+        ));
+
+        poll_until_flash_workers_finish(&mut app);
+
+        assert!(app.current_progress.is_none());
+        assert_eq!(app.status, "final flash failure");
+        assert_eq!(app.flash_worker_state, super::flash::WorkerState::Idle);
+        assert!(app
+            .flash_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("op=42")
+                && entry.message.contains("transfer failed")));
+        assert!(app
+            .flash_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message == "final flash failure"));
+    }
+
+    #[test]
+    fn stale_progress_from_another_operation_is_not_cleared_by_late_completion() {
+        let mut app = super::StudioApp::default();
+        let (progress, receiver) = progress::channel(43);
+        app.current_progress = Some(test_progress_event(44, Phase::Transfer, "new operation"));
+        assert!(app.flash_worker_state.start_detection());
+        app.pending_detection = Some((
+            43,
+            std::thread::spawn(|| WatchDriveSelection::None),
+            receiver,
+        ));
+        drop(progress);
+
+        poll_until_flash_workers_finish(&mut app);
+
+        assert_eq!(
+            app.current_progress
+                .as_ref()
+                .map(|event| event.operation_id),
+            Some(44)
+        );
+    }
 
     #[test]
     fn invalid_simulator_weekday_clamps_without_panicking() {

@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 const MAX_INFO_BYTES: usize = 4096;
 
 const COMMANDS: [&str; 5] = ["help", "time", "events", "panic", "optical"];
+pub(crate) const COMMAND_COUNT: usize = COMMANDS.len();
 const MAX_LOG_LINES: usize = 300;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -82,20 +83,65 @@ impl ProbeReport {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProbeProgress {
+    pub completed: usize,
+    pub total: usize,
+    pub message: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionState {
+    Connected,
+    Disconnected,
+}
+
+pub struct ProbeResult<T> {
+    pub report: ProbeReport,
+    pub transport: Option<T>,
+    pub connection: ConnectionState,
+}
+
+pub trait ProbeTransport: Send {
+    fn port_name(&self) -> &str;
+    fn command(&mut self, command: &str) -> Result<String, crate::transport::TransportError>;
+}
+
+impl ProbeTransport for SerialTransport {
+    fn port_name(&self) -> &str {
+        SerialTransport::port_name(self)
+    }
+
+    fn command(&mut self, command: &str) -> Result<String, crate::transport::TransportError> {
+        SerialTransport::command(self, command)
+    }
+}
+
 #[derive(Debug)]
 struct DriveInfo {
     root: PathBuf,
     info: String,
 }
 
-/// Run all safe checks. No command is sent unless `uart` is already connected
-/// to the port explicitly selected by the user in the UI.
+/// Run all safe checks on an owned transport. No command is sent unless
+/// `uart` was already connected explicitly by the user in the UI.
 pub fn run(
     artifact: Option<&Path>,
     ports: &[PortChoice],
     connection_error: Option<&str>,
-    mut uart: Option<&mut SerialTransport>,
-) -> ProbeReport {
+    uart: Option<SerialTransport>,
+    progress: impl FnMut(ProbeProgress),
+) -> ProbeResult<SerialTransport> {
+    run_with_transport(artifact, ports, connection_error, uart, progress)
+}
+
+pub fn run_with_transport<T: ProbeTransport>(
+    artifact: Option<&Path>,
+    ports: &[PortChoice],
+    connection_error: Option<&str>,
+    mut uart: Option<T>,
+    mut progress: impl FnMut(ProbeProgress),
+) -> ProbeResult<T> {
     let mut report = ProbeReport {
         generated_at: unix_timestamp(),
         ..ProbeReport::default()
@@ -103,6 +149,19 @@ pub fn run(
     report.log("Starting physical probe; USB cannot test sensors or application hardware.");
 
     let drives = enumerate_drives(&mut report);
+    let total = progress_total(drives.len());
+    progress(ProbeProgress {
+        completed: 0,
+        total,
+        message: "Physical probe checks planned".into(),
+    });
+    for (index, drive) in drives.iter().enumerate() {
+        progress(ProbeProgress {
+            completed: index + 1,
+            total,
+            message: format!("Inspected removable drive {}", drive.root.display()),
+        });
+    }
     if drives.is_empty() {
         report.add(
             "USB UF2 bootloader drive",
@@ -201,10 +260,15 @@ pub fn run(
             TestStatus::Pass,
             format!("connected to {port}"),
         );
-        for command in COMMANDS {
-            let Some(serial) = uart.as_deref_mut() else {
+        for (index, command) in COMMANDS.into_iter().enumerate() {
+            let Some(serial) = uart.as_mut() else {
                 break;
             };
+            progress(ProbeProgress {
+                completed: drives.len() + index + 1,
+                total,
+                message: format!("Running UART check: {command}"),
+            });
             report.log(format!("[UART {}] > {command}", serial.port_name()));
             match serial.command(command) {
                 Ok(reply) => {
@@ -213,17 +277,36 @@ pub fn run(
                     report.add(format!("UART read-only command: {command}"), status, reason);
                 }
                 Err(error) => {
+                    let disconnected = error.is_connection_lost();
                     report.log(format!("UART error for {command}: {error}"));
                     report.add(
                         format!("UART read-only command: {command}"),
                         TestStatus::Fail,
                         error.to_string(),
                     );
+                    if disconnected {
+                        uart = None;
+                        break;
+                    }
                 }
             }
         }
     }
-    report
+    progress(ProbeProgress {
+        completed: total,
+        total,
+        message: "Physical probe checks complete".into(),
+    });
+    let connection = if uart.is_some() {
+        ConnectionState::Connected
+    } else {
+        ConnectionState::Disconnected
+    };
+    ProbeResult {
+        report,
+        transport: uart,
+        connection,
+    }
 }
 
 fn classify_command_reply(command: &str, reply: &str) -> (TestStatus, &'static str) {
@@ -237,9 +320,45 @@ fn classify_command_reply(command: &str, reply: &str) -> (TestStatus, &'static s
 }
 
 pub(crate) fn is_watch_info(info: &str) -> bool {
-    let upper = info.to_ascii_uppercase();
-    upper.contains("UF2")
-        && (upper.contains("SENSOR") || upper.contains("SAML22") || upper.contains("2C29472F"))
+    let lines = info
+        .split(['\n', ';'])
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>();
+    let has_uf2_bootloader = lines.iter().any(|line| {
+        let upper = line.to_ascii_uppercase();
+        upper.starts_with("UF2 BOOTLOADER")
+    });
+    let board_id = lines.iter().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        key.trim()
+            .eq_ignore_ascii_case("board-id")
+            .then_some(value.trim())
+    });
+    let family_id = lines.iter().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim().eq_ignore_ascii_case("family-id")
+            || key.trim().eq_ignore_ascii_case("family id"))
+        .then_some(value.trim())
+    });
+    let known_board = board_id.is_some_and(|value| {
+        let upper = value.to_ascii_uppercase();
+        upper.starts_with("SENSOR WATCH") || upper.starts_with("SAML22")
+    });
+    let known_family = family_id.is_some_and(|value| {
+        value
+            .trim_start_matches("0x")
+            .trim_start_matches("0X")
+            .eq_ignore_ascii_case("2C29472F")
+    });
+    (has_uf2_bootloader && (known_board || known_family))
+        || lines
+            .iter()
+            .any(|line| line.eq_ignore_ascii_case("UF2 Sensor Watch"))
+}
+
+fn progress_total(drive_count: usize) -> usize {
+    drive_count + COMMAND_COUNT
 }
 
 fn enumerate_drives(report: &mut ProbeReport) -> Vec<DriveInfo> {
@@ -278,7 +397,7 @@ fn enumerate_drives(report: &mut ProbeReport) -> Vec<DriveInfo> {
 }
 
 #[cfg(windows)]
-fn is_removable_drive(root: &Path) -> bool {
+pub(crate) fn is_removable_drive(root: &Path) -> bool {
     #[link(name = "kernel32")]
     extern "system" {
         fn GetDriveTypeW(root_path_name: *const u16) -> u32;
@@ -305,7 +424,126 @@ impl fmt::Display for TestStatus {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::sync::mpsc;
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
     use std::time::Duration;
+
+    struct BlockingTransport {
+        started: mpsc::Sender<()>,
+        release: Arc<AtomicBool>,
+    }
+
+    impl ProbeTransport for BlockingTransport {
+        fn port_name(&self) -> &str {
+            "fake"
+        }
+
+        fn command(&mut self, _command: &str) -> Result<String, crate::transport::TransportError> {
+            let _ = self.started.send(());
+            while !self.release.load(Ordering::Acquire) {
+                std::thread::yield_now();
+            }
+            Ok("ok".into())
+        }
+    }
+
+    #[test]
+    fn blocking_probe_worker_is_nonblocking_and_rejoins() {
+        let (started_tx, started_rx) = mpsc::channel();
+        let release = Arc::new(AtomicBool::new(false));
+        let worker_release = Arc::clone(&release);
+        let worker = std::thread::spawn(move || {
+            run_with_transport(
+                None,
+                &[PortChoice {
+                    name: "fake".into(),
+                    description: "test".into(),
+                }],
+                None,
+                Some(BlockingTransport {
+                    started: started_tx,
+                    release: worker_release,
+                }),
+                |_| {},
+            )
+        });
+        started_rx
+            .recv_timeout(Duration::from_secs(1))
+            .expect("worker should reach the first command");
+        assert!(
+            !worker.is_finished(),
+            "blocking transport must remain off the caller"
+        );
+        release.store(true, Ordering::Release);
+        let result = worker.join().expect("probe worker should join");
+        assert_eq!(result.connection, ConnectionState::Connected);
+        assert_eq!(
+            result
+                .report
+                .tests
+                .iter()
+                .filter(|test| test.name.starts_with("UART read-only command:"))
+                .count(),
+            5
+        );
+    }
+
+    #[test]
+    fn progress_total_is_drive_count_plus_five_commands() {
+        assert_eq!(progress_total(0), 5);
+        assert_eq!(progress_total(1), 6);
+        assert_eq!(progress_total(3), 8);
+    }
+
+    #[test]
+    fn five_commands_report_the_actual_total_without_uart() {
+        let mut progress = Vec::new();
+        let result = run_with_transport(None, &[], None, None::<BlockingTransport>, |event| {
+            progress.push(event);
+        });
+
+        assert_eq!(result.connection, ConnectionState::Disconnected);
+        let total = progress.first().expect("initial progress").total;
+        assert!(total >= COMMAND_COUNT);
+        assert_eq!(progress.last().map(|event| event.completed), Some(total));
+    }
+
+    #[test]
+    fn five_commands_are_reported_with_a_connected_transport() {
+        let release = Arc::new(AtomicBool::new(true));
+        let (started_tx, _started_rx) = mpsc::channel();
+        let mut progress = Vec::new();
+        let result = run_with_transport(
+            None,
+            &[PortChoice {
+                name: "fake".into(),
+                description: "test".into(),
+            }],
+            None,
+            Some(BlockingTransport {
+                started: started_tx,
+                release,
+            }),
+            |event| progress.push(event),
+        );
+
+        assert_eq!(result.connection, ConnectionState::Connected);
+        assert_eq!(
+            result
+                .report
+                .tests
+                .iter()
+                .filter(|test| test.name.starts_with("UART read-only command:"))
+                .count(),
+            COMMAND_COUNT
+        );
+        let total = progress.first().expect("initial progress").total;
+        assert_eq!(progress.last().map(|event| event.completed), Some(total));
+        assert!(progress.iter().all(|event| event.total == total));
+    }
 
     #[test]
     fn unsupported_optical_response_is_not_available() {
@@ -344,5 +582,9 @@ mod tests {
         assert!(!is_watch_info("UF2 Bootloader; Board-ID: Generic UF2"));
         assert!(!is_watch_info("UF2 Bootloader; Board-ID: Other"));
         assert!(!is_watch_info("UF2 Bootloader; Board-ID: Arduino Zero"));
+        assert!(!is_watch_info(
+            "UF2 Sensor Watch telemetry: this is arbitrary spoofed text"
+        ));
+        assert!(!is_watch_info("UF2; Sensor Watch"));
     }
 }
