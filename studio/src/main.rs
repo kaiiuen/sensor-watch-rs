@@ -19,6 +19,7 @@ mod file_browser;
 mod flash;
 mod fonts;
 mod fuzz;
+mod help;
 mod i18n;
 mod integrity;
 mod modules;
@@ -41,6 +42,7 @@ mod watch_sim;
 mod wiki;
 
 use eframe::egui;
+use help::HelpId;
 use i18n::{tr, Key, Language};
 use presets::PresetManager;
 
@@ -182,6 +184,14 @@ struct StudioApp {
     module_name: String,
     module_target: String,
     module_description: String,
+    /// Contextual help walkthrough currently open, if any.
+    help_open: Option<HelpId>,
+    /// Current step in the open walkthrough.
+    help_step: usize,
+    /// Whether closing the current walkthrough dismisses it for this session.
+    help_dont_show_again: bool,
+    /// Session-only dismissed help IDs; intentionally not persisted.
+    dismissed_help: help::Dismissed,
     /// The latest system resource snapshot for the footer.
     sys_stats: sysstats::SysStats,
     /// The receiver for background system resource samples.
@@ -520,6 +530,27 @@ enum ConfirmKind {
 }
 
 impl Panel {
+    fn help_id(self) -> HelpId {
+        match self {
+            Panel::Dashboard => HelpId::Dashboard,
+            Panel::Faces => HelpId::WatchFaces,
+            Panel::Editor => HelpId::Editor,
+            Panel::Simulator => HelpId::Simulator,
+            Panel::BuildFlash => HelpId::BuildFlash,
+            Panel::Calibration => HelpId::Calibration,
+            Panel::Modules => HelpId::Modules,
+            Panel::Shell => HelpId::ShellAccess,
+            Panel::Diagnostics => HelpId::Diagnostics,
+            Panel::Debug => HelpId::DebugOutput,
+            Panel::Bugs => HelpId::Bugs,
+            Panel::FileBrowser => HelpId::FileBrowser,
+            Panel::Tutorials => HelpId::Tutorials,
+            Panel::Wiki => HelpId::Wiki,
+            Panel::Settings => HelpId::Settings,
+            Panel::Probe => HelpId::ProbeTest,
+        }
+    }
+
     fn label(self, lang: Language) -> &'static str {
         match self {
             Panel::Dashboard => tr(lang, Key::Dashboard),
@@ -870,6 +901,10 @@ impl Default for StudioApp {
             module_name: String::new(),
             module_target: String::new(),
             module_description: String::new(),
+            help_open: None,
+            help_step: 0,
+            help_dont_show_again: false,
+            dismissed_help: help::Dismissed::default(),
             sys_stats: sysstats::SysStats::default(),
             stats_rate_ms: 1000,
             stats_rate_shared: stats_rate_shared.clone(),
@@ -1354,6 +1389,16 @@ impl eframe::App for StudioApp {
             });
             ui.separator();
             self.tab_bar(ui);
+            ui.horizontal(|ui| {
+                let label = format!("? Help: {}", self.current_panel.label(self.language));
+                if ui
+                    .button(label)
+                    .on_hover_text("Open the beginner walkthrough for this panel")
+                    .clicked()
+                {
+                    self.open_help_for(self.current_panel);
+                }
+            });
         });
 
         // Status bar at the bottom.
@@ -1548,6 +1593,7 @@ impl eframe::App for StudioApp {
         if was_simulator && self.current_panel != Panel::Simulator {
             self.cancel_simulator_buttons();
         }
+        self.help_modal(ctx);
 
         if self.advanced_mode_confirm {
             egui::Window::new("Enable Advanced mode?")
@@ -1807,6 +1853,78 @@ impl StudioApp {
         Ok(path)
     }
 
+    fn open_help_for(&mut self, panel: Panel) {
+        self.help_open = Some(panel.help_id());
+        self.help_step = 0;
+        self.help_dont_show_again = false;
+    }
+
+    fn maybe_open_help_for(&mut self, panel: Panel) {
+        if self.help_open.is_none() && !self.dismissed_help.contains(panel.help_id()) {
+            self.open_help_for(panel);
+        }
+    }
+
+    /// Shared contextual walkthrough modal. Dismissal is session-only; the
+    /// checkbox explains that a restart intentionally restores the tutorials.
+    fn help_modal(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.help_open else { return };
+        let tutorial = help::tutorial(id);
+        let step_index = help::step_index(id, self.help_step);
+        self.help_step = step_index;
+        let mut close = false;
+        egui::Window::new(tutorial.title)
+            .collapsible(false)
+            .resizable(true)
+            .default_width(520.0)
+            .show(ctx, |ui| {
+                let step = &tutorial.steps[step_index];
+                ui.heading(step.title);
+                ui.label(step.body);
+                ui.add_space(8.0);
+                ui.label(format!(
+                    "Step {} of {}",
+                    step_index + 1,
+                    tutorial.steps.len()
+                ));
+                ui.checkbox(
+                    &mut self.help_dont_show_again,
+                    "Don't show again this session",
+                );
+                ui.weak("Dismissals reset when Studio restarts.");
+                ui.separator();
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(step_index > 0, egui::Button::new("Previous"))
+                        .clicked()
+                    {
+                        self.help_step = help::previous_index(id, step_index);
+                    }
+                    let is_last = step_index + 1 >= tutorial.steps.len();
+                    if ui
+                        .add_enabled(!is_last, egui::Button::new("Next"))
+                        .clicked()
+                    {
+                        self.help_step = help::next_index(id, step_index);
+                    }
+                    if ui
+                        .button(if is_last { "Finish" } else { "Close" })
+                        .clicked()
+                    {
+                        close = true;
+                    }
+                });
+            });
+        if close {
+            if self.help_dont_show_again {
+                self.dismissed_help.insert(id);
+            }
+            self.help_open = None;
+            self.help_step = 0;
+            self.help_dont_show_again = false;
+        }
+    }
+
     /// Draws the top-level tabs without allowing a narrow window to create a
     /// second, full-width horizontal scrollbar. Estimated widths are based on
     /// the localized label so rows remain stable while the window is resized.
@@ -1934,6 +2052,7 @@ impl StudioApp {
                     .log(format!("Switched to panel {}", panel.label(self.language)));
             }
             self.current_panel = panel;
+            self.maybe_open_help_for(panel);
         }
     }
 
@@ -2380,16 +2499,30 @@ impl StudioApp {
             self.push_terminal("Build or flash already running");
             return;
         }
-        self.snapshot_before("Before build");
-        self.building = true;
-        self.pending_artifact = None;
-        self.pending_artifact_fingerprint = None;
-        self.pending_build_fingerprint = Some(self.build_configuration_fingerprint());
-        self.build_message = tr(self.language, Key::Building).to_string();
+
+        let build_fingerprint = self.build_configuration_fingerprint();
+        let out = std::path::PathBuf::from(self.output_dir.clone());
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
-        let out = std::path::PathBuf::from(self.output_dir.clone());
+        self.reset_compile_session_state(build_fingerprint);
         self.pending_build = Some(std::thread::spawn(move || build::build_firmware(&out)));
+    }
+
+    /// Resets only transient state owned by the next compile session.
+    ///
+    /// This is deliberately called after build preflight and concurrency checks,
+    /// immediately before the worker is spawned. In particular, it does not
+    /// create a restore point or touch the output directory.
+    fn reset_compile_session_state(&mut self, build_fingerprint: String) {
+        self.approved_artifact = None;
+        self.pending_artifact = None;
+        self.pending_artifact_fingerprint = None;
+        self.pending_build_fingerprint = Some(build_fingerprint);
+        self.current_progress = None;
+        self.status = tr(self.language, Key::Building).to_string();
+        self.build_message = self.status.clone();
+        self.building = true;
+        self.cancel_simulator_buttons();
     }
 
     fn build_configuration_fingerprint(&self) -> String {
@@ -3769,6 +3902,7 @@ impl StudioApp {
                                 !artifact_actions_blocked,
                                 egui::Button::new("Approve for this session"),
                             )
+                            .on_hover_text("Approve this inspected artifact only after reviewing its metadata")
                             .clicked()
                         {
                             approve_artifact_state(
@@ -3817,7 +3951,11 @@ impl StudioApp {
                     if self.pending_detection.is_some() {
                         ui.spinner();
                         ui.label("Detecting Sensor Watch drives…");
-                    } else if ui.button("Refresh detection").clicked() && !self.flash_busy() {
+                    } else if ui
+                        .button("Refresh detection")
+                        .on_hover_text("Rescan removable drives; keep only the intended watch in bootloader mode")
+                        .clicked()
+                        && !self.flash_busy() {
                         self.start_watch_detection();
                     }
                 });
@@ -4688,6 +4826,7 @@ impl StudioApp {
                     self.pending_probe.is_none(),
                     egui::Button::new("Refresh COM ports"),
                 )
+                .on_hover_text("Refresh available UART ports")
                 .clicked()
             {
                 self.refresh_serial_ports();
@@ -4707,7 +4846,11 @@ impl StudioApp {
         });
         ui.horizontal(|ui| {
             let enabled = self.advanced_mode && self.pending_probe.is_none();
-            if ui.add_enabled(enabled, egui::Button::new("Run physical probe")).clicked() {
+            if ui
+                .add_enabled(enabled, egui::Button::new("Run physical probe"))
+                .on_hover_text("Run read-only checks; requires a connected UART jig and confirmation")
+                .clicked()
+            {
                 self.pending_confirm = Some((
                     "Run the physical probe? It will inspect removable drives and send only the read-only commands help, time, events, panic, and optical to the already connected selected UART port.".into(),
                     ConfirmKind::RunPhysicalProbe,
@@ -4847,6 +4990,7 @@ impl StudioApp {
                 }
             } else if ui
                 .add_enabled(self.pending_probe.is_none(), egui::Button::new("Connect"))
+                .on_hover_text("Connect to the selected UART jig; USB is UF2 storage, not UART")
                 .clicked()
             {
                 self.connect_uart();
@@ -4887,6 +5031,9 @@ impl StudioApp {
                         resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                     if ui
                         .add_enabled(self.pending_probe.is_none(), egui::Button::new("Send"))
+                        .on_hover_text(
+                            "Send the command to the selected simulated or UART transport",
+                        )
                         .clicked()
                         || (submitted && self.pending_probe.is_none())
                     {
@@ -6830,7 +6977,11 @@ impl StudioApp {
             if ui.button("Export settings JSON").clicked() {
                 self.export_settings();
             }
-            if ui.button("Import settings JSON").clicked() {
+            if ui
+                .button("Import settings JSON")
+                .on_hover_text("Replace settings from clipboard JSON; create a restore point first")
+                .clicked()
+            {
                 self.snapshot_before("Before settings import");
                 self.import_settings();
             }
@@ -6859,10 +7010,18 @@ impl StudioApp {
         for (index, point) in self.restore_store.points.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(format!("{} - {}", point.name, point.timestamp));
-                if ui.small_button("Restore").clicked() {
+                if ui
+                    .small_button("Restore")
+                    .on_hover_text("Replace current settings with this saved restore point")
+                    .clicked()
+                {
                     restore_index = Some(index);
                 }
-                if ui.small_button("Delete").clicked() {
+                if ui
+                    .small_button("Delete")
+                    .on_hover_text("Permanently remove this local restore point")
+                    .clicked()
+                {
                     delete_index = Some(index);
                 }
                 if ui.small_button("Rename").clicked() {
@@ -6881,7 +7040,11 @@ impl StudioApp {
             });
         }
         ui.horizontal(|ui| {
-            if ui.button("Import").clicked() {
+            if ui
+                .button("Import")
+                .on_hover_text("Import a restore point from clipboard JSON")
+                .clicked()
+            {
                 match ui_paste_from_clipboard()
                     .and_then(|j| self.restore_store.import_json(&j).map(|_| j))
                 {
@@ -9319,6 +9482,110 @@ mod tests {
     #[test]
     fn first_run_starts_in_the_blocks_editor() {
         assert_eq!(first_run_start_panel(), Panel::Editor);
+    }
+
+    #[test]
+    fn compile_session_reset_preserves_user_and_recovery_state() {
+        let mut app = super::StudioApp::default();
+        app.language = super::Language::ChineseSimplified;
+        app.editor_source = "unsaved source".to_string();
+        app.output_dir = "user-output".to_string();
+        app.restore_store.points.push(super::restore::RestorePoint {
+            name: "keep me".to_string(),
+            timestamp: 7,
+            settings: super::settings::AppSettings::default(),
+            board: app.board.label().to_string(),
+            active_preset: 0,
+        });
+        let restore_metadata: Vec<(String, u64)> = app
+            .restore_store
+            .points
+            .iter()
+            .map(|point| (point.name.clone(), point.timestamp))
+            .collect();
+        let source = app.editor_source.clone();
+        let output_dir = app.output_dir.clone();
+        let language = app.language;
+
+        app.reset_compile_session_state("new-fingerprint".to_string());
+
+        assert_eq!(app.editor_source, source);
+        assert_eq!(app.output_dir, output_dir);
+        assert_eq!(app.language, language);
+        let current_restore_metadata: Vec<(String, u64)> = app
+            .restore_store
+            .points
+            .iter()
+            .map(|point| (point.name.clone(), point.timestamp))
+            .collect();
+        assert_eq!(current_restore_metadata, restore_metadata);
+    }
+
+    #[test]
+    fn compile_session_reset_invalidates_prior_approval_and_simulator_latches() {
+        let mut app = super::StudioApp::default();
+        app.approved_artifact = Some(ApprovedArtifact::from_inspection(&test_inspection(
+            "approved.uf2",
+        )));
+        app.pending_artifact = Some(test_inspection("pending.uf2"));
+        app.pending_artifact_fingerprint = Some("old-fingerprint".to_string());
+        app.pending_build_fingerprint = Some("stale-build".to_string());
+        app.btn_l_down = true;
+        app.btn_c_hold = 2.0;
+        app.btn_a_events = super::real_face::ButtonEventState::default();
+        app.held_button = Some(super::ButtonId::A);
+        app.watch.light = true;
+
+        app.reset_compile_session_state("new-fingerprint".to_string());
+
+        assert!(app.approved_artifact.is_none());
+        assert!(app.pending_artifact.is_none());
+        assert!(app.pending_artifact_fingerprint.is_none());
+        assert_eq!(
+            app.pending_build_fingerprint.as_deref(),
+            Some("new-fingerprint")
+        );
+        assert!(!app.btn_l_down);
+        assert_eq!(app.btn_c_hold, 0.0);
+        assert_eq!(
+            app.btn_a_events,
+            super::real_face::ButtonEventState::default()
+        );
+        assert!(app.held_button.is_none());
+        assert!(!app.watch.light);
+        assert!(app.building);
+    }
+
+    #[test]
+    fn blocked_build_does_not_reset_compile_session_state() {
+        let mut app = super::StudioApp::default();
+        let approved = ApprovedArtifact::from_inspection(&test_inspection("approved.uf2"));
+        app.approved_artifact = Some(approved.clone());
+        app.pending_artifact = Some(test_inspection("pending.uf2"));
+        app.pending_artifact_fingerprint = Some("old-fingerprint".to_string());
+        app.pending_build_fingerprint = Some("stale-build".to_string());
+        app.btn_l_down = true;
+        app.held_button = Some(super::ButtonId::L);
+        app.watch.light = true;
+        let output_dir = app.output_dir.clone();
+
+        app.start_build();
+
+        assert_eq!(app.approved_artifact, Some(approved));
+        assert!(app.pending_artifact.is_some());
+        assert_eq!(
+            app.pending_artifact_fingerprint.as_deref(),
+            Some("old-fingerprint")
+        );
+        assert_eq!(
+            app.pending_build_fingerprint.as_deref(),
+            Some("stale-build")
+        );
+        assert!(app.btn_l_down);
+        assert_eq!(app.held_button, Some(super::ButtonId::L));
+        assert!(app.watch.light);
+        assert_eq!(app.output_dir, output_dir);
+        assert!(app.pending_build.is_none());
     }
 
     #[test]
