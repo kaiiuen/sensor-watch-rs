@@ -15,6 +15,7 @@ pub struct ProfilePaths {
     pub settings: PathBuf,
     pub restore: PathBuf,
     pub warning: Option<String>,
+    pub isolated_debug: bool,
 }
 
 static ACTIVE: OnceLock<ProfilePaths> = OnceLock::new();
@@ -43,12 +44,13 @@ pub fn normal_config_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-fn paths(root: PathBuf, warning: Option<String>) -> ProfilePaths {
+fn paths(root: PathBuf, warning: Option<String>, isolated_debug: bool) -> ProfilePaths {
     ProfilePaths {
         settings: root.join(SETTINGS_FILE),
         restore: root.join(RESTORE_FILE),
         root,
         warning,
+        isolated_debug,
     }
 }
 
@@ -57,16 +59,18 @@ fn paths(root: PathBuf, warning: Option<String>) -> ProfilePaths {
 pub fn resolve(fresh: bool, executable_identity: Result<String, String>) -> ProfilePaths {
     let normal = normal_config_dir();
     if !cfg!(debug_assertions) || !fresh {
-        return paths(normal, None);
+        return paths(normal, None, false);
     }
     match executable_identity {
         Ok(identity) if !identity.is_empty() => paths(
             normal.join("debug").join(identity),
             Some("Using an executable-isolated debug Studio profile".into()),
+            true,
         ),
         Ok(_) | Err(_) => paths(
             normal.join("debug").join(FAILURE_IDENTITY),
             Some("Studio could not identify this debug executable; using isolated fallback profile debug/identity-unavailable".into()),
+            true,
         ),
     }
 }
@@ -90,7 +94,7 @@ pub fn active() -> ProfilePaths {
     ACTIVE
         .get()
         .cloned()
-        .unwrap_or_else(|| paths(normal_config_dir(), None))
+        .unwrap_or_else(|| paths(normal_config_dir(), None, false))
 }
 
 #[cfg(test)]

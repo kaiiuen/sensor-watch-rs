@@ -540,6 +540,7 @@ enum ConfirmKind {
     DeleteFaceFile(String),
     RemoveModule(String),
     RunPhysicalProbe,
+    ResetTestProfile,
 }
 
 fn panel_for_help_id(id: HelpId) -> Option<Panel> {
@@ -873,6 +874,7 @@ fn credit_matches(entry: &CreditEntry, query: &str) -> bool {
 
 impl Default for StudioApp {
     fn default() -> Self {
+        let bootstrap_preferences = persist::load_runtime_preferences();
         // Shared atomic for the stats sampler's live rate.
         let stats_rate_shared = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1000));
         let mut app = StudioApp {
@@ -1044,11 +1046,13 @@ impl Default for StudioApp {
         app.face_list = faces::discover_faces();
         app.log
             .log(format!("Discovered {} watch faces", app.face_list.len()));
-        // Load persisted settings (language, theme, presets, NTP servers, etc.).
+        // Load active-profile settings, then apply launch preferences from the
+        // unscoped bootstrap file so a new debug executable cannot revert them.
         if let Some(saved) = persist::load() {
             app.apply_settings(saved);
             app.log.log("Loaded persisted settings");
         }
+        app.apply_bootstrap_preferences(&bootstrap_preferences);
         // Auto-fetch the time from the default NTP server (Cloudflare) on launch.
         app.fetch_ntp();
         // Check for updates on launch.
@@ -1180,6 +1184,7 @@ impl eframe::App for StudioApp {
                 self.saved_on_exit = true;
                 self.shutting_down = true;
                 self.save_settings_internal();
+                self.save_bootstrap_preferences();
             }
         }
 
@@ -1780,6 +1785,14 @@ impl eframe::App for StudioApp {
                         self.modules.remove(&name);
                         self.log.log(format!("Removed module {name}"));
                         self.save_settings_internal();
+                    }
+                    ConfirmKind::ResetTestProfile => {
+                        if self.workers_active() {
+                            self.status =
+                                "Reset unavailable while background work is active".into();
+                        } else if test_runtime::active().isolated_debug {
+                            self.reset_test_profile();
+                        }
                     }
                     ConfirmKind::RunPhysicalProbe => {
                         if self.advanced_mode && self.pending_probe.is_none() {
@@ -7060,6 +7073,7 @@ impl StudioApp {
                 );
                 if persist_response.changed() {
                     self.save_settings_unconditionally();
+                    self.save_bootstrap_preferences();
                 }
                 ui.end_row();
 
@@ -7082,11 +7096,28 @@ impl StudioApp {
                 );
                 if profile_response.changed() {
                     self.save_settings_unconditionally();
-                    if let Err(error) = persist::save_toggle_preference(self.fresh_test_executable_profile) {
-                        self.log_error(&format!("Failed to save profile preference: {error}"));
-                    }
+                    self.save_bootstrap_preferences();
                 }
                 ui.end_row();
+
+                if test_runtime::active().isolated_debug {
+                    ui.label("Test profile");
+                    let workers_active = self.workers_active();
+                    let reset = ui.add_enabled(
+                        !workers_active,
+                        egui::Button::new("Reset test profile now"),
+                    );
+                    if reset.clicked() {
+                        self.pending_confirm = Some((
+                            "Reset this isolated debug/test profile to defaults? Restore points, source/editor files, output/UF2/recovery artifacts, and bootstrap preferences will be preserved.".into(),
+                            ConfirmKind::ResetTestProfile,
+                        ));
+                    }
+                    if workers_active {
+                        ui.weak("Finish background work before resetting the test profile");
+                    }
+                    ui.end_row();
+                }
 
                 // Text size.
                 ui.label("Text size");
@@ -7819,7 +7850,82 @@ impl StudioApp {
             .log(format!("Restored restore point {}", point.name));
     }
 
-    /// Persists the current settings to the file next to the executable.
+    fn workers_active(&self) -> bool {
+        self.building
+            || self.pending_build.is_some()
+            || self.pending_ntp.is_some()
+            || self.pending_checksum.is_some()
+            || self.pending_update.is_some()
+            || self.ntp_busy
+            || self.checksum_busy
+            || self.update_checking
+            || self.pending_probe.is_some()
+            || self.pending_detection.is_some()
+            || self.pending_flash.is_some()
+            || self.flash_busy()
+    }
+
+    fn reset_test_profile(&mut self) {
+        if self.workers_active() {
+            self.status = "Reset unavailable while background work is active".into();
+            return;
+        }
+        if !test_runtime::active().isolated_debug {
+            self.status = "Test profile reset is only available for isolated debug profiles".into();
+            return;
+        }
+        let bootstrap = persist::RuntimePreferences {
+            fresh_test_executable_profile: self.fresh_test_executable_profile,
+            persist_user_changes: self.persist_user_changes,
+        };
+        let mut defaults = settings::AppSettings::default();
+        defaults.language = "English".into();
+        defaults.theme = "Dark".into();
+        defaults.component_profiles = components::default_profiles();
+        defaults.persist_user_changes = bootstrap.persist_user_changes;
+        defaults.fresh_test_executable_profile = bootstrap.fresh_test_executable_profile;
+        self.apply_settings(defaults);
+        self.apply_bootstrap_preferences(&bootstrap);
+
+        self.watch = CasioF91W::new();
+        self.face_engine = face_sim::FaceEngine::new("SIMPLE_CLOCK");
+        self.real_face = None;
+        self.active_real_face_name = None;
+        self.active_real_mode_24 = None;
+        self.sim_face_idx = 0;
+        self.sim_year = 2026;
+        self.sim_month = 1;
+        self.sim_day = 1;
+        self.sim_hour = 12;
+        self.sim_minute = 0;
+        self.sim_weekday = 4;
+        self.btn_l_events = real_face::ButtonEventState::default();
+        self.btn_a_events = real_face::ButtonEventState::default();
+        self.cancel_simulator_buttons();
+        self.approved_artifact = None;
+        self.pending_artifact = None;
+        self.pending_artifact_fingerprint = None;
+        self.current_progress = None;
+        self.build_message.clear();
+        self.status = "Isolated test profile reset to defaults".into();
+        self.log.clear();
+        self.tick_log.clear();
+        self.build_log.clear();
+        self.flash_log.clear();
+        self.error_log.clear();
+        self.faces_log.clear();
+        self.sim_log.clear();
+        self.shell_log.clear();
+        self.shell_hw_log.clear();
+        self.terminal_history.clear();
+        self.transport_mode = transport::TransportMode::Simulated;
+        self.uart = None;
+        self.last_uart_error = None;
+        self.save_settings_unconditionally();
+        self.save_bootstrap_preferences();
+    }
+
+    /// Persists the current settings to the active profile.
     fn save_settings_internal(&mut self) {
         if !self.persist_user_changes {
             return;
@@ -7865,9 +7971,9 @@ impl StudioApp {
                 self.push_terminal(format!("Settings persistence failed: {e}"));
             }
         }
+        self.save_bootstrap_preferences();
     }
 
-    /// Exports the settings JSON to the clipboard.
     fn export_settings(&mut self) {
         self.log.log("Settings export: exporting settings JSON");
         self.push_terminal("Settings export: exporting settings JSON");
@@ -7942,6 +8048,20 @@ impl StudioApp {
                 self.status = format!("Failed to read settings from clipboard: {e}");
                 self.log_error(&format!("Failed to read settings from clipboard: {e}"));
             }
+        }
+    }
+
+    fn apply_bootstrap_preferences(&mut self, preferences: &persist::RuntimePreferences) {
+        self.persist_user_changes = preferences.persist_user_changes;
+        self.fresh_test_executable_profile = preferences.fresh_test_executable_profile;
+    }
+
+    fn save_bootstrap_preferences(&mut self) {
+        if let Err(error) = persist::save_toggle_preferences(
+            self.fresh_test_executable_profile,
+            self.persist_user_changes,
+        ) {
+            self.log_error(&format!("Failed to save runtime preferences: {error}"));
         }
     }
 
@@ -8499,14 +8619,10 @@ fn ensure_cli_console() {
 fn ensure_cli_console() {}
 
 fn main() -> eframe::Result<()> {
-    // Read only the normal settings file to discover the profile toggle. The
-    // selected profile is then shared by settings and restore persistence.
-    let bootstrap =
-        persist::load_at(&test_runtime::normal_config_dir().join("studio-settings.json"));
-    let fresh = bootstrap
-        .as_ref()
-        .map(|settings| settings.fresh_test_executable_profile)
-        .unwrap_or(true);
+    // Bootstrap preferences are deliberately unscoped: they must be read
+    // before selecting an executable-hash profile.
+    let bootstrap = persist::load_runtime_preferences();
+    let fresh = bootstrap.fresh_test_executable_profile;
     let profile = test_runtime::initialize(fresh);
     if let Some(warning) = profile.warning.as_deref() {
         eprintln!("{warning}: {}", profile.root.display());
@@ -9970,6 +10086,55 @@ mod tests {
 
         assert!(!app.persist_user_changes);
         assert!(!app.reset_test_session_on_compile);
+    }
+
+    #[test]
+    fn reset_is_guarded_for_normal_profiles_and_does_not_destroy_state() {
+        let mut app = super::StudioApp::default();
+        app.pending_ntp.take();
+        app.pending_update.take();
+        app.ntp_busy = false;
+        app.update_checking = false;
+        app.presets.add_preset("preserve me");
+        let before = app.presets.presets.len();
+        app.reset_test_profile();
+        assert_eq!(app.presets.presets.len(), before);
+        assert!(app
+            .status
+            .contains("only available for isolated debug profiles"));
+    }
+
+    #[test]
+    fn reset_worker_guard_preserves_state_for_all_explicit_worker_flags() {
+        let mut app = super::StudioApp::default();
+        app.language = super::Language::ChineseSimplified;
+        app.watch.light = true;
+        app.status = "before reset".into();
+        app.log.log("preserve log");
+        app.approved_artifact = Some(ApprovedArtifact::from_inspection(&test_inspection(
+            "approved.uf2",
+        )));
+        app.building = true;
+        app.ntp_busy = true;
+        app.checksum_busy = true;
+        app.update_checking = true;
+
+        assert!(app.workers_active());
+        let language = app.language;
+        let light = app.watch.light;
+        let log_len = app.log.entries().len();
+        let approved_artifact = app.approved_artifact.clone();
+
+        app.reset_test_profile();
+
+        assert_eq!(app.language, language);
+        assert_eq!(app.watch.light, light);
+        assert_eq!(app.log.entries().len(), log_len);
+        assert_eq!(app.approved_artifact, approved_artifact);
+        assert_eq!(
+            app.status,
+            "Reset unavailable while background work is active"
+        );
     }
 
     #[test]

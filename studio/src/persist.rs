@@ -9,10 +9,74 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use serde::{Deserialize, Serialize};
+
 use super::settings::AppSettings;
 use super::test_runtime;
 
 const MAX_SETTINGS_BYTES: u64 = 512 * 1024;
+const SETTINGS_FILE: &str = "studio-settings.json";
+const RUNTIME_FILE: &str = "studio-runtime.json";
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct RuntimePreferences {
+    pub fresh_test_executable_profile: bool,
+    pub persist_user_changes: bool,
+}
+
+impl Default for RuntimePreferences {
+    fn default() -> Self {
+        Self {
+            fresh_test_executable_profile: true,
+            persist_user_changes: true,
+        }
+    }
+}
+
+pub fn runtime_path() -> PathBuf {
+    test_runtime::normal_config_dir().join(RUNTIME_FILE)
+}
+
+/// Loads launch preferences before the executable-scoped profile is selected.
+/// Older Studio versions stored these in the normal settings file, so migrate
+/// those values once when the bootstrap file does not exist yet.
+pub fn load_runtime_preferences() -> RuntimePreferences {
+    let path = runtime_path();
+    if let Ok(json) = read_bounded(&path, 16 * 1024) {
+        if let Ok(preferences) = serde_json::from_str::<RuntimePreferences>(&json) {
+            return preferences;
+        }
+    }
+    let migrated = load_at(&test_runtime::normal_config_dir().join(SETTINGS_FILE))
+        .map(|settings| RuntimePreferences {
+            fresh_test_executable_profile: settings.fresh_test_executable_profile,
+            persist_user_changes: settings.persist_user_changes,
+        })
+        .unwrap_or_default();
+    let _ = save_runtime_preferences(&migrated);
+    migrated
+}
+
+/// Writes bootstrap preferences independently of the active profile.
+pub fn save_runtime_preferences(preferences: &RuntimePreferences) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(preferences).map_err(|e| e.to_string())?;
+    save_json_at(&json, &runtime_path())
+}
+
+fn save_json_at(json: &str, path: &Path) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let tmp = path.with_extension("json.tmp");
+    ensure_regular_or_absent(path)?;
+    ensure_regular_or_absent(&tmp)?;
+    if tmp.exists() {
+        std::fs::remove_file(&tmp).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&tmp, json).map_err(|e| e.to_string())?;
+    replace_existing(&tmp, path)
+}
 
 /// Returns the active settings file path. Settings and restore points use the
 /// same profile selected by `test_runtime`.
@@ -79,14 +143,15 @@ pub fn save_at(settings: &AppSettings, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
-/// Updates the launch-time profile toggle in the normal settings namespace.
-/// This keeps the toggle effective even while the current debug binary is
-/// using an isolated profile.
-pub fn save_toggle_preference(enabled: bool) -> Result<(), String> {
-    let path = test_runtime::normal_config_dir().join("studio-settings.json");
-    let mut settings = load_at(&path).unwrap_or_default();
-    settings.fresh_test_executable_profile = enabled;
-    save_at(&settings, &path)
+/// Saves both bootstrap preferences independently of the active profile.
+pub fn save_toggle_preferences(
+    fresh_test_executable_profile: bool,
+    persist_user_changes: bool,
+) -> Result<(), String> {
+    save_runtime_preferences(&RuntimePreferences {
+        fresh_test_executable_profile,
+        persist_user_changes,
+    })
 }
 
 /// Replaces a file on platforms where rename cannot overwrite an existing file.
@@ -148,4 +213,28 @@ fn read_bounded(path: &Path, max_bytes: u64) -> std::io::Result<String> {
     }
     String::from_utf8(bytes)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "settings is not UTF-8"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RuntimePreferences;
+
+    #[test]
+    fn bootstrap_preferences_have_explicit_true_defaults() {
+        let defaults = RuntimePreferences::default();
+        assert!(defaults.fresh_test_executable_profile);
+        assert!(defaults.persist_user_changes);
+    }
+
+    #[test]
+    fn bootstrap_preferences_are_backward_compatible_with_missing_fields() {
+        let loaded: RuntimePreferences = serde_json::from_str("{}").unwrap();
+        assert!(loaded.fresh_test_executable_profile);
+        assert!(loaded.persist_user_changes);
+
+        let loaded: RuntimePreferences =
+            serde_json::from_str(r#"{"fresh_test_executable_profile":false}"#).unwrap();
+        assert!(!loaded.fresh_test_executable_profile);
+        assert!(loaded.persist_user_changes);
+    }
 }
