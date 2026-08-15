@@ -343,6 +343,10 @@ struct StudioApp {
     fuzz_test_result: Option<String>,
     /// Whether the first-run welcome overlay should be shown.
     first_run: bool,
+    /// Whether ordinary Studio changes and close automatically save settings.
+    persist_user_changes: bool,
+    /// Whether a valid build starts with a fresh transient test session.
+    reset_test_session_on_compile: bool,
     /// Whether settings have been persisted on exit (guards against repeats).
     saved_on_exit: bool,
     /// The built-in reference wiki.
@@ -1016,6 +1020,8 @@ impl Default for StudioApp {
             code_view: None,
             fuzz_test_result: None,
             first_run: true,
+            persist_user_changes: true,
+            reset_test_session_on_compile: true,
             saved_on_exit: false,
             wiki: wiki::Wiki::new(),
             line_limit: settings::default_line_limit(),
@@ -2651,7 +2657,11 @@ impl StudioApp {
         let out = std::path::PathBuf::from(self.output_dir.clone());
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
-        self.reset_compile_session_state(build_fingerprint);
+        if self.reset_test_session_on_compile {
+            self.reset_compile_session_state(build_fingerprint);
+        } else {
+            self.begin_compile_session(build_fingerprint);
+        }
         self.pending_build = Some(std::thread::spawn(move || build::build_firmware(&out)));
     }
 
@@ -2660,15 +2670,19 @@ impl StudioApp {
     /// This is deliberately called after build preflight and concurrency checks,
     /// immediately before the worker is spawned. In particular, it does not
     /// create a restore point or touch the output directory.
-    fn reset_compile_session_state(&mut self, build_fingerprint: String) {
-        self.approved_artifact = None;
-        self.pending_artifact = None;
-        self.pending_artifact_fingerprint = None;
+    fn begin_compile_session(&mut self, build_fingerprint: String) {
         self.pending_build_fingerprint = Some(build_fingerprint);
         self.current_progress = None;
         self.status = tr(self.language, Key::Building).to_string();
         self.build_message = self.status.clone();
         self.building = true;
+    }
+
+    fn reset_compile_session_state(&mut self, build_fingerprint: String) {
+        self.approved_artifact = None;
+        self.pending_artifact = None;
+        self.pending_artifact_fingerprint = None;
+        self.begin_compile_session(build_fingerprint);
         self.cancel_simulator_buttons();
     }
 
@@ -7033,6 +7047,29 @@ impl StudioApp {
                     self.save_settings_internal();
                 }
 
+                // Automatic persistence and compile-session behavior.
+                ui.label("Persist user changes")
+                    .on_hover_text("Automatically save ordinary changes and your settings when Studio closes. Explicit Save, Export, and Restore actions still work when this is off.");
+                let persist_response = ui.checkbox(
+                    &mut self.persist_user_changes,
+                    "Save changes automatically",
+                );
+                if persist_response.changed() {
+                    self.save_settings_unconditionally();
+                }
+                ui.end_row();
+
+                ui.label("Reset test session on compile")
+                    .on_hover_text("After a valid build check passes, clear temporary simulator/test-session state before compiling. Your settings, source, presets, restore points, logs, output files, and Cargo caches are not removed.");
+                let reset_response = ui.checkbox(
+                    &mut self.reset_test_session_on_compile,
+                    "Start each compile with a fresh test session",
+                );
+                if reset_response.changed() {
+                    self.save_settings_unconditionally();
+                }
+                ui.end_row();
+
                 // Text size.
                 ui.label("Text size");
                 ui.horizontal(|ui| {
@@ -7676,6 +7713,8 @@ impl StudioApp {
             self.component_profile,
             self.tab_layout,
             self.tab_overflow,
+            self.persist_user_changes,
+            self.reset_test_session_on_compile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7725,6 +7764,8 @@ impl StudioApp {
             self.component_profile,
             self.tab_layout,
             self.tab_overflow,
+            self.persist_user_changes,
+            self.reset_test_session_on_compile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7752,6 +7793,7 @@ impl StudioApp {
         self.presets.active = point
             .active_preset
             .min(self.presets.presets.len().saturating_sub(1));
+        self.save_settings_unconditionally();
         self.status = format!("Restored {}", point.name);
         self.log
             .log(format!("Restored restore point {}", point.name));
@@ -7759,6 +7801,14 @@ impl StudioApp {
 
     /// Persists the current settings to the file next to the executable.
     fn save_settings_internal(&mut self) {
+        if !self.persist_user_changes {
+            return;
+        }
+        self.save_settings_unconditionally();
+    }
+
+    /// Performs an explicit settings save, including when automatic persistence is off.
+    fn save_settings_unconditionally(&mut self) {
         let settings = settings::AppSettings::capture(
             self.language,
             self.theme,
@@ -7781,6 +7831,8 @@ impl StudioApp {
             self.component_profile,
             self.tab_layout,
             self.tab_overflow,
+            self.persist_user_changes,
+            self.reset_test_session_on_compile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7820,6 +7872,8 @@ impl StudioApp {
             self.component_profile,
             self.tab_layout,
             self.tab_overflow,
+            self.persist_user_changes,
+            self.reset_test_session_on_compile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7903,6 +7957,8 @@ impl StudioApp {
         self.component_draft =
             components::selected_config(&self.component_profiles, self.component_profile);
         self.first_run = s.first_run;
+        self.persist_user_changes = s.persist_user_changes;
+        self.reset_test_session_on_compile = s.reset_test_session_on_compile;
         self.advanced_mode = s.advanced_mode;
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
@@ -9830,6 +9886,54 @@ mod tests {
         assert!(app.held_button.is_none());
         assert!(!app.watch.light);
         assert!(app.building);
+    }
+
+    #[test]
+    fn compile_session_reset_can_be_disabled() {
+        let mut app = super::StudioApp::default();
+        app.reset_test_session_on_compile = false;
+        app.approved_artifact = Some(ApprovedArtifact::from_inspection(&test_inspection(
+            "approved.uf2",
+        )));
+        app.btn_l_down = true;
+        app.held_button = Some(super::ButtonId::L);
+        app.watch.light = true;
+
+        app.begin_compile_session("new-fingerprint".to_string());
+
+        assert!(app.approved_artifact.is_some());
+        assert!(app.btn_l_down);
+        assert_eq!(app.held_button, Some(super::ButtonId::L));
+        assert!(app.watch.light);
+        assert!(app.building);
+        assert_eq!(
+            app.pending_build_fingerprint.as_deref(),
+            Some("new-fingerprint")
+        );
+    }
+
+    #[test]
+    fn automatic_persistence_is_gated_by_user_preference() {
+        let mut app = super::StudioApp::default();
+        app.persist_user_changes = false;
+        app.status = "unchanged".to_string();
+
+        app.save_settings_internal();
+
+        assert_eq!(app.status, "unchanged");
+    }
+
+    #[test]
+    fn apply_settings_updates_both_studio_preferences() {
+        let mut app = super::StudioApp::default();
+        let mut settings = super::settings::AppSettings::default();
+        settings.persist_user_changes = false;
+        settings.reset_test_session_on_compile = false;
+
+        app.apply_settings(settings);
+
+        assert!(!app.persist_user_changes);
+        assert!(!app.reset_test_session_on_compile);
     }
 
     #[test]

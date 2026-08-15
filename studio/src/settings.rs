@@ -128,6 +128,12 @@ pub struct AppSettings {
     /// Whether the first-run welcome overlay has been dismissed.
     #[serde(default)]
     pub first_run: bool,
+    /// Whether ordinary Studio changes and close automatically save settings.
+    #[serde(default = "default_true")]
+    pub persist_user_changes: bool,
+    /// Whether a valid build starts with a fresh transient test session.
+    #[serde(default = "default_true")]
+    pub reset_test_session_on_compile: bool,
     /// The last measured crystal drift (parts-per-million), persisted between
     /// sessions so the user can recall the calibration without re-measuring.
     #[serde(default)]
@@ -187,6 +193,8 @@ impl AppSettings {
         active_component_profile: usize,
         tab_layout: TabLayoutMode,
         tab_overflow: TabOverflowBehavior,
+        persist_user_changes: bool,
+        reset_test_session_on_compile: bool,
     ) -> Self {
         AppSettings {
             schema_version: 1,
@@ -203,6 +211,8 @@ impl AppSettings {
             modules: modules.clone(),
             output_dir,
             first_run,
+            persist_user_changes,
+            reset_test_session_on_compile,
             drift_ppm,
             rtc_calibration: rtc_calibration.clone(),
             line_limit,
@@ -364,6 +374,8 @@ impl Default for AppSettings {
             modules: ModuleManager::default(),
             output_dir: default_output_dir(),
             first_run: false,
+            persist_user_changes: true,
+            reset_test_session_on_compile: true,
             drift_ppm: 0.0,
             rtc_calibration: RtcCalibrationSettings::default(),
             line_limit: default_line_limit(),
@@ -399,6 +411,10 @@ fn valid_ntp_host(host: &str) -> bool {
     } else {
         true
     }
+}
+
+pub fn default_true() -> bool {
+    true
 }
 
 pub fn default_tick_verbosity() -> String {
@@ -439,6 +455,70 @@ mod tests {
 
         let error = settings.validate().unwrap_err();
         assert!(error.contains("unsupported RTC calibration version"));
+    }
+
+    #[test]
+    fn legacy_json_uses_true_defaults_for_studio_preferences() {
+        let json = serde_json::to_string(&AppSettings::default()).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("persist_user_changes");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("reset_test_session_on_compile");
+        let loaded = AppSettings::from_json(&value.to_string()).unwrap();
+        assert!(loaded.persist_user_changes);
+        assert!(loaded.reset_test_session_on_compile);
+    }
+
+    #[test]
+    fn studio_preferences_round_trip_false_and_true() {
+        let mut settings = AppSettings::default();
+        settings.persist_user_changes = false;
+        settings.reset_test_session_on_compile = false;
+        let loaded = AppSettings::from_json(&settings.to_json().unwrap()).unwrap();
+        assert!(!loaded.persist_user_changes);
+        assert!(!loaded.reset_test_session_on_compile);
+
+        settings.persist_user_changes = true;
+        settings.reset_test_session_on_compile = true;
+        let loaded = AppSettings::from_json(&settings.to_json().unwrap()).unwrap();
+        assert!(loaded.persist_user_changes);
+        assert!(loaded.reset_test_session_on_compile);
+    }
+
+    #[test]
+    fn capture_includes_studio_preferences() {
+        let settings = AppSettings::capture(
+            super::Language::English,
+            super::Theme::Dark,
+            &super::PresetManager::new(),
+            0,
+            &[],
+            1.0,
+            &super::WatchConfig::default(),
+            1,
+            0.0,
+            0.0,
+            &super::ModuleManager::default(),
+            super::default_output_dir(),
+            false,
+            0.0,
+            &RtcCalibrationSettings::default(),
+            500,
+            "hide".to_string(),
+            &[],
+            0,
+            super::TabLayoutMode::default(),
+            super::TabOverflowBehavior::default(),
+            false,
+            true,
+        );
+        assert!(!settings.persist_user_changes);
+        assert!(settings.reset_test_session_on_compile);
     }
 
     #[test]
