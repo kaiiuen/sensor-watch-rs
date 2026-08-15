@@ -35,18 +35,18 @@ use sensor_watch::movement::{
     accel_interrupt_count, activity, alarm, alarm_thermometer, astronomy, baby_kicks, beats, beeps,
     blackjack, blinky, breathing, butterfly_game, character_set, chirpy_demo, close_enough,
     couch_to_5k, countdown, counter, databank, day_night_percentage, day_one, days_since, deadline,
-    decimal_time, demo, discgolf, dual_timer, finetune, flashlight, french_revolutionary,
-    frequency_correction, geomancy, habit, hello_there, higher_lower_game, interval, invaders, ish,
-    ke_decimal_time, kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time,
-    menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal, moon_phase,
-    morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time, preferences,
-    probability, pulsometer, randonaut, ratemeter, repetition_minute, rpn_calculator,
-    rpn_calculator_alt, sailing, save_load, set_time, set_time_hackwatch, ships_bell, simon,
-    simple_calculator, simple_clock, simple_clock_bin_led, simple_coin_flip, solar_time, solstice,
-    sos, squash, stock_stopwatch, stopwatch, sunrise_sunset, tachymeter, tally, tarot, tempchart,
-    thermistor_logging, thermistor_readout, thermistor_testing, tide, time_left, timer, tomato,
-    toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki, weeknumber, wordle,
-    world_clock, world_clock2, wyoscan,
+    decimal_time, demo, discgolf, dual_timer, endless_runner, finetune, flashlight,
+    french_revolutionary, frequency_correction, geomancy, habit, hello_there, higher_lower_game,
+    hydration, interval, invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter,
+    lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
+    minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
+    planetary_hours, planetary_time, preferences, probability, pulsometer, randonaut, ratemeter,
+    repetition_minute, rpn_calculator, rpn_calculator_alt, sailing, save_load, set_time,
+    set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock, simple_clock_bin_led,
+    simple_coin_flip, solar_time, solstice, sos, squash, stock_stopwatch, stopwatch,
+    sunrise_sunset, tachymeter, tally, tarot, tempchart, thermistor_logging, thermistor_readout,
+    thermistor_testing, tide, time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones,
+    types, voltage, wake, wareki, weeknumber, wordle, world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -94,7 +94,7 @@ pub struct ButtonEventState {
 }
 
 impl ButtonEventState {
-    pub const LONG_PRESS_SECONDS: f32 = 1.0;
+    pub const LONG_PRESS_SECONDS: f32 = 64.0 / 128.0;
 
     /// Advances one sampled button state. A long press is emitted exactly once
     /// when the accumulated hold crosses the threshold; release emits Up or
@@ -235,6 +235,8 @@ impl_real_face_trait!(geomancy::GeomancyFace);
 impl_real_face_trait!(finetune::FinetuneFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(dual_timer::DualTimerFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(endless_runner::EndlessRunnerFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(stock_stopwatch::StockStopwatchFace);
 #[cfg(feature = "real-faces")]
@@ -391,6 +393,8 @@ impl_real_face_trait!(days_since::DaysSinceFace);
 impl_real_face_trait!(habit::HabitFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(higher_lower_game::HigherLowerGameFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(hydration::HydrationFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(breathing::BreathingFace);
 #[cfg(feature = "real-faces")]
@@ -569,6 +573,8 @@ impl RealFace {
                     | "BLACKJACK"
                     | "COUCH_TO_5K"
                     | "HIGHER_LOWER_GAME"
+                    | "ENDLESS_RUNNER"
+                    | "HYDRATION"
                     | "BABY_KICKS"
                     | "BUTTERFLY_GAME"
             ) {
@@ -683,6 +689,26 @@ impl RealFace {
 impl Drop for RealFace {
     fn drop(&mut self) {
         self.resign();
+    }
+}
+
+#[cfg(all(test, feature = "real-faces"))]
+mod hydration_tests {
+    use super::{RealFace, REAL_FACE_NAMES};
+
+    #[test]
+    fn hydration_is_registered_canonical_and_activates_with_activate_event() {
+        assert!(REAL_FACE_NAMES.contains(&"HYDRATION"));
+        let mut face = RealFace::new("hydration").expect("Hydration seam mapping");
+        assert_eq!(face.face_name(), "HYDRATION");
+        assert!(!face.is_activated());
+        assert!(face.set_time(2024, 2, 29, 9, 0, 0));
+        face.activate(true);
+        assert!(face.is_activated());
+        assert_eq!(
+            face.snapshot().chars,
+            ['H', 'Y', '0', '0', '0', '0', '0', '0', 'm', 'l']
+        );
     }
 }
 
@@ -888,6 +914,8 @@ pub(crate) const REAL_FACE_NAMES: &[&str] = &[
     "TIMER",
     "COUNTDOWN",
     "DUAL_TIMER",
+    "ENDLESS_RUNNER",
+    "HYDRATION",
     "FINETUNE",
     "FLASHLIGHT",
     "BEEPS",
@@ -1003,6 +1031,8 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "TIMER" => Some(Box::new(timer::TimerFace::new())),
         "COUNTDOWN" => Some(Box::new(countdown::CountdownFace::new_static())),
         "DUAL_TIMER" => Some(Box::new(dual_timer::DualTimerFace::new_static())),
+        "ENDLESS_RUNNER" => Some(Box::new(endless_runner::EndlessRunnerFace::new())),
+        "HYDRATION" => Some(Box::new(hydration::HydrationFace::new())),
         "FINETUNE" => Some(Box::new(finetune::FinetuneFace::new_static())),
         "FLASHLIGHT" => Some(Box::new(flashlight::FlashlightFace::new_static())),
         "BEEPS" => Some(Box::new(beeps::BeepsFace::new_static())),
@@ -1146,6 +1176,8 @@ fn new_face_name(face_name: &str) -> &'static str {
         "TIMER" => "TIMER",
         "COUNTDOWN" => "COUNTDOWN",
         "DUAL_TIMER" => "DUAL_TIMER",
+        "ENDLESS_RUNNER" => "ENDLESS_RUNNER",
+        "HYDRATION" => "HYDRATION",
         "FINETUNE" => "FINETUNE",
         "FLASHLIGHT" => "FLASHLIGHT",
         "BEEPS" => "BEEPS",
@@ -1336,20 +1368,39 @@ mod tests {
     }
 
     #[test]
-    fn button_event_state_emits_short_sequence_without_repeat() {
+    fn button_event_state_stays_short_below_firmware_threshold() {
         let mut state = ButtonEventState::default();
         assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
-        assert_eq!(state.update(true, 0.4), None);
+        assert_eq!(state.update(true, (64.0 - 1.0) / 128.0), None);
         assert_eq!(state.update(false, 0.0), Some(RealButtonEvent::Up));
-        assert_eq!(state.update(false, 1.0), None);
+    }
+
+    #[test]
+    fn button_event_state_emits_long_press_at_exact_firmware_threshold() {
+        let mut state = ButtonEventState::default();
+        assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
+        assert_eq!(
+            state.update(true, ButtonEventState::LONG_PRESS_SECONDS),
+            Some(RealButtonEvent::LongPress)
+        );
+    }
+
+    #[test]
+    fn button_event_state_crosses_threshold_on_large_frame() {
+        let mut state = ButtonEventState::default();
+        assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
+        assert_eq!(state.update(true, 0.1), None);
+        assert_eq!(state.update(true, 1.0), Some(RealButtonEvent::LongPress));
     }
 
     #[test]
     fn button_event_state_emits_long_press_once_and_long_up() {
         let mut state = ButtonEventState::default();
         assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
-        assert_eq!(state.update(true, 0.6), None);
-        assert_eq!(state.update(true, 0.4), Some(RealButtonEvent::LongPress));
+        assert_eq!(
+            state.update(true, ButtonEventState::LONG_PRESS_SECONDS),
+            Some(RealButtonEvent::LongPress)
+        );
         assert_eq!(state.update(true, 0.5), None);
         assert_eq!(state.update(false, 0.0), Some(RealButtonEvent::LongUp));
         assert!(!state.down);
@@ -1357,11 +1408,14 @@ mod tests {
     }
 
     #[test]
-    fn button_event_state_clamps_negative_time_and_is_threshold_aware() {
+    fn button_event_state_clamps_negative_time() {
         let mut state = ButtonEventState::default();
         assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
         assert_eq!(state.update(true, -5.0), None);
-        assert_eq!(state.update(true, 1.0), Some(RealButtonEvent::LongPress));
+        assert_eq!(
+            state.update(true, ButtonEventState::LONG_PRESS_SECONDS),
+            Some(RealButtonEvent::LongPress)
+        );
     }
 
     #[test]
@@ -1391,14 +1445,39 @@ mod tests {
             "BEATS",
             "HABIT",
             "HIGHER_LOWER_GAME",
+            "ENDLESS_RUNNER",
         ] {
             assert!(RealFace::new(name).is_some(), "{name} should be migrated");
         }
-        assert_eq!(REAL_FACE_NAMES.len(), 105);
-        assert_eq!(111 - REAL_FACE_NAMES.len(), 6);
+        assert_eq!(REAL_FACE_NAMES.len(), 107);
+        assert_eq!(111 - REAL_FACE_NAMES.len(), 4);
         assert!(RealFace::new("ACTIVITY").is_some());
         assert!(RealFace::new("geomancy").is_some());
         assert!(RealFace::new("NOT_A_FACE").is_none());
+    }
+
+    #[test]
+    fn real_endless_runner_lifecycle_uses_activate_title_and_bounded_ticks() {
+        let mut face = RealFace::new("endless_runner").expect("ENDLESS_RUNNER is migrated");
+        assert_eq!(face.face_name(), "ENDLESS_RUNNER");
+        assert!(!face.is_activated());
+        assert!(face.set_time(2023, 1, 6, 15, 4, 1));
+
+        face.activate(true);
+        assert!(face.is_activated());
+        assert_eq!(face.snapshot().chars[0..2], ['E', 'R']);
+        assert!(face.snapshot().colon);
+        assert!(face.snapshot().bell);
+
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        face.button_event(RealButton::Light, RealButtonEvent::Down);
+        for _ in 0..128 {
+            face.tick();
+        }
+        assert_eq!(face.snapshot().chars.len(), 10);
+        face.resign();
+        assert!(!face.is_activated());
+        face.resign();
     }
 
     #[test]
@@ -1798,7 +1877,7 @@ mod tests {
 
     #[test]
     fn unmigrated_face_falls_back() {
-        assert_eq!(111 - REAL_FACE_NAMES.len(), 6);
+        assert_eq!(111 - REAL_FACE_NAMES.len(), 4);
         assert!(
             render_real_face("NOT_A_FACE", 2023, 1, 6, 15, 4, 0, 5, true, false, false).is_none()
         );
