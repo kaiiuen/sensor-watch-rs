@@ -28,6 +28,7 @@ mod panic_map;
 mod persist;
 mod presets;
 mod probe;
+mod progress;
 mod real_face;
 mod restore;
 mod settings;
@@ -44,10 +45,21 @@ use i18n::{tr, Key, Language};
 use presets::PresetManager;
 
 use flash::{FlashRequest, FlashResult, FlashStatus, WatchDriveSelection};
+use progress::{ProgressEvent, ProgressReceiver};
 use theme::Theme;
 use watch_sim::CasioF91W;
 
 /// The main application state.
+const SIM_WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+fn clamp_sim_weekday(weekday: usize) -> usize {
+    weekday.min(SIM_WEEKDAY_NAMES.len() - 1)
+}
+
+fn sim_weekday_name(weekday: usize) -> &'static str {
+    SIM_WEEKDAY_NAMES[clamp_sim_weekday(weekday)]
+}
+
 struct StudioApp {
     /// Whether the CJK font has been installed yet.
     fonts_installed: bool,
@@ -66,9 +78,16 @@ struct StudioApp {
     /// A cached watch-drive detection result; detection never runs while rendering.
     cached_watch: WatchDriveSelection,
     /// The handle to the background drive detection worker.
-    pending_detection: Option<std::thread::JoinHandle<WatchDriveSelection>>,
-    /// The handle to the background flash worker.
-    pending_flash: Option<std::thread::JoinHandle<FlashResult>>,
+    pending_detection: Option<(
+        std::thread::JoinHandle<WatchDriveSelection>,
+        ProgressReceiver,
+    )>,
+    /// The handle and bounded progress stream for the background flash worker.
+    pending_flash: Option<(std::thread::JoinHandle<FlashResult>, ProgressReceiver)>,
+    /// The latest user-visible flash/detection event.
+    current_progress: Option<ProgressEvent>,
+    /// Next operation identifier; IDs make overlapping log streams diagnosable.
+    next_operation_id: u64,
     /// Prevents detection and flashing from overlapping.
     flash_worker_state: flash::WorkerState,
     /// The last build result message.
@@ -79,6 +98,10 @@ struct StudioApp {
     artifact_path_input: String,
     /// A verified artifact awaiting explicit approval.
     pending_artifact: Option<build::ArtifactInspection>,
+    /// Configuration fingerprint captured when the pending artifact was verified.
+    pending_artifact_fingerprint: Option<String>,
+    /// Configuration fingerprint captured when the build was started.
+    pending_build_fingerprint: Option<String>,
     /// The selected language.
     language: Language,
     /// The selected theme.
@@ -791,11 +814,15 @@ impl Default for StudioApp {
             cached_watch: WatchDriveSelection::None,
             pending_detection: None,
             pending_flash: None,
+            current_progress: None,
+            next_operation_id: 1,
             flash_worker_state: flash::WorkerState::Idle,
             build_message: String::new(),
             approved_artifact: initial_flashable_uf2(),
             artifact_path_input: String::new(),
             pending_artifact: None,
+            pending_artifact_fingerprint: None,
+            pending_build_fingerprint: None,
             // Default to English and Dark.
             language: Language::English,
             theme: Theme::Dark,
@@ -1061,10 +1088,12 @@ impl eframe::App for StudioApp {
         }
 
         self.poll_flash_workers();
+        self.invalidate_stale_artifact();
 
         // If a build finished, collect its result.
         if let Some(handle) = self.pending_build.take() {
             if handle.is_finished() {
+                let build_fingerprint = self.pending_build_fingerprint.take();
                 match handle.join() {
                     Ok(result) => {
                         self.building = false;
@@ -1072,8 +1101,11 @@ impl eframe::App for StudioApp {
                         self.log.log(&result.message);
                         self.build_log.log(&result.message);
                         if result.success {
-                            match verified_artifact_after_build(&result) {
-                                Ok(inspection) => {
+                            let current_fingerprint = self.build_configuration_fingerprint();
+                            match (build_fingerprint, verified_artifact_after_build(&result)) {
+                                (Some(build_fingerprint), Ok(inspection))
+                                    if build_fingerprint == current_fingerprint =>
+                                {
                                     set_verified_artifact_state(
                                         &mut self.status,
                                         &mut self.build_message,
@@ -1082,6 +1114,7 @@ impl eframe::App for StudioApp {
                                         inspection,
                                         false,
                                     );
+                                    self.pending_artifact_fingerprint = Some(current_fingerprint);
                                     self.last_build_time = Some(
                                         std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
@@ -1109,8 +1142,16 @@ impl eframe::App for StudioApp {
                                         );
                                     }
                                 }
-                                Err(error) => {
+                                (Some(_), Ok(_)) | (None, Ok(_)) => {
                                     self.pending_artifact = None;
+                                    self.pending_artifact_fingerprint = None;
+                                    self.status = "Build configuration changed; artifact discarded"
+                                        .to_string();
+                                    self.build_message = self.status.clone();
+                                }
+                                (_, Err(error)) => {
+                                    self.pending_artifact = None;
+                                    self.pending_artifact_fingerprint = None;
                                     self.status = "Build verification failed".to_string();
                                     self.build_message = format!(
                                         "Built artifact rejected during verification: {error}"
@@ -1125,6 +1166,7 @@ impl eframe::App for StudioApp {
                             // start_build normally clears this before spawning, but keep
                             // failed completion fail-closed if that invariant changes.
                             self.pending_artifact = None;
+                            self.pending_artifact_fingerprint = None;
                             self.push_terminal(format!(
                                 "Build/Output write failed: {}",
                                 result.message
@@ -1491,6 +1533,7 @@ impl eframe::App for StudioApp {
             Panel::Settings => self.settings(ui),
             Panel::Probe => self.probe(ui),
         });
+        self.invalidate_stale_artifact();
         if was_simulator && self.current_panel != Panel::Simulator {
             self.cancel_simulator_buttons();
         }
@@ -2312,11 +2355,39 @@ impl StudioApp {
         self.snapshot_before("Before build");
         self.building = true;
         self.pending_artifact = None;
+        self.pending_artifact_fingerprint = None;
+        self.pending_build_fingerprint = Some(self.build_configuration_fingerprint());
         self.build_message = tr(self.language, Key::Building).to_string();
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
         let out = std::path::PathBuf::from(self.output_dir.clone());
         self.pending_build = Some(std::thread::spawn(move || build::build_firmware(&out)));
+    }
+
+    fn build_configuration_fingerprint(&self) -> String {
+        configuration_fingerprint(
+            self.board,
+            &self.presets,
+            &self.watch_config,
+            &self.modules,
+            &self.component_profiles,
+            self.component_profile,
+            &self.component_draft,
+            &self.output_dir,
+        )
+    }
+
+    fn invalidate_stale_artifact(&mut self) {
+        let fingerprint = self.build_configuration_fingerprint();
+        if invalidate_stale_artifact_state(
+            &mut self.approved_artifact,
+            &mut self.pending_artifact,
+            &mut self.pending_artifact_fingerprint,
+            &fingerprint,
+        ) {
+            self.status = "Artifact discarded: build configuration changed".to_string();
+            self.build_message = self.status.clone();
+        }
     }
 
     /// Fetches the current time from the selected NTP server on a background thread.
@@ -3679,6 +3750,11 @@ impl StudioApp {
                                 &mut self.approved_artifact,
                                 artifact_actions_blocked,
                             );
+                            let fingerprint = self.build_configuration_fingerprint();
+                            if let Some(approved) = &mut self.approved_artifact {
+                                approved.config_fingerprint = fingerprint;
+                            }
+                            self.pending_artifact_fingerprint = None;
                         }
                     });
                 }
@@ -3694,6 +3770,21 @@ impl StudioApp {
                 // Flash. Detection is cached and refreshed explicitly in a worker;
                 // rendering never enumerates drive roots.
                 ui.strong("Flash");
+                if let Some(event) = &self.current_progress {
+                    ui.group(|ui| {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.strong(format!("{} · op {}", event.phase.label(), event.operation_id));
+                        });
+                        ui.label(&event.message);
+                        if let (Some(current), Some(total)) = (event.current, event.total) {
+                            if total > 0 {
+                                ui.add(egui::ProgressBar::new(current as f32 / total as f32)
+                                    .text(format!("{current}/{total}")));
+                            }
+                        }
+                    });
+                }
                 ui.horizontal(|ui| {
                     if self.pending_detection.is_some() {
                         ui.spinner();
@@ -5578,11 +5669,10 @@ impl StudioApp {
                             ui.label("Day");
                             ui.add(egui::DragValue::new(&mut self.sim_day).clamp_range(1..=31));
                             ui.label("Weekday");
-                            let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
                             egui::ComboBox::from_id_source("sim_weekday")
-                                .selected_text(names[self.sim_weekday])
+                                .selected_text(sim_weekday_name(self.sim_weekday))
                                 .show_ui(ui, |ui| {
-                                    for (i, n) in names.iter().enumerate() {
+                                    for (i, n) in SIM_WEEKDAY_NAMES.iter().enumerate() {
                                         ui.selectable_value(&mut self.sim_weekday, i, *n);
                                     }
                                 });
@@ -5623,12 +5713,13 @@ impl StudioApp {
                         // Changing the weekday only overrides the weekday; it does not
                         // touch the date/time.
                         if ui.button("Apply weekday").clicked() {
+                            self.sim_weekday = clamp_sim_weekday(self.sim_weekday);
                             self.watch.weekday_override = Some(self.sim_weekday as u32);
                             self.sim_log
                                 .log(format!("Weekday set to {}", self.sim_weekday));
                             self.log.log(format!(
                                 "Weekday set to {}",
-                                ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][self.sim_weekday]
+                                sim_weekday_name(self.sim_weekday)
                             ));
                         }
                         if ui.button("Reset to now").clicked() {
@@ -6122,7 +6213,7 @@ impl StudioApp {
         self.sim_day = day;
         self.sim_hour = hour;
         self.sim_minute = minute;
-        self.sim_weekday = (weekday as usize).min(6);
+        self.sim_weekday = clamp_sim_weekday(weekday as usize);
     }
 
     fn run_terminal_command(&mut self, cmd: &str) {
@@ -7336,6 +7427,7 @@ impl StudioApp {
                     inspection,
                     false,
                 );
+                self.pending_artifact_fingerprint = Some(self.build_configuration_fingerprint());
             }
             Err(error) => {
                 // Do not disturb an already approved artifact when a new candidate
@@ -7347,6 +7439,7 @@ impl StudioApp {
                     &mut self.pending_artifact,
                     error,
                 );
+                self.pending_artifact_fingerprint = None;
             }
         }
     }
@@ -7363,6 +7456,9 @@ impl StudioApp {
             self.status = "Flash is unavailable while another operation is active.".to_string();
             return;
         }
+        let operation_id = self.next_operation_id;
+        self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
+        let (progress, receiver) = progress::channel(operation_id);
         let path = approved.path.clone();
         let approved_metadata = build::ArtifactInspection {
             path: path.clone(),
@@ -7379,12 +7475,19 @@ impl StudioApp {
             .log(format!("Attempting to flash {}", path.display()));
         self.flash_log
             .log(format!("Attempting to flash {}", path.display()));
-        self.pending_flash = Some(std::thread::spawn(move || {
-            flash::flash(FlashRequest {
-                path,
-                approved: approved_metadata,
-            })
-        }));
+        self.pending_flash = Some((
+            std::thread::spawn(move || {
+                flash::flash_with_start_progress(
+                    FlashRequest {
+                        path,
+                        approved: approved_metadata,
+                    },
+                    || {},
+                    &progress,
+                )
+            }),
+            receiver,
+        ));
         self.status = "Flashing in background…".to_string();
         self.flash_log
             .log("Artifact verification, drive detection, and host copy started in background");
@@ -7401,14 +7504,46 @@ impl StudioApp {
         if !self.flash_worker_state.start_detection() {
             return;
         }
-        self.pending_detection = Some(std::thread::spawn(|| {
-            flash::select_watch_drive(flash::windows_drive_roots())
-        }));
+        let operation_id = self.next_operation_id;
+        self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
+        let (progress, receiver) = progress::channel(operation_id);
+        self.pending_detection = Some((
+            std::thread::spawn(move || {
+                flash::select_watch_drive_with_progress(flash::windows_drive_roots(), &progress)
+            }),
+            receiver,
+        ));
         self.status = "Refreshing Sensor Watch detection…".to_string();
     }
 
+    fn drain_progress(&mut self, receiver: &ProgressReceiver) {
+        for event in receiver.drain() {
+            self.current_progress = Some(event.clone());
+            let progress = match (event.current, event.total) {
+                (Some(current), Some(total)) if total > 0 => format!(" [{current}/{total}]"),
+                _ => String::new(),
+            };
+            self.flash_log.log(format!(
+                "op={} seq={} [{}]{} {}",
+                event.operation_id,
+                event.sequence,
+                event.phase.label(),
+                progress,
+                event.message
+            ));
+        }
+        let dropped = receiver.take_dropped();
+        if dropped > 0 {
+            let message =
+                format!("Progress channel dropped {dropped} event(s); details may be missing");
+            self.flash_log.log(&message);
+            self.status = message;
+        }
+    }
+
     fn poll_flash_workers(&mut self) {
-        if let Some(handle) = self.pending_detection.take() {
+        if let Some((handle, receiver)) = self.pending_detection.take() {
+            self.drain_progress(&receiver);
             if handle.is_finished() {
                 match handle.join() {
                     Ok(selection) => {
@@ -7433,10 +7568,11 @@ impl StudioApp {
                     }
                 }
             } else {
-                self.pending_detection = Some(handle);
+                self.pending_detection = Some((handle, receiver));
             }
         }
-        if let Some(handle) = self.pending_flash.take() {
+        if let Some((handle, receiver)) = self.pending_flash.take() {
+            self.drain_progress(&receiver);
             if handle.is_finished() {
                 match handle.join() {
                     Ok(result) => {
@@ -7450,7 +7586,7 @@ impl StudioApp {
                     }
                 }
             } else {
-                self.pending_flash = Some(handle);
+                self.pending_flash = Some((handle, receiver));
             }
         }
     }
@@ -8135,6 +8271,7 @@ struct ApprovedArtifact {
     sha256: String,
     payload_sha256: String,
     manifest_digest: String,
+    config_fingerprint: String,
 }
 
 impl ApprovedArtifact {
@@ -8149,12 +8286,59 @@ impl ApprovedArtifact {
             sha256: inspection.sha256.clone(),
             payload_sha256: inspection.payload_sha256.clone(),
             manifest_digest: inspection.manifest_digest.clone(),
+            config_fingerprint: String::new(),
         }
     }
 
     #[cfg_attr(not(test), allow(dead_code))]
     fn matches(&self, inspection: &build::ArtifactInspection) -> bool {
         self == &Self::from_inspection(inspection)
+    }
+}
+
+fn configuration_fingerprint(
+    board: Board,
+    presets: &PresetManager,
+    watch_config: &watch_config::WatchConfig,
+    modules: &modules::ModuleManager,
+    component_profiles: &[components::BuildProfile],
+    component_profile: usize,
+    component_draft: &components::ComponentsConfig,
+    output_dir: &str,
+) -> String {
+    // JSON keeps this stable and unambiguous; all included types are persisted
+    // configuration types, so field order is deterministic.
+    serde_json::to_string(&(
+        board.label(),
+        presets,
+        watch_config,
+        modules,
+        component_profiles,
+        component_profile,
+        component_draft,
+        output_dir,
+    ))
+    .expect("build configuration must be serializable")
+}
+
+fn invalidate_stale_artifact_state(
+    approved_artifact: &mut Option<ApprovedArtifact>,
+    pending_artifact: &mut Option<build::ArtifactInspection>,
+    pending_fingerprint: &mut Option<String>,
+    current_fingerprint: &str,
+) -> bool {
+    let approved_stale = approved_artifact
+        .as_ref()
+        .is_some_and(|artifact| artifact.config_fingerprint != current_fingerprint);
+    let pending_stale =
+        pending_artifact.is_some() && pending_fingerprint.as_deref() != Some(current_fingerprint);
+    if approved_stale || pending_stale {
+        *approved_artifact = None;
+        *pending_artifact = None;
+        *pending_fingerprint = None;
+        true
+    } else {
+        false
     }
 }
 
@@ -8231,16 +8415,149 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::Board;
     use super::{
-        approve_artifact_state, credit_matches, first_run_start_panel, flashable_uf2_after_build,
-        initial_flashable_uf2, preset_name, set_failed_artifact_state, set_verified_artifact_state,
-        verified_artifact_after_build, verify_artifact_manifest, ApprovedArtifact, CreditEntry,
-        Panel, WatchDriveSelection, ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS,
-        ARTIFACT_VERIFICATION_FAILED_STATUS, ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS,
-        FIRST_RUN_STEPS,
+        approve_artifact_state, clamp_sim_weekday, configuration_fingerprint, credit_matches,
+        first_run_start_panel, flashable_uf2_after_build, initial_flashable_uf2,
+        invalidate_stale_artifact_state, preset_name, set_failed_artifact_state,
+        set_verified_artifact_state, sim_weekday_name, verified_artifact_after_build,
+        verify_artifact_manifest, ApprovedArtifact, CreditEntry, Panel, WatchDriveSelection,
+        ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS, ARTIFACT_VERIFICATION_FAILED_STATUS,
+        ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS, FIRST_RUN_STEPS,
     };
     use super::{handle_sim_button, reset_simulator_button_state, ButtonId, SimAction};
+    use crate::components;
     use crate::flash::select_watch_drive;
+    use crate::modules;
+    use crate::presets::PresetManager;
+    use crate::watch_config;
+
+    #[test]
+    fn invalid_simulator_weekday_clamps_without_panicking() {
+        let invalid_weekday = 7;
+
+        assert_eq!(clamp_sim_weekday(invalid_weekday), 6);
+        assert_eq!(sim_weekday_name(invalid_weekday), "Sat");
+        assert_eq!(sim_weekday_name(0), "Sun");
+        assert_eq!(sim_weekday_name(6), "Sat");
+    }
+
+    #[test]
+    fn unchanged_configuration_retains_approved_artifact() {
+        let presets = PresetManager::new();
+        let watch_config = watch_config::WatchConfig::default();
+        let modules = modules::ModuleManager::default();
+        let profiles = components::default_profiles();
+        let draft = components::selected_config(&profiles, 0);
+        let fingerprint = configuration_fingerprint(
+            Board::Green,
+            &presets,
+            &watch_config,
+            &modules,
+            &profiles,
+            0,
+            &draft,
+            "build",
+        );
+        let mut approved = Some(ApprovedArtifact {
+            config_fingerprint: fingerprint.clone(),
+            ..ApprovedArtifact::from_inspection(&test_inspection("approved.uf2"))
+        });
+        let mut pending = Some(test_inspection("pending.uf2"));
+        let mut pending_fingerprint = Some(fingerprint.clone());
+
+        assert!(!invalidate_stale_artifact_state(
+            &mut approved,
+            &mut pending,
+            &mut pending_fingerprint,
+            &fingerprint,
+        ));
+        assert!(approved.is_some());
+        assert!(pending.is_some());
+    }
+
+    #[test]
+    fn every_build_configuration_change_clears_approval_and_candidate() {
+        let base_presets = PresetManager::new();
+        let base_watch_config = watch_config::WatchConfig::default();
+        let base_modules = modules::ModuleManager::default();
+        let base_profiles = components::default_profiles();
+        let base_draft = components::selected_config(&base_profiles, 0);
+        let base = (
+            Board::Green,
+            base_presets,
+            base_watch_config,
+            base_modules,
+            base_profiles,
+            0,
+            base_draft,
+            "build".to_string(),
+        );
+        let base_fingerprint = configuration_fingerprint(
+            base.0, &base.1, &base.2, &base.3, &base.4, base.5, &base.6, &base.7,
+        );
+
+        let changed = |value: (
+            Board,
+            PresetManager,
+            watch_config::WatchConfig,
+            modules::ModuleManager,
+            Vec<components::BuildProfile>,
+            usize,
+            components::ComponentsConfig,
+            String,
+        )| {
+            let fingerprint = configuration_fingerprint(
+                value.0, &value.1, &value.2, &value.3, &value.4, value.5, &value.6, &value.7,
+            );
+            assert_ne!(fingerprint, base_fingerprint);
+            let mut approved = Some(ApprovedArtifact {
+                config_fingerprint: base_fingerprint.clone(),
+                ..ApprovedArtifact::from_inspection(&test_inspection("approved.uf2"))
+            });
+            let mut pending = Some(test_inspection("pending.uf2"));
+            let mut pending_fingerprint = Some(base_fingerprint.clone());
+            assert!(invalidate_stale_artifact_state(
+                &mut approved,
+                &mut pending,
+                &mut pending_fingerprint,
+                &fingerprint,
+            ));
+            assert!(approved.is_none());
+            assert!(pending.is_none());
+            assert!(pending_fingerprint.is_none());
+        };
+
+        let mut value = base.clone();
+        value.0 = Board::Blue;
+        changed(value);
+        let mut value = base.clone();
+        value.1.presets[0].faces.swap(0, 1);
+        changed(value);
+        let mut value = base.clone();
+        value.2.show_seconds = !value.2.show_seconds;
+        changed(value);
+        let mut value = base.clone();
+        value.3.modules.push(modules::Module {
+            name: "custom".into(),
+            target: "custom.rs".into(),
+            description: "test".into(),
+            enabled: true,
+        });
+        changed(value);
+        let mut value = base.clone();
+        value.4[0].name.push_str(" changed");
+        changed(value);
+        let mut value = base.clone();
+        value.5 = 1;
+        changed(value);
+        let mut value = base.clone();
+        value.6.buzzer = !value.6.buzzer;
+        changed(value);
+        let mut value = base;
+        value.7 = "other-build".into();
+        changed(value);
+    }
 
     #[cfg(feature = "real-faces")]
     #[test]

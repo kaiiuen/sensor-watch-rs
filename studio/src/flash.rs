@@ -1,6 +1,8 @@
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::progress::{Phase, ProgressSink};
+
 const MAX_INFO_UF2_BYTES: u64 = 16 * 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,9 +82,39 @@ pub(crate) fn select_watch_drive<I>(roots: I) -> WatchDriveSelection
 where
     I: IntoIterator<Item = PathBuf>,
 {
+    select_watch_drive_with_progress(roots, &ProgressSink::disabled())
+}
+
+pub(crate) fn select_watch_drive_with_progress<I>(
+    roots: I,
+    progress: &ProgressSink,
+) -> WatchDriveSelection
+where
+    I: IntoIterator<Item = PathBuf>,
+{
+    let roots = roots.into_iter().collect::<Vec<_>>();
+    let total = roots.len() as u64;
+    progress.emit(
+        Phase::DriveEnumeration,
+        format!("Enumerating {} drive roots", roots.len()),
+        Some(0),
+        Some(total),
+    );
     let candidates = roots
         .into_iter()
-        .filter_map(|root| {
+        .enumerate()
+        .filter_map(|(index, root)| {
+            progress.emit(
+                Phase::DriveEnumeration,
+                format!(
+                    "Checking drive root {} of {}: {}",
+                    index + 1,
+                    total,
+                    root.display()
+                ),
+                Some(index as u64 + 1),
+                Some(total),
+            );
             let entries = std::fs::read_dir(&root).ok()?;
             entries.flatten().find_map(|entry| {
                 if !entry
@@ -92,7 +124,19 @@ where
                 {
                     return None;
                 }
+                progress.emit(
+                    Phase::Identity,
+                    format!("Reading INFO_UF2 at {}", entry.path().display()),
+                    None,
+                    None,
+                );
                 let info = read_info_uf2(entry.path())?;
+                progress.emit(
+                    Phase::Identity,
+                    "INFO_UF2 identity read and revalidated",
+                    None,
+                    None,
+                );
                 crate::probe::is_watch_info(&info).then_some(WatchDriveCandidate {
                     root: root.clone(),
                     info,
@@ -101,17 +145,55 @@ where
         })
         .collect::<Vec<_>>();
     match candidates.as_slice() {
-        [] => WatchDriveSelection::None,
-        [candidate] => WatchDriveSelection::One(candidate.clone()),
-        _ => WatchDriveSelection::Multiple(candidates.len()),
+        [] => {
+            progress.emit(
+                Phase::Selection,
+                "No Sensor Watch drive selected",
+                Some(0),
+                Some(0),
+            );
+            WatchDriveSelection::None
+        }
+        [candidate] => {
+            progress.emit(
+                Phase::Selection,
+                format!(
+                    "One Sensor Watch drive selected: {}",
+                    candidate.root.display()
+                ),
+                Some(1),
+                Some(1),
+            );
+            WatchDriveSelection::One(candidate.clone())
+        }
+        _ => {
+            progress.emit(
+                Phase::Selection,
+                format!("Multiple Sensor Watch drives found: {}", candidates.len()),
+                Some(candidates.len() as u64),
+                Some(candidates.len() as u64),
+            );
+            WatchDriveSelection::Multiple(candidates.len())
+        }
     }
 }
 
 pub(crate) fn flash(request: FlashRequest) -> FlashResult {
-    flash_with_start(request, || {})
+    flash_with_start_progress(request, || {}, &ProgressSink::disabled())
 }
 
 fn flash_with_start<F>(request: FlashRequest, on_start: F) -> FlashResult
+where
+    F: FnOnce(),
+{
+    flash_with_start_progress(request, on_start, &ProgressSink::disabled())
+}
+
+pub(crate) fn flash_with_start_progress<F>(
+    request: FlashRequest,
+    on_start: F,
+    progress: &ProgressSink,
+) -> FlashResult
 where
     F: FnOnce(),
 {
@@ -119,9 +201,29 @@ where
     // filesystem operation. A blocked OS syscall cannot be forcibly cancelled
     // from a Rust thread, but it cannot block eframe's UI thread either.
     on_start();
+    progress.emit(
+        Phase::Artifact,
+        format!("Artifact selected: {}", request.path.display()),
+        None,
+        None,
+    );
     let inspection = match crate::build::inspect_artifact(&request.path) {
-        Ok(inspection) => inspection,
+        Ok(inspection) => {
+            progress.emit(
+                Phase::Revalidation,
+                "UF2, manifest, sidecar, and approval metadata revalidated",
+                None,
+                None,
+            );
+            inspection
+        }
         Err(error) => {
+            progress.emit(
+                Phase::Failure,
+                format!("Artifact validation failed: {error}"),
+                None,
+                None,
+            );
             return FlashResult {
                 status: FlashStatus::ArtifactInvalid,
                 message: format!("Refusing to copy invalid artifact: {error}"),
@@ -129,32 +231,68 @@ where
         }
     };
     if inspection != request.approved {
+        progress.emit(
+            Phase::Failure,
+            "Artifact approval binding failed: artifact changed",
+            None,
+            None,
+        );
         return FlashResult {
             status: FlashStatus::ArtifactChanged,
             message: "Refusing to copy: approved artifact changed since approval".to_string(),
         };
     }
     let data = match std::fs::read(&request.path) {
-        Ok(data) => data,
+        Ok(data) => {
+            progress.emit(
+                Phase::Artifact,
+                format!("Artifact bytes loaded: {} bytes", data.len()),
+                Some(data.len() as u64),
+                Some(data.len() as u64),
+            );
+            data
+        }
         Err(error) => {
+            progress.emit(
+                Phase::Failure,
+                format!("Artifact read failed: {error}"),
+                None,
+                None,
+            );
             return FlashResult {
                 status: FlashStatus::ArtifactInvalid,
                 message: format!("Refusing to copy artifact: {error}"),
             };
         }
     };
-    match select_watch_drive(windows_drive_roots()) {
-        WatchDriveSelection::Multiple(count) => FlashResult {
+    match select_watch_drive_with_progress(windows_drive_roots(), progress) {
+        WatchDriveSelection::Multiple(count) => {
+            progress.emit(
+                Phase::Failure,
+                format!("Flash refused: multiple drives ({count})"),
+                None,
+                None,
+            );
+            FlashResult {
             status: FlashStatus::Ambiguous,
             message: format!(
                 "Refusing to flash: {count} Sensor Watch bootloader drives are present; disconnect all but one"
             ),
-        },
-        WatchDriveSelection::None => FlashResult {
-            status: FlashStatus::NoWatch,
-            message: "Watch not found (is it in bootloader mode?)".to_string(),
-        },
-        WatchDriveSelection::One(candidate) => write_to_drive(&candidate.root, &data),
+            }
+        }
+        WatchDriveSelection::None => {
+            progress.emit(Phase::Failure, "Flash refused: no watch drive", None, None);
+            FlashResult {
+                status: FlashStatus::NoWatch,
+                message: "Watch not found (is it in bootloader mode?)".to_string(),
+            }
+        }
+        WatchDriveSelection::One(candidate) => write_to_drive_with_progress(
+            &candidate.root,
+            &data,
+            |path| std::fs::read(path),
+            progress,
+        ),
     }
 }
 
@@ -162,7 +300,19 @@ fn write_to_drive(root: &Path, data: &[u8]) -> FlashResult {
     write_to_drive_with_read(root, data, |path| std::fs::read(path))
 }
 
-fn write_to_drive_with_read<F>(root: &Path, data: &[u8], mut read: F) -> FlashResult
+fn write_to_drive_with_read<F>(root: &Path, data: &[u8], read: F) -> FlashResult
+where
+    F: FnMut(&Path) -> std::io::Result<Vec<u8>>,
+{
+    write_to_drive_with_progress(root, data, read, &ProgressSink::disabled())
+}
+
+fn write_to_drive_with_progress<F>(
+    root: &Path,
+    data: &[u8],
+    mut read: F,
+    progress: &ProgressSink,
+) -> FlashResult
 where
     F: FnMut(&Path) -> std::io::Result<Vec<u8>>,
 {
@@ -176,8 +326,20 @@ where
         regular_or_absent(&temp_path)?;
         regular_or_absent(&backup_path)?;
         remove_if_present(&temp_path)?;
+        progress.emit(
+            Phase::Transfer,
+            format!("Writing temporary UF2: {} bytes", data.len()),
+            Some(0),
+            Some(data.len() as u64),
+        );
         std::fs::write(&temp_path, data).map_err(classify_io)?;
         let written = read(&temp_path).map_err(classify_io)?;
+        progress.emit(
+            Phase::Transfer,
+            format!("Temporary UF2 readback verified: {} bytes", written.len()),
+            Some(written.len() as u64),
+            Some(data.len() as u64),
+        );
         if written != data || sensor_watch_core::uf2::validate(&written).is_err() {
             return Err(FlashResult {
                 status: FlashStatus::Failed,
@@ -190,8 +352,15 @@ where
             if backup_path.exists() {
                 std::fs::remove_file(&backup_path).map_err(classify_io)?;
             }
+            progress.emit(Phase::Transfer, "Staging previous CURRENT.UF2", None, None);
             std::fs::rename(&dest_path, &backup_path).map_err(classify_io)?;
         }
+        progress.emit(
+            Phase::Transfer,
+            "Publishing temporary UF2 by rename",
+            None,
+            None,
+        );
         if let Err(error) = std::fs::rename(&temp_path, &dest_path) {
             if had_old {
                 let _ = std::fs::rename(&backup_path, &dest_path);
@@ -203,7 +372,23 @@ where
             Ok(published) => published,
             Err(error) => {
                 let read_result = classify_io(error);
+                progress.emit(
+                    Phase::Rollback,
+                    "Rollback started after published readback failure",
+                    None,
+                    None,
+                );
                 let rollback_result = rollback_published(&dest_path, &backup_path, had_old);
+                progress.emit(
+                    Phase::Rollback,
+                    if rollback_result.is_ok() {
+                        "Rollback succeeded"
+                    } else {
+                        "Rollback failed"
+                    },
+                    None,
+                    None,
+                );
                 return Err(match rollback_result {
                     Ok(()) => read_result,
                     Err(rollback_error) => FlashResult {
@@ -216,19 +401,44 @@ where
                 });
             }
         };
+        progress.emit(
+            Phase::Revalidation,
+            format!("Published UF2 readback: {} bytes", published.len()),
+            Some(published.len() as u64),
+            Some(data.len() as u64),
+        );
         if published != data || sensor_watch_core::uf2::validate(&published).is_err() {
+            progress.emit(
+                Phase::Rollback,
+                "Rollback started after invalid published UF2",
+                None,
+                None,
+            );
             let _ = std::fs::remove_file(&dest_path);
             if had_old {
                 let _ = std::fs::rename(&backup_path, &dest_path);
             }
+            progress.emit(Phase::Rollback, "Rollback completed", None, None);
             return Err(FlashResult {
                 status: FlashStatus::Failed,
                 message: format!("Failed to verify published UF2 at {dest}"),
             });
         }
         if had_old {
+            progress.emit(
+                Phase::Cleanup,
+                "Cleaning up staged previous file",
+                None,
+                None,
+            );
             let _ = std::fs::remove_file(&backup_path);
         }
+        progress.emit(
+            Phase::Complete,
+            "Flash copy succeeded; drive may disconnect next",
+            Some(data.len() as u64),
+            Some(data.len() as u64),
+        );
         Ok(())
     })();
 
@@ -240,6 +450,13 @@ where
             ),
         },
         Err(result) => {
+            let phase = if result.status == FlashStatus::DriveDisappeared {
+                "Drive disappeared during flash"
+            } else {
+                result.message.as_str()
+            };
+            progress.emit(Phase::Failure, phase, None, None);
+            progress.emit(Phase::Cleanup, "Cleaning up temporary file", None, None);
             let _ = std::fs::remove_file(&temp_path);
             result
         }
