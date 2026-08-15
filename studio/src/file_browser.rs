@@ -1,11 +1,17 @@
 //! Read-only workspace file browser for Firmware Studio.
 
+use crate::help::{AnchorId, AnchorRect};
 use eframe::egui;
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
 const MAX_PREVIEW_BYTES: u64 = 512 * 1024;
+
+pub struct AnchorHit {
+    pub key: AnchorId,
+    pub rect: AnchorRect,
+}
 
 #[derive(Clone, Debug)]
 struct Entry {
@@ -182,8 +188,9 @@ impl FileBrowser {
     }
 
     /// Render the read-only browser. Returns a status message when the user copies data.
-    pub fn ui(&mut self, ui: &mut egui::Ui) -> Option<String> {
+    pub fn ui(&mut self, ui: &mut egui::Ui) -> (Option<String>, Vec<AnchorHit>) {
         let mut copied = None;
+        let mut anchors = Vec::new();
         ui.heading("File Browser");
         ui.horizontal(|ui| {
             ui.colored_label(
@@ -191,7 +198,9 @@ impl FileBrowser {
                 "READ-ONLY REFERENCE BROWSER",
             );
             ui.weak("No writes or deletes are available");
-            if ui.button("Refresh").clicked() {
+            let response = ui.button("Refresh");
+            anchors.push(anchor(AnchorId::FileRefresh, &response));
+            if response.clicked() {
                 self.refresh_workspace();
             }
         });
@@ -201,10 +210,11 @@ impl FileBrowser {
         ui.separator();
         ui.horizontal(|ui| {
             ui.label("Search:");
-            ui.add(
+            let response = ui.add(
                 egui::TextEdit::singleline(&mut self.filter)
                     .hint_text("Filter files and directories"),
             );
+            anchors.push(anchor(AnchorId::FileFilter, &response));
         });
         ui.horizontal_wrapped(|ui| {
             ui.label("Workspace:");
@@ -252,10 +262,10 @@ impl FileBrowser {
                             name,
                             size
                         );
-                        if ui
-                            .selectable_label(self.selected.as_ref() == Some(&entry.path), label)
-                            .clicked()
-                        {
+                        let response =
+                            ui.selectable_label(self.selected.as_ref() == Some(&entry.path), label);
+                        anchors.push(anchor(AnchorId::FileList, &response));
+                        if response.clicked() {
                             if entry.is_dir {
                                 open_path = Some(entry.path.clone());
                             } else {
@@ -273,7 +283,8 @@ impl FileBrowser {
             columns[1].vertical(|ui| {
                 let selected = self.selected.clone();
                 ui.horizontal(|ui| {
-                    ui.heading("Selection");
+                    let preview_response = ui.heading("Selection");
+                    anchors.push(anchor(AnchorId::FilePreview, &preview_response));
                     if let Some(path) = &selected {
                         if ui.button("Copy path").clicked() {
                             copied = copy_to_clipboard(&path.display().to_string());
@@ -307,7 +318,17 @@ impl FileBrowser {
                 }
             });
         });
-        copied
+        (copied, anchors)
+    }
+}
+
+fn anchor(key: AnchorId, response: &egui::Response) -> AnchorHit {
+    AnchorHit {
+        key,
+        rect: AnchorRect {
+            min: (response.rect.min.x, response.rect.min.y),
+            max: (response.rect.max.x, response.rect.max.y),
+        },
     }
 }
 

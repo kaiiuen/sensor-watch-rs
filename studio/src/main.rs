@@ -42,7 +42,7 @@ mod watch_sim;
 mod wiki;
 
 use eframe::egui;
-use help::HelpId;
+use help::{AnchorId, AnchorRect, AnchorRegistry, HelpId};
 use i18n::{tr, Key, Language};
 use presets::PresetManager;
 
@@ -184,10 +184,16 @@ struct StudioApp {
     module_name: String,
     module_target: String,
     module_description: String,
+    /// Frame-local semantic rectangles used by the guided help overlay.
+    help_anchors: AnchorRegistry,
+    help_frame: u64,
     /// Contextual help walkthrough currently open, if any.
     help_open: Option<HelpId>,
     /// Current step in the open walkthrough.
     help_step: usize,
+    /// Destination panel requested by a cross-panel tour transition; anchors are
+    /// intentionally rendered only after the destination has produced a frame.
+    help_pending_panel: Option<Panel>,
     /// Whether closing the current walkthrough dismisses it for this session.
     help_dont_show_again: bool,
     /// Session-only dismissed help IDs; intentionally not persisted.
@@ -527,6 +533,29 @@ enum ConfirmKind {
     DeleteFaceFile(String),
     RemoveModule(String),
     RunPhysicalProbe,
+}
+
+fn panel_for_help_id(id: HelpId) -> Option<Panel> {
+    [
+        Panel::Dashboard,
+        Panel::Faces,
+        Panel::Editor,
+        Panel::Simulator,
+        Panel::BuildFlash,
+        Panel::Calibration,
+        Panel::Modules,
+        Panel::Shell,
+        Panel::Diagnostics,
+        Panel::Debug,
+        Panel::Bugs,
+        Panel::FileBrowser,
+        Panel::Tutorials,
+        Panel::Wiki,
+        Panel::Settings,
+        Panel::Probe,
+    ]
+    .into_iter()
+    .find(|panel| panel.help_id() == id)
 }
 
 impl Panel {
@@ -901,8 +930,11 @@ impl Default for StudioApp {
             module_name: String::new(),
             module_target: String::new(),
             module_description: String::new(),
+            help_anchors: AnchorRegistry::default(),
+            help_frame: 0,
             help_open: None,
             help_step: 0,
+            help_pending_panel: None,
             help_dont_show_again: false,
             dismissed_help: help::Dismissed::default(),
             sys_stats: sysstats::SysStats::default(),
@@ -1088,6 +1120,15 @@ impl eframe::App for StudioApp {
             self.catalog_width = 0.0;
             self.preset_height = 0.0;
         }
+
+        // Escape belongs to help first, so normal shortcuts cannot consume it.
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.help_open.is_some() {
+            self.close_help(false);
+            ctx.request_repaint();
+            return;
+        }
+        self.help_frame = self.help_frame.wrapping_add(1);
+        self.help_anchors.begin_frame(self.help_frame);
 
         // Keyboard shortcuts (only when the user isn't typing in a text field).
         if !ctx.wants_keyboard_input() {
@@ -1391,11 +1432,11 @@ impl eframe::App for StudioApp {
             self.tab_bar(ui);
             ui.horizontal(|ui| {
                 let label = format!("? Help: {}", self.current_panel.label(self.language));
-                if ui
+                let response = ui
                     .button(label)
-                    .on_hover_text("Open the beginner walkthrough for this panel")
-                    .clicked()
-                {
+                    .on_hover_text("Open the beginner walkthrough for this panel");
+                self.register_anchor(self.current_panel, AnchorId::PanelHelp, &response);
+                if response.clicked() {
                     self.open_help_for(self.current_panel);
                 }
             });
@@ -1593,7 +1634,7 @@ impl eframe::App for StudioApp {
         if was_simulator && self.current_panel != Panel::Simulator {
             self.cancel_simulator_buttons();
         }
-        self.help_modal(ctx);
+        self.help_spotlight(ctx);
 
         if self.advanced_mode_confirm {
             egui::Window::new("Enable Advanced mode?")
@@ -1635,6 +1676,7 @@ impl eframe::App for StudioApp {
                         self.first_run = false;
                         self.block_editor.set_blocks_mode(true);
                         self.current_panel = first_run_start_panel();
+                        self.open_help_for(self.current_panel);
                         self.status = "Blocks editor ready - name your face to begin".to_string();
                         self.save_settings_internal();
                     }
@@ -1865,64 +1907,162 @@ impl StudioApp {
         }
     }
 
-    /// Shared contextual walkthrough modal. Dismissal is session-only; the
-    /// checkbox explains that a restart intentionally restores the tutorials.
-    fn help_modal(&mut self, ctx: &egui::Context) {
-        let Some(id) = self.help_open else { return };
-        let tutorial = help::tutorial(id);
-        let step_index = help::step_index(id, self.help_step);
-        self.help_step = step_index;
-        let mut close = false;
-        egui::Window::new(tutorial.title)
-            .collapsible(false)
-            .resizable(true)
-            .default_width(520.0)
-            .show(ctx, |ui| {
-                let step = &tutorial.steps[step_index];
-                ui.heading(step.title);
-                ui.label(step.body);
-                ui.add_space(8.0);
-                ui.label(format!(
-                    "Step {} of {}",
-                    step_index + 1,
-                    tutorial.steps.len()
-                ));
-                ui.checkbox(
-                    &mut self.help_dont_show_again,
-                    "Don't show again this session",
-                );
-                ui.weak("Dismissals reset when Studio restarts.");
-                ui.separator();
-                ui.horizontal(|ui| {
-                    if ui
-                        .add_enabled(step_index > 0, egui::Button::new("Previous"))
-                        .clicked()
-                    {
-                        self.help_step = help::previous_index(id, step_index);
-                    }
-                    let is_last = step_index + 1 >= tutorial.steps.len();
-                    if ui
-                        .add_enabled(!is_last, egui::Button::new("Next"))
-                        .clicked()
-                    {
-                        self.help_step = help::next_index(id, step_index);
-                    }
-                    if ui
-                        .button(if is_last { "Finish" } else { "Close" })
-                        .clicked()
-                    {
-                        close = true;
-                    }
-                });
-            });
-        if close {
-            if self.help_dont_show_again {
+    fn close_help(&mut self, dismiss: bool) {
+        if let Some(id) = self.help_open {
+            if dismiss {
                 self.dismissed_help.insert(id);
             }
-            self.help_open = None;
-            self.help_step = 0;
-            self.help_dont_show_again = false;
         }
+        self.help_open = None;
+        self.help_step = 0;
+        self.help_pending_panel = None;
+        self.help_dont_show_again = false;
+    }
+
+    /// Foreground guided-help layer. Missing or cross-panel anchors deliberately
+    /// use a centered card; they are never carried over from a prior frame.
+    fn help_spotlight(&mut self, ctx: &egui::Context) {
+        let Some(id) = self.help_open else { return };
+        if let Some(panel) = self.help_pending_panel {
+            if self.current_panel == panel {
+                self.help_pending_panel = None;
+                ctx.request_repaint();
+            }
+            return;
+        }
+        if self.current_panel.help_id() != id {
+            self.close_help(false);
+            return;
+        }
+        let tutorial = help::tutorial(id);
+        let index = help::step_index(id, self.help_step);
+        self.help_step = index;
+        let step = tutorial.steps[index];
+        let target = step
+            .anchor(id, index)
+            .and_then(|key| self.help_anchors.get(id, key.key()));
+        let screen = ctx.screen_rect();
+        let viewport = (screen.width(), screen.height());
+        let card = help::place_card(
+            target,
+            (
+                viewport.0.min(560.0).max(240.0),
+                viewport.1.min(220.0).max(1.0),
+            ),
+            viewport,
+            16.0,
+        );
+        let painter = ctx.layer_painter(egui::LayerId::new(
+            egui::Order::Foreground,
+            egui::Id::new("help-spotlight"),
+        ));
+        painter.rect_filled(
+            screen,
+            0.0,
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+        );
+        if let Some(rect) = target {
+            let r = egui::Rect::from_min_max(
+                egui::pos2(rect.min.0, rect.min.1),
+                egui::pos2(rect.max.0, rect.max.1),
+            )
+            .expand(8.0);
+            painter.rect_stroke(
+                r,
+                5.0,
+                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 210, 80)),
+            );
+        }
+        let mut action: Option<&'static str> = None;
+        // A foreground hit-test layer owns the dimmed surface. The tutorial
+        // card is the only interactive region; panel widgets below cannot
+        // receive pointer events while the tour is visible.
+        egui::Area::new(egui::Id::new("help-interaction-shield"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .show(ctx, |ui| {
+                let response = ui.allocate_rect(screen, egui::Sense::click());
+                if response.clicked() {
+                    ctx.request_repaint();
+                }
+            });
+        egui::Area::new(egui::Id::new("help-card"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(egui::pos2(card.min.0, card.min.1))
+            .show(ctx, |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_min_width(card.size.0);
+                    ui.set_max_width(card.size.0);
+                    egui::ScrollArea::vertical()
+                        .max_height(card.size.1 - 70.0)
+                        .show(ui, |ui| {
+                            ui.heading(tutorial.title);
+                            ui.strong(step.title);
+                            ui.label(step.body);
+                            ui.weak(step.instruction(id, index));
+                        });
+                    ui.label(format!("Step {} of {}", index + 1, tutorial.steps.len()));
+                    ui.checkbox(
+                        &mut self.help_dont_show_again,
+                        "Dismiss this tour for this session",
+                    );
+                    ui.horizontal(|ui| {
+                        if ui
+                            .add_enabled(index > 0, egui::Button::new("Back"))
+                            .clicked()
+                        {
+                            self.help_step = help::previous_index(id, index);
+                        }
+                        let last = index + 1 == tutorial.steps.len();
+                        if ui.button(if last { "Finish" } else { "Next" }).clicked() {
+                            action = Some(if last { "finish" } else { "next" });
+                        }
+                        if ui.button("Skip").clicked() {
+                            action = Some("skip");
+                        }
+                    });
+                });
+            });
+        match action {
+            Some("next") => {
+                self.help_step = help::next_index(id, index);
+                let wanted = help::route(id, self.help_step);
+                if let Some(panel) =
+                    help::pending_navigation(id, wanted).and_then(panel_for_help_id)
+                {
+                    self.help_pending_panel = Some(panel);
+                    self.help_anchors
+                        .begin_frame(self.help_frame.wrapping_add(1));
+                    self.current_panel = panel;
+                }
+            }
+            Some("finish") => self.close_help(self.help_dont_show_again),
+            Some("skip") => self.close_help(true),
+            _ => {}
+        }
+    }
+
+    fn guided_action_allowed(&self, action: AnchorId) -> bool {
+        let active_step = self
+            .help_open
+            .and_then(|id| help::anchor_for_step(id, help::step_index(id, self.help_step)));
+        help::action_allowed(active_step, action)
+    }
+
+    fn unsafe_action_allowed(&self) -> bool {
+        self.help_open.is_none()
+    }
+
+    fn register_anchor(&mut self, panel: Panel, key: AnchorId, response: &egui::Response) {
+        let r = response.rect;
+        self.help_anchors.register(
+            panel.help_id(),
+            key.key(),
+            AnchorRect {
+                min: (r.min.x, r.min.y),
+                max: (r.max.x, r.max.y),
+            },
+        );
     }
 
     /// Draws the top-level tabs without allowing a narrow window to create a
@@ -2043,16 +2183,20 @@ impl StudioApp {
     }
 
     fn draw_tab_button(&mut self, ui: &mut egui::Ui, panel: Panel) {
-        if ui
-            .selectable_label(self.current_panel == panel, panel.label(self.language))
-            .clicked()
-        {
+        let response = ui.selectable_label(self.current_panel == panel, panel.label(self.language));
+        self.register_anchor(panel, AnchorId::PanelNavigation, &response);
+        if response.clicked() {
             if self.current_panel != panel {
                 self.log
                     .log(format!("Switched to panel {}", panel.label(self.language)));
             }
             self.current_panel = panel;
-            self.maybe_open_help_for(panel);
+            // Manual panel switching pauses the active tour and clears all
+            // frame-local targets rather than spotlighting stale geometry.
+            if self.help_open.is_some() {
+                self.close_help(false);
+                self.help_anchors.begin_frame(self.help_frame);
+            }
         }
     }
 
@@ -2098,7 +2242,7 @@ impl StudioApp {
         ui.add_space(8.0);
 
         // Target board selection.
-        ui.horizontal(|ui| {
+        let board_response = ui.horizontal(|ui| {
             ui.label("Target board:");
             for b in [Board::Green, Board::RedLite, Board::Blue, Board::Pro] {
                 if ui.selectable_label(self.board == b, b.label()).clicked() {
@@ -2106,9 +2250,10 @@ impl StudioApp {
                     self.log.log(format!("Target board set to {}", b.label()));
                 }
             }
-        })
-        .response
-        .on_hover_text(
+        });
+        let board_response = board_response.response;
+        self.register_anchor(Panel::Dashboard, AnchorId::DashboardBoard, &board_response);
+        let _ = board_response.on_hover_text(
             "Select which Sensor Watch board revision you're building/flashing for.\n\
              Different boards (Green, Red/Lite, Blue, Pro) have different LED\n\
              polarity, buzzer wiring, and optional sensors. The build and flash\n\
@@ -2187,7 +2332,9 @@ impl StudioApp {
                                 ui.selectable_value(&mut self.ntp_server, i, name);
                             }
                         });
-                    if ui.button("Fetch time").clicked() {
+                    let response = ui.button("Fetch time");
+                    self.register_anchor(Panel::Dashboard, AnchorId::DashboardNtpFetch, &response);
+                    if response.clicked() {
                         self.fetch_ntp();
                     }
                 });
@@ -2654,8 +2801,9 @@ impl StudioApp {
             }
             ui.separator();
             ui.add(egui::TextEdit::singleline(&mut self.new_preset_name).desired_width(150.0));
-            if ui
-                .button("+")
+            let response = ui.button("+");
+            self.register_anchor(Panel::Faces, AnchorId::FacesPreset, &response);
+            if response
                 .on_hover_text("Add a new preset with the typed name")
                 .clicked()
             {
@@ -2685,6 +2833,7 @@ impl StudioApp {
                 .button("Delete")
                 .on_hover_text("Delete the active preset and its face list")
                 .clicked()
+                && self.unsafe_action_allowed()
             {
                 let active = self
                     .presets
@@ -2726,7 +2875,8 @@ impl StudioApp {
                         // Search and category filter on one row to save space.
                         ui.horizontal(|ui| {
                             ui.label("Search:");
-                            ui.text_edit_singleline(&mut self.catalog_search);
+                            let response = ui.text_edit_singleline(&mut self.catalog_search);
+                            self.register_anchor(Panel::Faces, AnchorId::FacesSearch, &response);
                             if !self.catalog_search.is_empty() && ui.small_button("x").clicked() {
                                 self.catalog_search.clear();
                             }
@@ -2860,7 +3010,9 @@ impl StudioApp {
                                             // simulator, view source, or fuzz-test it.
                                             if name_resp.context_menu(|ui| {
                                                 let face_name = face.name.clone();
-                                                if ui.button("Add to preset").clicked() {
+                                                let response = ui.button("Add to preset");
+                                                self.register_anchor(Panel::Faces, AnchorId::FacesAdd, &response);
+                                                if response.clicked() {
                                                     self.presets.add_face(&face_name);
                                                     self.save_settings_internal();
                                                     self.log.log(format!(
@@ -3070,7 +3222,7 @@ impl StudioApp {
                                                 self.save_settings_internal();
                                                 ui.close_menu();
                                             }
-                                            if ui.button("Remove").clicked() {
+                                            if ui.button("Remove").clicked() && self.unsafe_action_allowed() {
                                                 let face = face.clone();
                                                 self.pending_confirm = Some((
                                                     format!(
@@ -3107,6 +3259,7 @@ impl StudioApp {
                                                 "Remove this face from the active preset",
                                             )
                                             .clicked()
+                                            && self.unsafe_action_allowed()
                                         {
                                             let face = self.presets.active_faces()[i].clone();
                                             self.pending_confirm = Some((
@@ -3569,18 +3722,18 @@ impl StudioApp {
                         }
                     });
                 });
-        });
+            });
     }
 
+    /// The modules panel
     /// The editor panel: create, edit, or delete watch faces.
     fn editor(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading("Editor");
             ui.separator();
-            if ui
-                .selectable_label(self.block_editor.is_blocks_mode(), "Blocks")
-                .clicked()
-            {
+            let response = ui.selectable_label(self.block_editor.is_blocks_mode(), "Blocks");
+            self.register_anchor(Panel::Editor, AnchorId::EditorMode, &response);
+            if response.clicked() {
                 self.block_editor.set_blocks_mode(true);
             }
             if ui
@@ -3658,9 +3811,11 @@ impl StudioApp {
         ui.add_space(8.0);
         ui.horizontal(|ui| {
             ui.label("Face name (snake_case):");
-            ui.text_edit_singleline(&mut self.editor_name);
-            if ui
-                .button("Generate from template")
+            let name_response = ui.text_edit_singleline(&mut self.editor_name);
+            self.register_anchor(Panel::Editor, AnchorId::EditorName, &name_response);
+            let generate_response = ui.button("Generate from template");
+            self.register_anchor(Panel::Editor, AnchorId::EditorGenerate, &generate_response);
+            if generate_response
                 .on_hover_text("Fill the editor with a ready-made watch face")
                 .clicked()
             {
@@ -3708,8 +3863,9 @@ impl StudioApp {
 
     fn editor_actions(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
-            if ui
-                .button("Save face")
+            let save_response = ui.button("Save face");
+            self.register_anchor(Panel::Editor, AnchorId::EditorSave, &save_response);
+            if save_response
                 .on_hover_text("Save the editor source to the firmware project")
                 .clicked()
             {
@@ -3768,6 +3924,7 @@ impl StudioApp {
                 .button("Delete face")
                 .on_hover_text("Delete the face file from the firmware project")
                 .clicked()
+                && self.unsafe_action_allowed()
             {
                 let name = self.editor_name.trim().to_string();
                 if !name.is_empty() {
@@ -3842,7 +3999,8 @@ impl StudioApp {
                     ui.spinner();
                     ui.label(tr(self.language, Key::Building));
                 } else if build::validate_configuration_inputs().is_err() {
-                    ui.add_enabled(false, egui::Button::new("Build unavailable"));
+                    let response = ui.add_enabled(false, egui::Button::new("Build unavailable"));
+                    self.register_anchor(Panel::BuildFlash, AnchorId::BuildUnavailable, &response);
                     ui.colored_label(
                         egui::Color32::from_rgb(220, 160, 80),
                         "Build disabled: complete the Studio-to-firmware configuration input contract first.",
@@ -3852,15 +4010,19 @@ impl StudioApp {
                             ui.label(format!("• {input}"));
                         }
                     });
-                } else if !self.shutting_down
-                    && self.pending_build.is_none()
-                    && !self.flash_busy()
-                    && ui
+                } else {
+                    let build_response = ui
                         .button(tr(self.language, Key::BuildUf2))
-                        .on_hover_text("Compile the firmware into a .uf2 file for the watch")
-                        .clicked()
-                {
-                    self.start_build();
+                        .on_hover_text("Compile the firmware into a .uf2 file for the watch");
+                    self.register_anchor(Panel::BuildFlash, AnchorId::BuildArtifact, &build_response);
+                    if !self.shutting_down
+                        && self.pending_build.is_none()
+                        && !self.flash_busy()
+                        && build_response.clicked()
+                        && self.guided_action_allowed(AnchorId::BuildArtifact)
+                    {
+                        self.start_build();
+                    }
                 }
                 if !self.build_message.is_empty() {
                     ui.label(&self.build_message);
@@ -3879,13 +4041,15 @@ impl StudioApp {
                         egui::TextEdit::singleline(&mut self.artifact_path_input)
                             .hint_text("Path to .uf2"),
                     );
-                    if ui
-                        .add_enabled(
-                            !artifact_actions_blocked,
-                            egui::Button::new("Inspect UF2"),
-                        )
+                    let inspect_response = ui.add_enabled(
+                        !artifact_actions_blocked,
+                        egui::Button::new("Inspect UF2"),
+                    );
+                    self.register_anchor(Panel::BuildFlash, AnchorId::BuildInspect, &inspect_response);
+                    if inspect_response
                         .on_hover_text("Verify UF2 structure, family, manifest, and sidecars")
                         .clicked()
+                        && self.guided_action_allowed(AnchorId::BuildInspect)
                     {
                         self.inspect_artifact_from_input();
                     }
@@ -3897,13 +4061,15 @@ impl StudioApp {
                     ui.group(|ui| {
                         ui.label("Verification succeeded (local consistency only):");
                         ui.monospace(artifact_metadata(&inspection));
-                        if ui
-                            .add_enabled(
-                                !artifact_actions_blocked,
-                                egui::Button::new("Approve for this session"),
-                            )
+                        let approve_response = ui.add_enabled(
+                            !artifact_actions_blocked,
+                            egui::Button::new("Approve for this session"),
+                        );
+                        self.register_anchor(Panel::BuildFlash, AnchorId::BuildApprove, &approve_response);
+                        if approve_response
                             .on_hover_text("Approve this inspected artifact only after reviewing its metadata")
                             .clicked()
+                            && self.guided_action_allowed(AnchorId::BuildApprove)
                         {
                             approve_artifact_state(
                                 &mut self.status,
@@ -3951,12 +4117,16 @@ impl StudioApp {
                     if self.pending_detection.is_some() {
                         ui.spinner();
                         ui.label("Detecting Sensor Watch drives…");
-                    } else if ui
-                        .button("Refresh detection")
+                    } else {
+                        let refresh_response = ui.button("Refresh detection");
+                        self.register_anchor(Panel::BuildFlash, AnchorId::BuildRefresh, &refresh_response);
+                        if refresh_response
                         .on_hover_text("Rescan removable drives; keep only the intended watch in bootloader mode")
                         .clicked()
-                        && !self.flash_busy() {
+                        && !self.flash_busy()
+                        && self.guided_action_allowed(AnchorId::BuildRefresh) {
                         self.start_watch_detection();
+                        }
                     }
                 });
                 match &self.cached_watch {
@@ -3987,13 +4157,15 @@ impl StudioApp {
                     ui.weak("Build in progress; flashing is disabled until it finishes.");
                 } else if let Some(approved) = &self.approved_artifact {
                     let approved = approved.clone();
+                    let copy_response = ui.button(tr(self.language, Key::CopyToWatch));
+                    self.register_anchor(Panel::BuildFlash, AnchorId::BuildCopy, &copy_response);
                     if !self.shutting_down
-                        && ui
-                            .button(tr(self.language, Key::CopyToWatch))
+                        && copy_response
                             .on_hover_text(
                                 "Write the firmware to the watch's USB drive (bootloader mode)",
                             )
                             .clicked()
+                        && self.guided_action_allowed(AnchorId::BuildCopy)
                     {
                         self.snapshot_before("Before flash");
                         self.copy_to_watch(&approved);
@@ -4060,7 +4232,9 @@ impl StudioApp {
 
                 // NTP fetch.
                 ui.horizontal(|ui| {
-                    if ui.button("Fetch NTP time").clicked() {
+                    let response = ui.button("Fetch NTP time");
+                    self.register_anchor(Panel::Calibration, AnchorId::CalibrationFetch, &response);
+                    if response.clicked() {
                         self.fetch_ntp();
                     }
                     if self.ntp_busy {
@@ -4152,7 +4326,15 @@ impl StudioApp {
                      minute (hours or days is better), fetch again, then record the end.",
                 );
                 ui.horizontal(|ui| {
-                    if ui.button("Record sample").clicked() {
+                    let record_response = ui.button("Record sample");
+                    self.register_anchor(
+                        Panel::Calibration,
+                        AnchorId::CalibrationRecord,
+                        &record_response,
+                    );
+                    if record_response.clicked()
+                        && self.guided_action_allowed(AnchorId::CalibrationRecord)
+                    {
                         if let Some(reference) = self.ntp_time {
                             let (year, month, day, hour, minute, second, _) = self.watch.get_time();
                             let watch_secs = (watch_sim::days_from_civil(year, month, day) as u64)
@@ -4193,7 +4375,15 @@ impl StudioApp {
                             ui.monospace(format!("Recommended correction: {:+} ppm", measurement.correction_ppm));
                             let command = format!("drift {}", measurement.correction_ppm);
                             ui.monospace(format!("UART command: {command}"));
-                            if ui.button("Copy correction command").clicked() {
+                            let copy_response = ui.button("Copy correction command");
+                            self.register_anchor(
+                                Panel::Calibration,
+                                AnchorId::CalibrationCopy,
+                                &copy_response,
+                            );
+                            if copy_response.clicked()
+                                && self.guided_action_allowed(AnchorId::CalibrationCopy)
+                            {
                                 let _ = ui_copy_to_clipboard(&command);
                                 self.status = "Drift correction command copied".to_string();
                             }
@@ -4271,8 +4461,9 @@ impl StudioApp {
                         ui.text_edit_singleline(&mut self.module_description);
                         ui.end_row();
                     });
-                if ui
-                    .button("Register module")
+                let response = ui.button("Register module");
+                self.register_anchor(Panel::Modules, AnchorId::ModulesRegister, &response);
+                if response
                     .on_hover_text("Register a new custom hardware module")
                     .clicked()
                 {
@@ -4310,8 +4501,15 @@ impl StudioApp {
                     .iter()
                     .map(|m| m.name.clone())
                     .collect();
+                let unsafe_allowed = self.unsafe_action_allowed();
                 for name in &names {
-                    let Some(m) = self.modules.modules.iter().find(|m| &m.name == name) else {
+                    let Some(m) = self
+                        .modules
+                        .modules
+                        .iter()
+                        .find(|m| &m.name == name)
+                        .cloned()
+                    else {
                         continue;
                     };
                     ui.horizontal(|ui| {
@@ -4327,8 +4525,9 @@ impl StudioApp {
                         }
                         if ui
                             .small_button("Remove")
-                            .on_hover_text("Unregister this module")
+                            .on_hover_text("Remove this module")
                             .clicked()
+                            && unsafe_allowed
                         {
                             self.pending_confirm = Some((
                                 format!("Remove module '{}'?", m.name),
@@ -4358,6 +4557,7 @@ impl StudioApp {
     /// an explicit UART command and are never inferred from this report.
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
         ui.heading("Diagnostics");
+
         ui.label("Offline checks for the watch shell and simulator. Physical hardware is never implied by simulated results.");
         if ui.button("Open error encyclopedia").clicked() {
             self.current_panel = Panel::Bugs;
@@ -4379,6 +4579,7 @@ impl StudioApp {
                 !self.diagnostics.running,
                 egui::Button::new("Run full diagnostic"),
             );
+            self.register_anchor(Panel::Diagnostics, AnchorId::DiagnosticsRun, &run);
             if run.clicked() {
                 self.run_full_diagnostic();
             }
@@ -4821,11 +5022,12 @@ impl StudioApp {
             );
         }
         ui.horizontal(|ui| {
-            if ui
-                .add_enabled(
-                    self.pending_probe.is_none(),
-                    egui::Button::new("Refresh COM ports"),
-                )
+            let response = ui.add_enabled(
+                self.pending_probe.is_none(),
+                egui::Button::new("Refresh COM ports"),
+            );
+            self.register_anchor(Panel::Probe, AnchorId::ProbeRefresh, &response);
+            if response
                 .on_hover_text("Refresh available UART ports")
                 .clicked()
             {
@@ -4846,17 +5048,21 @@ impl StudioApp {
         });
         ui.horizontal(|ui| {
             let enabled = self.advanced_mode && self.pending_probe.is_none();
-            if ui
-                .add_enabled(enabled, egui::Button::new("Run physical probe"))
+            let run_response = ui.add_enabled(enabled, egui::Button::new("Run physical probe"));
+            self.register_anchor(Panel::Probe, AnchorId::ProbeRun, &run_response);
+            if run_response
                 .on_hover_text("Run read-only checks; requires a connected UART jig and confirmation")
                 .clicked()
+                && self.guided_action_allowed(AnchorId::ProbeRun)
             {
                 self.pending_confirm = Some((
                     "Run the physical probe? It will inspect removable drives and send only the read-only commands help, time, events, panic, and optical to the already connected selected UART port.".into(),
                     ConfirmKind::RunPhysicalProbe,
                 ));
             }
-            if ui.button("Copy report").clicked() {
+            let copy_response = ui.button("Copy report");
+            self.register_anchor(Panel::Probe, AnchorId::ProbeReport, &copy_response);
+            if copy_response.clicked() {
                 if let Some(report) = &self.probe_report {
                     match ui_copy_to_clipboard(&report.text()) {
                         Ok(()) => self.status = "Probe report copied".to_string(),
@@ -4935,13 +5141,12 @@ impl StudioApp {
         ui.separator();
         ui.horizontal(|ui| {
             ui.label("Transport:");
-            if ui
-                .selectable_label(
-                    self.transport_mode == transport::TransportMode::Simulated,
-                    "Simulated",
-                )
-                .clicked()
-            {
+            let mode_response = ui.selectable_label(
+                self.transport_mode == transport::TransportMode::Simulated,
+                "Simulated",
+            );
+            self.register_anchor(Panel::Shell, AnchorId::ShellMode, &mode_response);
+            if mode_response.clicked() {
                 self.disconnect_uart();
             }
             if ui
@@ -5027,15 +5232,21 @@ impl StudioApp {
                 ui.horizontal(|ui| {
                     ui.label(">");
                     let resp = ui.text_edit_singleline(&mut self.shell_input);
+                    self.register_anchor(Panel::Shell, AnchorId::ShellInput, &resp);
                     let submitted =
                         resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                    if ui
-                        .add_enabled(self.pending_probe.is_none(), egui::Button::new("Send"))
+                    let send_response =
+                        ui.add_enabled(self.pending_probe.is_none(), egui::Button::new("Send"));
+                    self.register_anchor(Panel::Shell, AnchorId::ShellSend, &send_response);
+                    if send_response
                         .on_hover_text(
                             "Send the command to the selected simulated or UART transport",
                         )
                         .clicked()
-                        || (submitted && self.pending_probe.is_none())
+                        && self.guided_action_allowed(AnchorId::ShellSend)
+                        || (submitted
+                            && self.pending_probe.is_none()
+                            && self.guided_action_allowed(AnchorId::ShellSend))
                     {
                         let cmd = self.shell_input.trim().to_string();
                         self.shell_input.clear();
@@ -5196,10 +5407,14 @@ impl StudioApp {
             ui.heading(tr(self.language, Key::DebugOutput));
             ui.label("Ticks:");
             self.tick_filter_ui(ui, "debug_tick_filter");
+            let log_response = ui.label("Debug log");
+            self.register_anchor(Panel::Debug, AnchorId::DebugLog, &log_response);
             if ui.button(tr(self.language, Key::Clear)).clicked() {
                 self.log.clear();
             }
-            if ui.button("Copy all").clicked() {
+            let response = ui.button("Copy all");
+            self.register_anchor(Panel::Debug, AnchorId::DebugCopy, &response);
+            if response.clicked() {
                 let text = self
                     .log
                     .entries()
@@ -5361,7 +5576,9 @@ impl StudioApp {
                     .join("\n");
                 let _ = ui_copy_to_clipboard(&text);
             }
-            if ui.button("Generate bug report").clicked() {
+            let report_response = ui.button("Generate bug report");
+            self.register_anchor(Panel::Bugs, AnchorId::BugsReport, &report_response);
+            if report_response.clicked() && self.guided_action_allowed(AnchorId::BugsReport) {
                 let report = self.build_bug_report();
                 let _ = ui_copy_to_clipboard(&report);
                 self.status = "Bug report copied to clipboard".to_string();
@@ -5375,8 +5592,14 @@ impl StudioApp {
         ui.horizontal(|ui| {
             ui.label("Fingerprint:");
             let response = ui.text_edit_singleline(&mut self.panic_fingerprint_input);
-            resolve_fingerprint = ui.button("Resolve").clicked()
-                || (response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)));
+            self.register_anchor(Panel::Bugs, AnchorId::BugsFingerprint, &response);
+            let resolve_response = ui.button("Resolve");
+            self.register_anchor(Panel::Bugs, AnchorId::BugsResolve, &resolve_response);
+            resolve_fingerprint = (resolve_response.clicked()
+                && self.guided_action_allowed(AnchorId::BugsResolve))
+                || (response.lost_focus()
+                    && ui.input(|i| i.key_pressed(egui::Key::Enter))
+                    && self.guided_action_allowed(AnchorId::BugsResolve));
         });
         if resolve_fingerprint {
             let root = build::firmware_dir();
@@ -5402,6 +5625,8 @@ impl StudioApp {
             ui.monospace(&self.panic_resolution);
         }
         ui.add_space(8.0);
+        let response = ui.text_edit_singleline(&mut self.catalog_error_search);
+        self.register_anchor(Panel::Bugs, AnchorId::BugsSearch, &response);
         ui.separator();
         self.error_catalog(ui);
         ui.separator();
@@ -5428,7 +5653,12 @@ impl StudioApp {
 
     /// The read-only workspace reference browser.
     fn file_browser(&mut self, ui: &mut egui::Ui) {
-        if let Some(message) = self.file_browser.ui(ui) {
+        let (message, anchors) = self.file_browser.ui(ui);
+        for hit in anchors {
+            self.help_anchors
+                .register(Panel::FileBrowser.help_id(), hit.key.key(), hit.rect);
+        }
+        if let Some(message) = message {
             self.status = message;
         }
     }
@@ -5448,7 +5678,7 @@ impl StudioApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 // What is a watch face?
-                egui::CollapsingHeader::new("What is a watch face?")
+                let section_response = egui::CollapsingHeader::new("What is a watch face?")
                     .default_open(true)
                     .show(ui, |ui| {
                         ui.label(
@@ -5461,6 +5691,11 @@ impl StudioApp {
                              them without touching the rest of the code.",
                         );
                     });
+                self.register_anchor(
+                    Panel::Tutorials,
+                    AnchorId::TutorialSections,
+                    &section_response.header_response,
+                );
                 ui.add_space(6.0);
 
                 // The 3 buttons.
@@ -5634,7 +5869,9 @@ impl StudioApp {
             if ui.button("Error encyclopedia").clicked() {
                 self.current_panel = Panel::Bugs;
             }
-            if ui.button("Back").clicked() {
+            let response = ui.button("Back");
+            self.register_anchor(Panel::Wiki, AnchorId::WikiNavigation, &response);
+            if response.clicked() {
                 self.wiki.back();
                 self.log.log("Wiki: back".to_string());
             }
@@ -5706,11 +5943,12 @@ impl StudioApp {
                     .width_range(180.0..=available.x * 0.6)
                     .show_inside(ui, |ui| {
                         ui.set_min_size(ui.available_size());
-                        ui.add(
+                        let response = ui.add(
                             egui::TextEdit::singleline(&mut self.wiki.search)
                                 .hint_text("Search pages...")
                                 .desired_width(f32::INFINITY),
                         );
+                        self.register_anchor(Panel::Wiki, AnchorId::WikiSearch, &response);
                         ui.add_space(4.0);
                         let query = self.wiki.search.to_lowercase();
                         let mut clicked: Option<String> = None;
@@ -5839,6 +6077,8 @@ impl StudioApp {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let watch_response = ui.label("Watch preview");
+                self.register_anchor(Panel::Simulator, AnchorId::SimulatorWatch, &watch_response);
                 ui.horizontal(|ui| {
                     ui.heading("Simulator");
                     ui.separator();
@@ -5916,7 +6156,7 @@ impl StudioApp {
 
                 // Date/time controller: set the simulated display without tedious
                 // button mashing.
-                ui.collapsing("Date / time controller", |ui| {
+                let date_response = ui.collapsing("Date / time controller", |ui| {
                     egui::Grid::new("sim_date_grid")
                         .spacing([12.0, 6.0])
                         .num_columns(4)
@@ -5946,7 +6186,11 @@ impl StudioApp {
                             ui.end_row();
                         });
                     ui.horizontal(|ui| {
-                        if ui.button("Apply date/time").clicked() {
+                        let response = ui.button("Apply date/time");
+                        self.register_anchor(Panel::Simulator, AnchorId::SimulatorApply, &response);
+                        if response.clicked()
+                            && self.guided_action_allowed(AnchorId::SimulatorApply)
+                        {
                             self.watch.set_datetime(
                                 self.sim_year,
                                 self.sim_month,
@@ -5993,6 +6237,11 @@ impl StudioApp {
                     });
                     ui.separator();
                 });
+                self.register_anchor(
+                    Panel::Simulator,
+                    AnchorId::SimulatorDate,
+                    &date_response.header_response,
+                );
 
                 // Simulator debug log: under the sim bar / date controller, showing
                 // button presses, face switches, and sim actions.
@@ -6228,7 +6477,8 @@ impl StudioApp {
         self.last_render_used_real = used_real;
 
         // Allocate the image rect so we can map clicks to SVG button hotspots.
-        let (rect, _response) = ui.allocate_exact_size(egui::Vec2::new(w, h), egui::Sense::click());
+        let (rect, response) = ui.allocate_exact_size(egui::Vec2::new(w, h), egui::Sense::click());
+        self.register_anchor(Panel::Simulator, AnchorId::SimulatorWatch, &response);
         ui.painter().image(
             texture.id(),
             rect,
@@ -6685,6 +6935,8 @@ impl StudioApp {
     /// The settings panel: configure the app and the watch.
     fn settings(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr(self.language, Key::Settings));
+        let theme_response = ui.label("Theme and layout");
+        self.register_anchor(Panel::Settings, AnchorId::SettingsTheme, &theme_response);
         ui.separator();
 
         // The settings panel is long, so wrap everything in a scroll area that
@@ -6726,9 +6978,9 @@ impl StudioApp {
                 ui.label(tr(self.language, Key::Theme));
                 ui.horizontal(|ui| {
                     for theme in Theme::ALL {
-                        if ui
-                            .selectable_label(self.theme == theme, theme.name())
-                            .clicked()
+                        let response = ui.selectable_label(self.theme == theme, theme.name());
+                        self.register_anchor(Panel::Settings, AnchorId::SettingsTheme, &response);
+                        if response.clicked()
                         {
                             self.theme = theme;
                             self.log.log(format!("Theme set to {}", theme.name()));
@@ -6748,9 +7000,9 @@ impl StudioApp {
                         (settings::TabLayoutMode::TwoRows, Key::TabLayoutTwoRows),
                         (settings::TabLayoutMode::ThreeRows, Key::TabLayoutThreeRows),
                     ] {
-                        if ui
-                            .selectable_label(self.tab_layout == mode, tr(self.language, key))
-                            .clicked()
+                        let response = ui.selectable_label(self.tab_layout == mode, tr(self.language, key));
+                        self.register_anchor(Panel::Settings, AnchorId::SettingsLayout, &response);
+                        if response.clicked()
                         {
                             self.tab_layout = mode;
                             tab_settings_changed = true;
@@ -6785,7 +7037,9 @@ impl StudioApp {
                 ui.label("Text size");
                 ui.horizontal(|ui| {
                     for (v, label) in [(0u8, "Small"), (1, "Normal"), (2, "Big")] {
-                        if ui.selectable_label(self.text_size == v, label).clicked() {
+                        let response = ui.selectable_label(self.text_size == v, label);
+                        self.register_anchor(Panel::Settings, AnchorId::SettingsText, &response);
+                        if response.clicked() {
                             self.text_size = v;
                             self.log.log(format!("Text size set to {label}"));
                         }
@@ -6977,11 +7231,11 @@ impl StudioApp {
             if ui.button("Export settings JSON").clicked() {
                 self.export_settings();
             }
-            if ui
-                .button("Import settings JSON")
-                .on_hover_text("Replace settings from clipboard JSON; create a restore point first")
-                .clicked()
-            {
+            let import_response = ui.button("Import settings JSON").on_hover_text(
+                "Replace settings from clipboard JSON; create a restore point first",
+            );
+            self.register_anchor(Panel::Settings, AnchorId::SettingsImport, &import_response);
+            if import_response.clicked() && self.guided_action_allowed(AnchorId::SettingsImport) {
                 self.snapshot_before("Before settings import");
                 self.import_settings();
             }
@@ -7007,20 +7261,28 @@ impl StudioApp {
         let mut restore_index = None;
         let mut delete_index = None;
         let mut rename_index = None;
-        for (index, point) in self.restore_store.points.iter().enumerate() {
+        let restore_points = self.restore_store.points.clone();
+        let restore_allowed = self.guided_action_allowed(AnchorId::SettingsRestore);
+        let unsafe_allowed = self.unsafe_action_allowed();
+        for (index, point) in restore_points.iter().enumerate() {
+            let mut restore_rect = None;
+            let mut restore_clicked = false;
+            let mut export_requested = false;
             ui.horizontal(|ui| {
                 ui.label(format!("{} - {}", point.name, point.timestamp));
-                if ui
+                let restore_response = ui
                     .small_button("Restore")
-                    .on_hover_text("Replace current settings with this saved restore point")
-                    .clicked()
-                {
+                    .on_hover_text("Replace current settings with this saved restore point");
+                restore_rect = Some(restore_response.rect);
+                restore_clicked = restore_response.clicked();
+                if restore_clicked && restore_allowed {
                     restore_index = Some(index);
                 }
                 if ui
                     .small_button("Delete")
                     .on_hover_text("Permanently remove this local restore point")
                     .clicked()
+                    && unsafe_allowed
                 {
                     delete_index = Some(index);
                 }
@@ -7028,22 +7290,36 @@ impl StudioApp {
                     rename_index = Some(index);
                 }
                 if ui.small_button("Export").clicked() {
-                    match self
-                        .restore_store
-                        .export_json(index)
-                        .and_then(|j| ui_copy_to_clipboard(&j))
-                    {
-                        Ok(_) => self.status = "Restore point copied to clipboard".to_string(),
-                        Err(e) => self.status = format!("Restore point export failed: {e}"),
-                    }
+                    export_requested = true;
                 }
             });
+            if let Some(rect) = restore_rect {
+                self.help_anchors.register(
+                    Panel::Settings.help_id(),
+                    AnchorId::SettingsRestore.key(),
+                    help::AnchorRect {
+                        min: (rect.min.x, rect.min.y),
+                        max: (rect.max.x, rect.max.y),
+                    },
+                );
+            }
+            if export_requested {
+                match self
+                    .restore_store
+                    .export_json(index)
+                    .and_then(|j| ui_copy_to_clipboard(&j))
+                {
+                    Ok(_) => self.status = "Restore point copied to clipboard".to_string(),
+                    Err(e) => self.status = format!("Restore point export failed: {e}"),
+                }
+            }
         }
         ui.horizontal(|ui| {
-            if ui
+            let import_restore_response = ui
                 .button("Import")
-                .on_hover_text("Import a restore point from clipboard JSON")
-                .clicked()
+                .on_hover_text("Import a restore point from clipboard JSON");
+            if import_restore_response.clicked()
+                && self.guided_action_allowed(AnchorId::SettingsRestore)
             {
                 match ui_paste_from_clipboard()
                     .and_then(|j| self.restore_store.import_json(&j).map(|_| j))

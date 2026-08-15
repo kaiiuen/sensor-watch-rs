@@ -4,7 +4,186 @@
 //! the app session because the settings schema is deliberately not changed by
 //! this feature; restarting Studio shows help again.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+
+/// Stable semantic anchors used by guided help. These names are part of the
+/// help contract, rather than widget labels which may be localized.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum AnchorId {
+    PanelHelp,
+    PanelNavigation,
+    DashboardBoard,
+    DashboardNtpFetch,
+    EditorMode,
+    EditorTemplate,
+    EditorName,
+    EditorGenerate,
+    EditorSave,
+    FacesSearch,
+    FacesAdd,
+    FacesPreset,
+    SimulatorWatch,
+    SimulatorDate,
+    SimulatorApply,
+    BuildArtifact,
+    BuildInspect,
+    BuildApprove,
+    BuildRefresh,
+    BuildCopy,
+    BuildUnavailable,
+    CalibrationFetch,
+    CalibrationRecord,
+    CalibrationCopy,
+    ModulesRegister,
+    ShellMode,
+    ShellInput,
+    ShellSend,
+    DiagnosticsRun,
+    DebugLog,
+    DebugCopy,
+    BugsSearch,
+    BugsFingerprint,
+    BugsResolve,
+    BugsReport,
+    FileRefresh,
+    FileFilter,
+    FileList,
+    FilePreview,
+    TutorialSections,
+    WikiNavigation,
+    WikiSearch,
+    SettingsTheme,
+    SettingsText,
+    SettingsLayout,
+    SettingsImport,
+    SettingsRestore,
+    ProbeRefresh,
+    ProbeRun,
+    ProbeReport,
+}
+
+impl AnchorId {
+    pub const fn key(self) -> AnchorKey {
+        AnchorKey(self)
+    }
+}
+
+/// A namespaced key prevents accidental collisions between panel widgets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AnchorKey(pub AnchorId);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AnchorRect {
+    pub min: (f32, f32),
+    pub max: (f32, f32),
+}
+
+impl AnchorRect {
+    pub fn expand(self, padding: f32) -> Self {
+        Self {
+            min: (self.min.0 - padding, self.min.1 - padding),
+            max: (self.max.0 + padding, self.max.1 + padding),
+        }
+    }
+}
+
+/// Frame-local registry: a new frame replaces, rather than merges with, the
+/// previous registry so stale targets can never be spotlighted.
+#[derive(Default)]
+pub struct AnchorRegistry {
+    frame: u64,
+    anchors: HashMap<AnchorKey, (HelpId, AnchorRect)>,
+}
+
+impl AnchorRegistry {
+    pub fn begin_frame(&mut self, frame: u64) {
+        self.frame = frame;
+        self.anchors.clear();
+    }
+    pub fn register(&mut self, panel: HelpId, key: AnchorKey, rect: AnchorRect) {
+        self.anchors.insert(key, (panel, rect));
+    }
+    pub fn get(&self, panel: HelpId, key: AnchorKey) -> Option<AnchorRect> {
+        self.anchors
+            .get(&key)
+            .and_then(|(owner, rect)| (*owner == panel).then_some(*rect))
+    }
+    pub fn frame(&self) -> u64 {
+        self.frame
+    }
+
+    pub fn len(&self) -> usize {
+        self.anchors.len()
+    }
+
+    pub fn count_for_panel(&self, panel: HelpId) -> usize {
+        self.anchors
+            .values()
+            .filter(|(owner, _)| *owner == panel)
+            .count()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CardPlacement {
+    pub min: (f32, f32),
+    pub size: (f32, f32),
+}
+
+pub fn place_card(
+    target: Option<AnchorRect>,
+    card: (f32, f32),
+    viewport: (f32, f32),
+    margin: f32,
+) -> CardPlacement {
+    let (w, h) = (
+        card.0.min((viewport.0 - margin * 2.0).max(1.0)),
+        card.1.min((viewport.1 - margin * 2.0).max(1.0)),
+    );
+    let card = (w, h);
+    let (x, y) = target
+        .map(|r| ((r.min.0 + r.max.0 - w) / 2.0, r.max.1 + margin))
+        .unwrap_or(((viewport.0 - w) / 2.0, (viewport.1 - h) / 2.0));
+    CardPlacement {
+        min: (
+            x.clamp(margin, (viewport.0 - w - margin).max(margin)),
+            y.clamp(margin, (viewport.1 - h - margin).max(margin)),
+        ),
+        size: card,
+    }
+}
+
+pub fn overlay_allows_click(anchor: Option<AnchorId>, in_target: bool) -> bool {
+    in_target && anchor.is_some_and(forced_action_allowed)
+}
+
+pub fn forced_action_allowed(anchor: AnchorId) -> bool {
+    matches!(
+        anchor,
+        AnchorId::EditorTemplate
+            | AnchorId::EditorName
+            | AnchorId::FacesPreset
+            | AnchorId::SimulatorWatch
+            | AnchorId::SimulatorDate
+            | AnchorId::SimulatorApply
+            | AnchorId::CalibrationRecord
+            | AnchorId::CalibrationCopy
+            | AnchorId::FileRefresh
+            | AnchorId::FileFilter
+            | AnchorId::FileList
+            | AnchorId::FilePreview
+            | AnchorId::SettingsTheme
+            | AnchorId::SettingsText
+            | AnchorId::SettingsLayout
+    )
+}
+
+/// Whether an action may be processed while the guided tour owns the input.
+/// Unsafe actions are never force-enabled by a tour; safe actions are allowed
+/// only when they are the currently highlighted control.
+pub fn action_allowed(active_step: Option<AnchorId>, action: AnchorId) -> bool {
+    active_step.is_none() || (active_step == Some(action) && forced_action_allowed(action))
+}
 
 /// Stable identifier for a contextual panel tutorial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,6 +211,80 @@ pub enum HelpId {
 pub struct TutorialStep {
     pub title: &'static str,
     pub body: &'static str,
+}
+
+impl TutorialStep {
+    pub fn expected_panel(self, tutorial: HelpId) -> HelpId {
+        tutorial
+    }
+    pub fn anchor(self, tutorial: HelpId, index: usize) -> Option<AnchorId> {
+        anchor_for_step(tutorial, index)
+    }
+    pub fn instruction(self, tutorial: HelpId, index: usize) -> &'static str {
+        if self.anchor(tutorial, index).is_some() {
+            "Try the highlighted control, or continue manually."
+        } else {
+            "Read this guidance; no action is required."
+        }
+    }
+}
+
+pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
+    use AnchorId::*;
+    Some(match id {
+        HelpId::Dashboard => [DashboardBoard, DashboardNtpFetch, PanelHelp][index.min(2)],
+        HelpId::WatchFaces => [FacesSearch, FacesPreset, FacesAdd][index.min(2)],
+        HelpId::Editor => [EditorTemplate, EditorName, EditorGenerate, EditorSave][index.min(3)],
+        HelpId::Simulator => [SimulatorWatch, SimulatorDate, SimulatorApply][index.min(2)],
+        HelpId::BuildFlash => [
+            BuildUnavailable,
+            BuildInspect,
+            BuildApprove,
+            BuildRefresh,
+            BuildCopy,
+        ][index.min(4)],
+        HelpId::Calibration => [CalibrationFetch, CalibrationRecord, CalibrationCopy][index.min(2)],
+        HelpId::Modules => ModulesRegister,
+        HelpId::ShellAccess => [ShellMode, ShellInput, ShellSend][index.min(2)],
+        HelpId::Diagnostics => DiagnosticsRun,
+        HelpId::DebugOutput => [DebugLog, DebugCopy][index.min(1)],
+        HelpId::Bugs => [BugsSearch, BugsFingerprint, BugsResolve, BugsReport][index.min(3)],
+        HelpId::FileBrowser => [FileRefresh, FileFilter, FileList, FilePreview][index.min(3)],
+        HelpId::Tutorials => TutorialSections,
+        HelpId::Wiki => [WikiNavigation, WikiSearch, WikiSearch][index.min(2)],
+        HelpId::Settings => [
+            SettingsTheme,
+            SettingsText,
+            SettingsLayout,
+            SettingsImport,
+            SettingsRestore,
+        ][index.min(4)],
+        HelpId::ProbeTest => [ProbeRefresh, ProbeRun, ProbeReport][index.min(2)],
+    })
+}
+
+pub const FIRST_RUN_SEQUENCE: [HelpId; 4] = [
+    HelpId::Dashboard,
+    HelpId::WatchFaces,
+    HelpId::Editor,
+    HelpId::Simulator,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepRoute {
+    pub panel: HelpId,
+    pub anchor: Option<AnchorId>,
+}
+
+pub fn route(id: HelpId, index: usize) -> StepRoute {
+    StepRoute {
+        panel: id,
+        anchor: anchor_for_step(id, index),
+    }
+}
+
+pub fn pending_navigation(current: HelpId, wanted: StepRoute) -> Option<HelpId> {
+    (current != wanted.panel).then_some(wanted.panel)
 }
 
 /// A complete tutorial definition.
@@ -316,5 +569,174 @@ mod tests {
         assert!(HelpId::ALL
             .iter()
             .all(|id| all().iter().any(|t| t.id == *id)));
+    }
+
+    #[test]
+    fn stable_anchor_keys_and_expected_panel_are_valid() {
+        let anchors = [
+            AnchorId::PanelHelp,
+            AnchorId::EditorName,
+            AnchorId::ProbeRun,
+        ];
+        let keys: HashSet<_> = anchors.into_iter().map(|a| a.key()).collect();
+        assert_eq!(keys.len(), anchors.len());
+        for id in HelpId::ALL {
+            for (index, _) in tutorial(id).steps.iter().enumerate() {
+                assert_eq!(route(id, index).panel, id);
+            }
+        }
+    }
+
+    #[test]
+    fn stale_or_wrong_panel_anchors_fall_back() {
+        let mut registry = AnchorRegistry::default();
+        registry.begin_frame(1);
+        registry.register(
+            HelpId::Editor,
+            AnchorId::EditorName.key(),
+            AnchorRect {
+                min: (1.0, 2.0),
+                max: (3.0, 4.0),
+            },
+        );
+        assert!(registry
+            .get(HelpId::WatchFaces, AnchorId::EditorName.key())
+            .is_none());
+        registry.begin_frame(2);
+        assert!(registry
+            .get(HelpId::Editor, AnchorId::EditorName.key())
+            .is_none());
+    }
+
+    #[test]
+    fn card_placement_stays_inside_viewport() {
+        let card = place_card(
+            Some(AnchorRect {
+                min: (790.0, 590.0),
+                max: (810.0, 610.0),
+            }),
+            (300.0, 180.0),
+            (800.0, 600.0),
+            16.0,
+        );
+        assert!(card.min.0 >= 16.0 && card.min.1 >= 16.0);
+        assert!(card.min.0 + card.size.0 <= 784.0 && card.min.1 + card.size.1 <= 584.0);
+        let centered = place_card(None, (300.0, 180.0), (800.0, 600.0), 16.0);
+        assert!(centered.min.0 >= 16.0);
+    }
+
+    #[test]
+    fn navigation_and_cross_panel_pending_are_deterministic() {
+        assert_eq!(
+            pending_navigation(HelpId::Dashboard, route(HelpId::Editor, 0)),
+            Some(HelpId::Editor)
+        );
+        assert_eq!(
+            pending_navigation(HelpId::Editor, route(HelpId::Editor, 1)),
+            None
+        );
+        assert_eq!(next_index(HelpId::Editor, 0), 1);
+    }
+
+    #[test]
+    fn overlay_blocks_background_and_destructive_actions() {
+        assert!(!overlay_allows_click(Some(AnchorId::BuildCopy), true));
+        assert!(!overlay_allows_click(Some(AnchorId::ProbeRun), true));
+        assert!(!overlay_allows_click(Some(AnchorId::EditorName), false));
+        assert!(overlay_allows_click(Some(AnchorId::EditorName), true));
+        assert!(!overlay_allows_click(None, true));
+    }
+
+    #[test]
+    fn forced_actions_are_safe_only() {
+        assert!(forced_action_allowed(AnchorId::EditorTemplate));
+        assert!(forced_action_allowed(AnchorId::SimulatorApply));
+        assert!(forced_action_allowed(AnchorId::CalibrationRecord));
+        assert!(forced_action_allowed(AnchorId::FilePreview));
+        assert!(!forced_action_allowed(AnchorId::BuildCopy));
+        assert!(!forced_action_allowed(AnchorId::SettingsImport));
+        assert!(!forced_action_allowed(AnchorId::ProbeRun));
+        assert_eq!(
+            FIRST_RUN_SEQUENCE,
+            [
+                HelpId::Dashboard,
+                HelpId::WatchFaces,
+                HelpId::Editor,
+                HelpId::Simulator
+            ]
+        );
+    }
+
+    #[test]
+    fn first_run_sequence_keeps_safe_manual_panel_boundaries() {
+        // The current UI opens one contextual tutorial at a time. The sequence
+        // is explicit, but it does not silently navigate between separate
+        // Editor/Faces/Simulator tutorials; users choose the next panel safely.
+        assert_eq!(FIRST_RUN_SEQUENCE[1], HelpId::WatchFaces);
+        assert_eq!(FIRST_RUN_SEQUENCE[2], HelpId::Editor);
+        assert_eq!(FIRST_RUN_SEQUENCE[3], HelpId::Simulator);
+        assert_eq!(
+            pending_navigation(HelpId::Editor, route(HelpId::Editor, 1)),
+            None
+        );
+    }
+
+    #[test]
+    fn action_gating_blocks_underlying_unsafe_clicks() {
+        assert!(action_allowed(None, AnchorId::BuildCopy));
+        assert!(!action_allowed(
+            Some(AnchorId::BuildCopy),
+            AnchorId::BuildCopy
+        ));
+        assert!(!action_allowed(
+            Some(AnchorId::ProbeRun),
+            AnchorId::ShellSend
+        ));
+        assert!(action_allowed(
+            Some(AnchorId::SimulatorApply),
+            AnchorId::SimulatorApply
+        ));
+        assert!(!action_allowed(
+            Some(AnchorId::SettingsImport),
+            AnchorId::SettingsImport
+        ));
+    }
+
+    #[test]
+    fn high_value_anchor_keys_are_registered_without_collisions() {
+        let keys = [
+            AnchorId::SimulatorWatch,
+            AnchorId::SimulatorDate,
+            AnchorId::SimulatorApply,
+            AnchorId::CalibrationRecord,
+            AnchorId::CalibrationCopy,
+            AnchorId::BugsFingerprint,
+            AnchorId::BugsResolve,
+            AnchorId::BugsReport,
+            AnchorId::FileRefresh,
+            AnchorId::FileFilter,
+            AnchorId::FileList,
+            AnchorId::FilePreview,
+            AnchorId::TutorialSections,
+            AnchorId::SettingsImport,
+            AnchorId::SettingsRestore,
+        ];
+        let mut registry = AnchorRegistry::default();
+        registry.begin_frame(7);
+        for (index, key) in keys.into_iter().enumerate() {
+            registry.register(
+                HelpId::Simulator,
+                key.key(),
+                AnchorRect {
+                    min: (index as f32, 0.0),
+                    max: (index as f32 + 1.0, 1.0),
+                },
+            );
+        }
+        assert_eq!(registry.len(), keys.len());
+        assert_eq!(registry.count_for_panel(HelpId::Simulator), keys.len());
+        for key in keys {
+            assert!(registry.get(HelpId::Simulator, key.key()).is_some());
+        }
     }
 }
