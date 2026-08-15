@@ -87,6 +87,9 @@ pub struct HydrationFace {
     log_index: u8,
     log_head: u8,
     settings_page: Setting,
+    /// Absolute minute of the last alert action; prevents advise/background
+    /// dispatch from executing the same alert twice.
+    last_alert_minute: u32,
 }
 
 impl HydrationFace {
@@ -108,6 +111,7 @@ impl HydrationFace {
             log_index: 0,
             log_head: 0,
             settings_page: Setting::WaterGlass,
+            last_alert_minute: u32::MAX,
         }
     }
 
@@ -283,8 +287,17 @@ impl HydrationFace {
         watch::buzzer::set_buzzer_on();
     }
 
+    fn active_hours(&self) -> u8 {
+        (self.sleep_hour + 24 - self.wake_hour) % 24
+    }
+
     fn get_expected_intake(&self, hours_since_wake: u8) -> u16 {
-        let day_hours = (self.sleep_hour + 24 - self.wake_hour) % 24;
+        let day_hours = self.active_hours();
+        if day_hours == 0 {
+            // Equal wake/sleep times disable the hydration window. Keep the
+            // expected amount at zero so alerts and deviation stay quiet.
+            return 0;
+        }
         (self.water_goal as u32 * hours_since_wake as u32 / day_hours as u32) as u16
     }
 
@@ -315,12 +328,23 @@ impl HydrationFace {
             slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or("  "), 2);
         } else {
             let now = movement::get_local_date_time();
-            let hours_since_wake = (now.hour + 24 - self.wake_hour) % 24;
-            let expected = self.get_expected_intake(hours_since_wake);
-            let deviation = self.water_intake as i32 - expected as i32;
-            self.display_water_ml(deviation.unsigned_abs() as u16);
-            let sign = if deviation >= 0 { " +" } else { " -" };
-            slcd::display_string(sign, 2);
+            if self.active_hours() == 0 {
+                // There is no meaningful expected intake when wake and sleep
+                // are equal, so show the normal intake view instead.
+                self.display_water_ml(self.water_intake);
+                let percent = (self.water_intake as u32 * 10 / self.water_goal as u32) as u8;
+                let mut buf = [0u8; 2];
+                buf[0] = b'0' + percent / 10;
+                buf[1] = b'0' + percent % 10;
+                slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or("  "), 2);
+            } else {
+                let hours_since_wake = (now.hour + 24 - self.wake_hour) % 24;
+                let expected = self.get_expected_intake(hours_since_wake);
+                let deviation = self.water_intake as i32 - expected as i32;
+                self.display_water_ml(deviation.unsigned_abs() as u16);
+                let sign = if deviation >= 0 { " +" } else { " -" };
+                slcd::display_string(sign, 2);
+            }
         }
     }
 
@@ -407,26 +431,32 @@ impl HydrationFace {
         self.log_display();
     }
 
-    fn check_hydration_alert(&mut self) {
-        let now = movement::get_local_date_time();
-        let hour = now.hour;
-        if self.sleep_hour == self.wake_hour {
-            return;
-        } else if self.sleep_hour < self.wake_hour {
+    fn alert_is_due(&self, hour: u8) -> bool {
+        if self.active_hours() == 0 {
+            return false;
+        }
+        if self.sleep_hour < self.wake_hour {
             if hour > self.sleep_hour && hour <= self.wake_hour {
-                return;
+                return false;
             }
         } else if hour > self.sleep_hour || hour <= self.wake_hour {
-            return;
+            return false;
         }
-        let mut due = hour == self.sleep_hour;
         let hours_since_wake = (hour + 24 - self.wake_hour) % 24;
-        due |= self.alert_interval > 0 && hours_since_wake % self.alert_interval == 0;
-        if !due {
+        hour == self.sleep_hour
+            || (self.alert_interval > 0 && hours_since_wake % self.alert_interval == 0)
+    }
+
+    fn check_hydration_alert(&mut self) {
+        let now = movement::get_local_date_time();
+        let alert_minute = utility::date_time_to_unix_time(now, 0) / 60;
+        if self.last_alert_minute == alert_minute || !self.alert_is_due(now.hour) {
             return;
         }
+        let hours_since_wake = (now.hour + 24 - self.wake_hour) % 24;
         let expected = self.get_expected_intake(hours_since_wake);
         if self.water_intake < expected {
+            self.last_alert_minute = alert_minute;
             movement::request_wake();
             movement::move_to_face(self.face_index);
             movement::play_alarm();
@@ -472,7 +502,11 @@ impl WatchFace for HydrationFace {
 
     fn wants_background_task(&mut self, _settings: &Settings) -> bool {
         let now = movement::get_local_date_time();
-        self.alert_enabled && now.minute == 0
+        let alert_minute = utility::date_time_to_unix_time(now, 0) / 60;
+        self.alert_enabled
+            && now.minute == 0
+            && self.last_alert_minute != alert_minute
+            && self.alert_is_due(now.hour)
     }
 }
 
@@ -589,5 +623,59 @@ impl HydrationFace {
             Event::BackgroundTask => self.check_hydration_alert(),
             _ => movement::default_loop_handler(event, settings),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::watch::seam;
+    use sensor_watch_core::mock_hw::MockHw;
+
+    #[test]
+    fn equal_wake_and_sleep_hours_disable_expected_intake_and_deviation() {
+        let mut face = HydrationFace::new();
+        face.sleep_hour = face.wake_hour;
+        face.display_deviation = 1;
+
+        assert_eq!(face.get_expected_intake(0), 0);
+        assert_eq!(face.get_expected_intake(12), 0);
+        let mut hw = MockHw::new();
+        seam::with_hw(&mut hw, || face.tracking_display());
+        assert!(!face.alert_is_due(face.wake_hour));
+    }
+
+    #[test]
+    fn expected_intake_uses_normal_and_cross_midnight_windows() {
+        let mut face = HydrationFace::new();
+        face.water_goal = 1_600;
+        face.wake_hour = 7;
+        face.sleep_hour = 22;
+        assert_eq!(face.get_expected_intake(7), 746);
+        assert!(face.alert_is_due(9));
+        assert!(!face.alert_is_due(23));
+
+        face.wake_hour = 22;
+        face.sleep_hour = 7;
+        assert_eq!(face.get_expected_intake(4), 711);
+        assert!(face.alert_is_due(2));
+        assert!(!face.alert_is_due(12));
+    }
+
+    #[test]
+    fn due_alert_is_consumed_once_for_a_minute() {
+        let mut face = HydrationFace::new();
+        let minute = 12_345;
+        assert_ne!(face.last_alert_minute, minute);
+        face.last_alert_minute = minute;
+        assert_eq!(face.last_alert_minute, minute);
+        assert_eq!(face.last_alert_minute, minute);
+    }
+
+    #[test]
+    fn non_due_alert_does_not_consume_a_minute() {
+        let face = HydrationFace::new();
+        assert!(!face.alert_is_due(23));
+        assert_eq!(face.last_alert_minute, u32::MAX);
     }
 }

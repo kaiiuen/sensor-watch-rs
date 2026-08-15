@@ -18,6 +18,7 @@
 
 #![allow(clippy::result_unit_err)]
 
+use crate::background_tasks::BackgroundTaskRegistry;
 use crate::datetime::DateTime;
 use crate::settings::Settings;
 use alloc::collections::BTreeMap;
@@ -128,6 +129,11 @@ pub trait Hw {
     fn set_tick_rate(&mut self, _show_seconds: bool) {}
     fn play_signal(&mut self) {}
     fn default_loop_handler(&mut self, _event: Event, _settings: &Settings) {}
+    /// Schedules a face-indexed one-shot task. Backends that do not model
+    /// scheduling may keep the default no-op implementation.
+    fn schedule_background_task_for_face(&mut self, _face_index: usize, _date_time: DateTime) {}
+    /// Cancels a face-indexed one-shot task.
+    fn cancel_background_task_for_face(&mut self, _face_index: usize) {}
     /// Turns off the bi-color LED (`watch::led::set_led_off`).
     fn set_led_off(&mut self) {}
     /// Configures a GPIO pin's direction (`watch::gpio::set_pin_direction`).
@@ -204,6 +210,8 @@ pub struct MockHw {
     pub opt3001_result: Option<u16>,
     /// Raw 16-bit thermistor ADC sample; zero means no sensor.
     pub thermistor_raw: u16,
+    /// Per-backend host scheduler state.
+    pub background_tasks: BackgroundTaskRegistry,
 }
 
 impl Default for MockHw {
@@ -231,6 +239,7 @@ impl Default for MockHw {
             led_color: (0, 0),
             opt3001_result: None,
             thermistor_raw: 0,
+            background_tasks: BackgroundTaskRegistry::new(),
         }
     }
 }
@@ -266,6 +275,13 @@ impl MockHw {
     /// Seeds the simulated RTC clock.
     pub fn set_time(&mut self, dt: DateTime) {
         self.now = dt;
+    }
+
+    /// Explicitly polls one due task. The task is cleared before the caller
+    /// injects `Event::BackgroundTask` into the selected face; host polling does
+    /// not dispatch events or claim hardware wake/timing behavior.
+    pub fn poll_due_background_task(&mut self) -> Option<usize> {
+        self.background_tasks.poll_due(self.now)
     }
 
     /// Clears every LCD character slot to a blank, matching `slcd::clear_display`.
@@ -333,6 +349,13 @@ impl Hw for MockHw {
     }
     fn get_vcc_voltage(&mut self) -> u16 {
         self.vcc_mv
+    }
+    fn schedule_background_task_for_face(&mut self, face_index: usize, date_time: DateTime) {
+        self.background_tasks
+            .schedule(face_index, self.now, date_time);
+    }
+    fn cancel_background_task_for_face(&mut self, face_index: usize) {
+        self.background_tasks.cancel(face_index);
     }
 
     fn get_analog_pin_level(&mut self, _pin: (u8, u8)) -> u16 {

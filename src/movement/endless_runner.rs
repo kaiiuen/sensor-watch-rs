@@ -58,6 +58,7 @@ pub struct EndlessRunnerFace {
     curr_screen: u8,
     loc_2_on: bool,
     loc_3_on: bool,
+    prev_obst_pos_two: bool,
     success_jump: bool,
     fuel_mode: bool,
     fuel: u8,
@@ -80,6 +81,7 @@ impl EndlessRunnerFace {
             curr_screen: SCREEN_TITLE,
             loc_2_on: false,
             loc_3_on: false,
+            prev_obst_pos_two: false,
             success_jump: false,
             fuel_mode: false,
             fuel: 0,
@@ -103,10 +105,17 @@ impl EndlessRunnerFace {
     }
 
     fn get_random_nonzero(&self, max: u32) -> u32 {
-        loop {
-            let r = self.get_random(max);
-            if r != 0 {
-                return r;
+        match max {
+            0..=1 => 0,
+            _ => {
+                let r = self.get_random(max);
+                if r != 0 {
+                    r
+                } else {
+                    // A fixed RTC value can make every retry return zero. Use a
+                    // finite fallback from the same deterministic stream instead.
+                    1 + self.get_random(max - 1)
+                }
             }
         }
     }
@@ -296,6 +305,7 @@ impl EndlessRunnerFace {
         self.curr_score = 0;
         self.loc_2_on = false;
         self.loc_3_on = false;
+        self.prev_obst_pos_two = false;
         self.success_jump = false;
         self.fuel = 0;
         if sound_on {
@@ -345,6 +355,7 @@ impl EndlessRunnerFace {
             self.obst_pattern = self.get_random_legal(0, difficulty);
         }
         self.jump_state = NOT_JUMPING;
+        self.prev_obst_pos_two = false;
         self.display_ball(self.jump_state != NOT_JUMPING);
         self.display_score(self.curr_score as u8);
         if self.sound_on {
@@ -371,7 +382,11 @@ impl EndlessRunnerFace {
                     watch::slcd::set_pixel(0, 20);
                 } else if self.jump_state != NOT_JUMPING {
                     watch::slcd::clear_pixel(0, 20);
+                    if self.fuel_mode && self.prev_obst_pos_two {
+                        self.add_to_score();
+                    }
                 }
+                self.prev_obst_pos_two = obstacle;
             }
             3 => {
                 self.loc_3_on = obstacle;
@@ -523,6 +538,98 @@ impl EndlessRunnerFace {
         } else if self.fuel_mode {
             self.display_fuel(subsecond);
         }
+    }
+}
+
+#[cfg(all(test, feature = "hostmock"))]
+mod tests {
+    use super::*;
+    use crate::watch::seam;
+    use sensor_watch_core::mock_hw::{MockHw, dt};
+
+    fn with_seed<T>(
+        seed: sensor_watch_core::datetime::DateTime,
+        f: impl FnOnce(&EndlessRunnerFace) -> T,
+    ) -> T {
+        let mut hw = MockHw::new();
+        hw.set_time(seed);
+        seam::with_hw(&mut hw, || f(&EndlessRunnerFace::new()))
+    }
+
+    #[test]
+    fn random_nonzero_has_bounded_boundary_behavior() {
+        with_seed(dt(2023, 1, 6, 15, 4, 1), |face| {
+            assert_eq!(face.get_random_nonzero(0), 0);
+            assert_eq!(face.get_random_nonzero(1), 0);
+
+            // Pick a max equal to the deterministic sample so the first sample
+            // is known to be zero, then verify the finite fallback is nonzero.
+            let sample = face.get_random(u32::MAX);
+            assert_ne!(sample, 0);
+            assert_eq!(face.get_random(sample), 0);
+            assert_ne!(face.get_random_nonzero(sample), 0);
+            assert!(face.get_random_nonzero(sample) < sample);
+        });
+    }
+
+    #[test]
+    fn random_legal_and_fuel_masks_are_valid_and_repeatable() {
+        let seed = dt(2023, 1, 6, 15, 4, 1);
+        let first = with_seed(seed, |face| {
+            (
+                face.get_random_legal(0xF000_0000, DIFF_NORM),
+                face.get_random_fuel(0xA5A5_0000),
+            )
+        });
+        let second = with_seed(seed, |face| {
+            (
+                face.get_random_legal(0xF000_0000, DIFF_NORM),
+                face.get_random_fuel(0xA5A5_0000),
+            )
+        });
+        assert_eq!(first, second);
+
+        let (obstacles, fuel) = first;
+        let obstacle_mask = (1 << (NUM_BITS - NUM_GRID)) - 1;
+        assert_eq!(obstacles & !obstacle_mask, 0xF000_0000);
+        assert_eq!(fuel & 0xFFFF_0000, 0xA5A5_0000);
+        for byte in (fuel as u16).to_le_bytes() {
+            let low_run = byte.wrapping_add(1).is_power_of_two();
+            let shifted_low_run = byte != 0 && (byte >> 1).wrapping_add(1).is_power_of_two();
+            assert!(low_run || shifted_low_run, "illegal fuel mask: {byte:#04x}");
+        }
+    }
+
+    #[test]
+    fn fuel_jump_scores_when_position_two_clears() {
+        let mut hw = MockHw::new();
+        hw.set_time(dt(2023, 1, 6, 15, 4, 1));
+        let mut face = EndlessRunnerFace::new();
+
+        seam::with_hw(&mut hw, || {
+            face.fuel_mode = true;
+            face.jump_state = JUMPING_START;
+            face.display_obstacle(true, 2);
+            face.display_obstacle(false, 2);
+            assert_eq!(face.curr_score, 1);
+            assert_eq!(face.hi_score, 1);
+
+            // Clearing from the ground is a miss, not a successful jump.
+            face.jump_state = NOT_JUMPING;
+            face.display_obstacle(true, 2);
+            face.display_obstacle(false, 2);
+            assert_eq!(face.curr_score, 1);
+            assert_eq!(face.hi_score, 1);
+
+            // Classic mode retains its existing position-one scoring path and
+            // must not use the fuel-mode position-two transition.
+            face.fuel_mode = false;
+            face.jump_state = JUMPING_START;
+            face.display_obstacle(true, 2);
+            face.display_obstacle(false, 2);
+            assert_eq!(face.curr_score, 1);
+            assert_eq!(face.hi_score, 1);
+        });
     }
 }
 

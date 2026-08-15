@@ -98,6 +98,13 @@ pub mod activity {
     pub use real::ActivityFace;
 }
 
+/// The REAL `hydration` face, pulled in unchanged through the host seam.
+pub mod hydration {
+    #[path = "../../../movement/hydration.rs"]
+    pub mod real;
+    pub use real::HydrationFace;
+}
+
 /// The REAL `alarm` face. Calls `movement::illuminate_led`,
 /// `movement::play_alarm_beeps`, and `watch::led::set_led_off`.
 pub mod alarm {
@@ -154,6 +161,13 @@ pub mod dual_timer {
     #[path = "../../../movement/dual_timer.rs"]
     pub mod real;
     pub use real::DualTimerFace;
+}
+
+/// The REAL `endless_runner` face.
+pub mod endless_runner {
+    #[path = "../../../movement/endless_runner.rs"]
+    pub mod real;
+    pub use real::EndlessRunnerFace;
 }
 
 /// The REAL `flashlight` face. Uses `watch::gpio` for its A2 output.
@@ -934,26 +948,43 @@ pub fn move_to_next_face() {}
 pub fn move_to_face(_watch_face_index: usize) {}
 
 /// Schedules a background task at `date_time` for the current face.
-/// Host: no-op (the mock does not model the scheduler; faces that rely on
-/// background tasks are driven by feeding `Event::BackgroundTask` directly in
-/// tests).
+/// Host: intentionally no-op because no scoped current-face context is safe;
+/// use [`schedule_background_task_for_face`] instead.
 pub fn schedule_background_task(_date_time: sensor_watch_core::datetime::DateTime) {}
 
-/// Cancels the current face's background task. Host: no-op.
+/// Cancels the current face's background task. Host: intentionally no-op for
+/// the same reason as [`schedule_background_task`].
 pub fn cancel_background_task() {}
 
-/// Schedules a background task for a specific face. Host: no-op.
+/// Schedules a one-shot task for a specific face through the scoped host seam.
+/// Due tasks are not dispatched automatically; poll the installed `MockHw` and
+/// inject `Event::BackgroundTask` into the returned face explicitly.
 pub fn schedule_background_task_for_face(
-    _watch_face_index: usize,
-    _date_time: sensor_watch_core::datetime::DateTime,
+    watch_face_index: usize,
+    date_time: sensor_watch_core::datetime::DateTime,
 ) {
+    watch::seam::with_current_hw(|hw| {
+        hw.schedule_background_task_for_face(watch_face_index, date_time)
+    });
 }
 
-/// Cancels a specific face's background task. Host: no-op.
-pub fn cancel_background_task_for_face(_watch_face_index: usize) {}
+/// Cancels a specific face's task through the scoped host seam.
+pub fn cancel_background_task_for_face(watch_face_index: usize) {
+    watch::seam::with_current_hw(|hw| hw.cancel_background_task_for_face(watch_face_index));
+}
 
-/// Plays the alarm tune. Host: no-op.
+/// Plays the alarm tune. Host: no-op; the seam does not claim alarm delivery.
 pub fn play_alarm() {}
+
+/// Requests a wake from low-power mode. Host: deterministic no-op; host tests
+/// exercise face state transitions but do not model wake delivery.
+pub fn request_wake() {}
+
+/// Returns whether button feedback should sound. Host policy is silent because
+/// the mock does not model the firmware settings register or audio delivery.
+pub fn button_should_sound() -> bool {
+    false
+}
 
 /// Plays `rounds` of `alarm_note`. Host: no-op.
 pub fn play_alarm_beeps(_rounds: u8, _alarm_note: types::BuzzerNote) {}
@@ -1025,6 +1056,8 @@ mod face_tests_baby_kicks;
 mod face_tests_blackjack;
 #[cfg(test)]
 mod face_tests_stock_stopwatch;
+#[cfg(test)]
+mod scheduler_tests;
 
 #[cfg(test)]
 mod face_tests_activity;
@@ -1033,9 +1066,13 @@ mod face_tests_butterfly_game;
 #[cfg(test)]
 mod face_tests_couch_to_5k;
 #[cfg(test)]
+mod face_tests_endless_runner;
+#[cfg(test)]
 mod face_tests_geomancy;
 #[cfg(test)]
 mod face_tests_higher_lower_game;
+#[cfg(test)]
+mod face_tests_hydration;
 #[cfg(test)]
 // Host tests for the I-P face subset (driven via the `Hw` seam, parallel to the
 // shared `tests` module so concurrent face owners can each add their own tests
