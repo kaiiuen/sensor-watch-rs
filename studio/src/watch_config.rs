@@ -122,6 +122,29 @@ impl Default for WatchConfig {
 }
 
 impl WatchConfig {
+    /// Validates values that are packed into the firmware settings register.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.to_interval > 3 {
+            return Err("to_interval must be at most 3".into());
+        }
+        if self.le_interval > 7 {
+            return Err("le_interval must be at most 7".into());
+        }
+        if self.led_duration > 7 {
+            return Err("led_duration must be at most 7".into());
+        }
+        if self.led_red_color > 15 {
+            return Err("led_red_color must be at most 15".into());
+        }
+        if self.led_green_color > 15 {
+            return Err("led_green_color must be at most 15".into());
+        }
+        if self.buzzer_type > 3 {
+            return Err("buzzer_type must be at most 3".into());
+        }
+        Ok(())
+    }
+
     /// Packs the config into the firmware's single `u32` settings register.
     pub fn to_reg(&self) -> u32 {
         let mut reg = 0u32;

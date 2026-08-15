@@ -215,6 +215,9 @@ pub fn read_frame<R: Read>(reader: &mut R, timeout: Duration) -> Result<String, 
                 }
                 std::thread::yield_now();
             }
+            Err(error) if is_connection_error(error.kind()) => {
+                return Err(TransportError::Disconnected);
+            }
             Err(error) => return Err(TransportError::Io(error.to_string())),
         }
         if Instant::now() >= deadline {
@@ -252,6 +255,9 @@ fn write_all_with_timeout<W: Write>(
                 }
                 std::thread::yield_now();
             }
+            Err(error) if is_connection_error(error.kind()) => {
+                return Err(TransportError::Disconnected);
+            }
             Err(error) => return Err(TransportError::Io(error.to_string())),
         }
         if Instant::now() >= deadline && written < frame.len() {
@@ -261,9 +267,24 @@ fn write_all_with_timeout<W: Write>(
             });
         }
     }
-    writer
-        .flush()
-        .map_err(|error| TransportError::Io(error.to_string()))
+    writer.flush().map_err(|error| {
+        if is_connection_error(error.kind()) {
+            TransportError::Disconnected
+        } else {
+            TransportError::Io(error.to_string())
+        }
+    })
+}
+
+fn is_connection_error(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    )
 }
 
 #[cfg(test)]
@@ -292,6 +313,29 @@ mod tests {
     }
 
     struct BlockingWriter;
+
+    struct ErrorReader {
+        kind: io::ErrorKind,
+    }
+
+    impl Read for ErrorReader {
+        fn read(&mut self, _out: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(self.kind, "disconnected"))
+        }
+    }
+
+    struct ErrorWriter {
+        kind: io::ErrorKind,
+    }
+
+    impl Write for ErrorWriter {
+        fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(self.kind, "disconnected"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(self.kind, "disconnected"))
+        }
+    }
 
     impl Write for BlockingWriter {
         fn write(&mut self, _bytes: &[u8]) -> io::Result<usize> {
@@ -363,6 +407,65 @@ mod tests {
             timeout: Duration::from_millis(1),
         }
         .is_connection_lost());
+    }
+
+    #[test]
+    fn disconnected_read_errors_are_reported_as_connection_loss() {
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::UnexpectedEof,
+        ] {
+            let mut reader = ErrorReader { kind };
+            assert!(
+                matches!(
+                    read_frame(&mut reader, Duration::from_millis(20)),
+                    Err(TransportError::Disconnected)
+                ),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn disconnected_write_errors_are_reported_as_connection_loss() {
+        for kind in [
+            io::ErrorKind::BrokenPipe,
+            io::ErrorKind::ConnectionAborted,
+            io::ErrorKind::ConnectionReset,
+            io::ErrorKind::NotConnected,
+            io::ErrorKind::UnexpectedEof,
+        ] {
+            let mut writer = ErrorWriter { kind };
+            assert!(
+                matches!(
+                    write_all_with_timeout(&mut writer, b"help\r\n", Duration::from_millis(20)),
+                    Err(TransportError::Disconnected)
+                ),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn unrelated_io_errors_remain_io_errors() {
+        let mut reader = ErrorReader {
+            kind: io::ErrorKind::Other,
+        };
+        assert!(matches!(
+            read_frame(&mut reader, Duration::from_millis(20)),
+            Err(TransportError::Io(_))
+        ));
+
+        let mut writer = ErrorWriter {
+            kind: io::ErrorKind::Other,
+        };
+        assert!(matches!(
+            write_all_with_timeout(&mut writer, b"help\r\n", Duration::from_millis(20)),
+            Err(TransportError::Io(_))
+        ));
     }
 
     #[test]

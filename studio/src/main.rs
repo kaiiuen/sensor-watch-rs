@@ -16,6 +16,7 @@ mod error_catalog;
 mod face_sim;
 mod faces;
 mod file_browser;
+mod flash;
 mod fonts;
 mod fuzz;
 mod i18n;
@@ -41,8 +42,8 @@ mod wiki;
 use eframe::egui;
 use i18n::{tr, Key, Language};
 use presets::PresetManager;
-use sha2::{Digest, Sha256};
-use std::io::Read;
+
+use flash::{FlashRequest, FlashResult, FlashStatus, WatchDriveSelection};
 use theme::Theme;
 use watch_sim::CasioF91W;
 
@@ -62,10 +63,22 @@ struct StudioApp {
     shutting_down: bool,
     /// The handle to the background build thread.
     pending_build: Option<std::thread::JoinHandle<build::BuildResult>>,
+    /// A cached watch-drive detection result; detection never runs while rendering.
+    cached_watch: WatchDriveSelection,
+    /// The handle to the background drive detection worker.
+    pending_detection: Option<std::thread::JoinHandle<WatchDriveSelection>>,
+    /// The handle to the background flash worker.
+    pending_flash: Option<std::thread::JoinHandle<FlashResult>>,
+    /// Prevents detection and flashing from overlapping.
+    flash_worker_state: flash::WorkerState,
     /// The last build result message.
     build_message: String,
-    /// The path to the last-built .uf2.
-    last_uf2: Option<std::path::PathBuf>,
+    /// The explicitly approved artifact and the metadata verified at approval time.
+    approved_artifact: Option<ApprovedArtifact>,
+    /// Path entered for explicit artifact inspection.
+    artifact_path_input: String,
+    /// A verified artifact awaiting explicit approval.
+    pending_artifact: Option<build::ArtifactInspection>,
     /// The selected language.
     language: Language,
     /// The selected theme.
@@ -177,6 +190,10 @@ struct StudioApp {
     btn_l_hold: f32,
     btn_c_hold: f32,
     btn_a_hold: f32,
+    /// Public firmware-event state for the real-face seam. The legacy booleans
+    /// above remain the face_sim/CASIO timing path.
+    btn_l_events: real_face::ButtonEventState,
+    btn_a_events: real_face::ButtonEventState,
     /// The time delta (seconds) since the last frame, for hold timing.
     sim_dt: f32,
     /// The button currently being held (via the on-watch SVG hotspot or a Hold
@@ -420,6 +437,12 @@ const FIRST_RUN_STEPS: [&str; 5] = [
 
 fn first_run_start_panel() -> Panel {
     Panel::Editor
+}
+
+/// Returns a usable preset name, rejecting empty and whitespace-only input.
+fn preset_name(value: &str) -> Option<&str> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -765,8 +788,14 @@ impl Default for StudioApp {
             building: false,
             shutting_down: false,
             pending_build: None,
+            cached_watch: WatchDriveSelection::None,
+            pending_detection: None,
+            pending_flash: None,
+            flash_worker_state: flash::WorkerState::Idle,
             build_message: String::new(),
-            last_uf2: None,
+            approved_artifact: initial_flashable_uf2(),
+            artifact_path_input: String::new(),
+            pending_artifact: None,
             // Default to English and Dark.
             language: Language::English,
             theme: Theme::Dark,
@@ -852,6 +881,8 @@ impl Default for StudioApp {
             btn_l_hold: 0.0,
             btn_c_hold: 0.0,
             btn_a_hold: 0.0,
+            btn_l_events: real_face::ButtonEventState::default(),
+            btn_a_events: real_face::ButtonEventState::default(),
             sim_dt: 0.0,
             held_button: None,
             face_engine: face_sim::FaceEngine::new("SIMPLE_CLOCK"),
@@ -896,7 +927,8 @@ impl Default for StudioApp {
             probe_report: None,
         };
         app.log.log("Firmware Studio starting");
-        app.last_uf2 = build::last_uf2(std::path::Path::new(&app.output_dir));
+        // Existing output files are inspection/recovery artifacts, not flashable
+        // session state. A UF2 becomes flashable only after this process builds it.
         app.face_list = faces::discover_faces();
         app.log
             .log(format!("Discovered {} watch faces", app.face_list.len()));
@@ -969,6 +1001,8 @@ impl eframe::App for StudioApp {
             || self.pending_ntp.is_some()
             || self.pending_checksum.is_some()
             || self.pending_update.is_some()
+            || self.pending_detection.is_some()
+            || self.pending_flash.is_some()
             || self.beep_armed;
         if background_work {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -1009,7 +1043,9 @@ impl eframe::App for StudioApp {
             let active_workers = self.pending_build.is_some()
                 || self.pending_ntp.is_some()
                 || self.pending_checksum.is_some()
-                || self.pending_update.is_some();
+                || self.pending_update.is_some()
+                || self.pending_detection.is_some()
+                || self.pending_flash.is_some();
             if active_workers {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.status = "Finish background work before closing".to_string();
@@ -1024,6 +1060,8 @@ impl eframe::App for StudioApp {
             }
         }
 
+        self.poll_flash_workers();
+
         // If a build finished, collect its result.
         if let Some(handle) = self.pending_build.take() {
             if handle.is_finished() {
@@ -1031,40 +1069,62 @@ impl eframe::App for StudioApp {
                     Ok(result) => {
                         self.building = false;
                         self.build_message = result.message.clone();
-                        self.status = if result.success {
-                            tr(self.language, Key::BuildComplete).to_string()
-                        } else {
-                            tr(self.language, Key::BuildFailed).to_string()
-                        };
                         self.log.log(&result.message);
                         self.build_log.log(&result.message);
                         if result.success {
-                            self.last_uf2 = result.uf2_path;
-                            self.last_build_time = Some(
-                                std::time::SystemTime::now()
-                                    .duration_since(std::time::UNIX_EPOCH)
-                                    .map(|d| d.as_secs())
-                                    .unwrap_or(0),
-                            );
-                            self.build_count += 1;
-                            if let Some(t) = self.last_build_time {
-                                self.build_history.push(t);
-                                if self.build_history.len() > 50 {
-                                    self.build_history.remove(0);
+                            match verified_artifact_after_build(&result) {
+                                Ok(inspection) => {
+                                    set_verified_artifact_state(
+                                        &mut self.status,
+                                        &mut self.build_message,
+                                        &mut self.approved_artifact,
+                                        &mut self.pending_artifact,
+                                        inspection,
+                                        false,
+                                    );
+                                    self.last_build_time = Some(
+                                        std::time::SystemTime::now()
+                                            .duration_since(std::time::UNIX_EPOCH)
+                                            .map(|d| d.as_secs())
+                                            .unwrap_or(0),
+                                    );
+                                    self.build_count += 1;
+                                    if let Some(t) = self.last_build_time {
+                                        self.build_history.push(t);
+                                        if self.build_history.len() > 50 {
+                                            self.build_history.remove(0);
+                                        }
+                                    }
+                                    if let Some(inspection) = &self.pending_artifact {
+                                        self.log.log(format!(
+                                            "UF2 verified and awaiting approval: {}",
+                                            inspection.path.display()
+                                        ));
+                                        self.build_log.log(format!(
+                                            "UF2 verified and awaiting approval: {}",
+                                            inspection.path.display()
+                                        ));
+                                        self.push_terminal(
+                                            "Artifact verified locally; explicit approval required",
+                                        );
+                                    }
+                                }
+                                Err(error) => {
+                                    self.pending_artifact = None;
+                                    self.status = "Build verification failed".to_string();
+                                    self.build_message = format!(
+                                        "Built artifact rejected during verification: {error}"
+                                    );
+                                    self.push_terminal(
+                                        "Output write finished: artifact verification failed",
+                                    );
                                 }
                             }
-                            if let Some(p) = &self.last_uf2 {
-                                self.log.log(format!("UF2 written to {}", p.display()));
-                                self.build_log
-                                    .log(format!("UF2 written to {}", p.display()));
-                                self.push_terminal(format!(
-                                    "Output write succeeded: UF2 written to {}",
-                                    p.display()
-                                ));
-                            } else {
-                                self.push_terminal("Output write finished: no UF2 produced");
-                            }
                         } else {
+                            self.status = tr(self.language, Key::BuildFailed).to_string();
+                            // start_build normally clears this before spawning, but keep
+                            // failed completion fail-closed if that invariant changes.
+                            self.pending_artifact = None;
                             self.push_terminal(format!(
                                 "Build/Output write failed: {}",
                                 result.message
@@ -1412,6 +1472,7 @@ impl eframe::App for StudioApp {
         }
 
         // The central panel.
+        let was_simulator = self.current_panel == Panel::Simulator;
         egui::CentralPanel::default().show(ctx, |ui| match self.current_panel {
             Panel::Dashboard => self.dashboard(ui),
             Panel::Faces => self.faces(ui, ctx),
@@ -1430,6 +1491,9 @@ impl eframe::App for StudioApp {
             Panel::Settings => self.settings(ui),
             Panel::Probe => self.probe(ui),
         });
+        if was_simulator && self.current_panel != Panel::Simulator {
+            self.cancel_simulator_buttons();
+        }
 
         if self.advanced_mode_confirm {
             egui::Window::new("Enable Advanced mode?")
@@ -1567,8 +1631,13 @@ impl eframe::App for StudioApp {
                     }
                     ConfirmKind::RunPhysicalProbe => {
                         if self.advanced_mode {
+                            // Follow-up: probe owns the live, boxed UART transport. Keep this
+                            // synchronous until transport ownership can be moved into a worker
+                            // and returned safely without racing connect/disconnect UI actions.
                             self.probe_report = Some(probe::run(
-                                self.last_uf2.as_deref(),
+                                self.approved_artifact
+                                    .as_ref()
+                                    .map(|artifact| artifact.path.as_path()),
                                 &self.serial_ports,
                                 self.last_uart_error.as_deref(),
                                 self.uart.as_mut(),
@@ -1634,6 +1703,25 @@ impl eframe::App for StudioApp {
 }
 
 impl StudioApp {
+    /// Cancels simulator input when its owner (the current face or tab) goes
+    /// away. This is intentionally different from a normal release: no Up or
+    /// LongUp event belongs to the replacement face.
+    fn cancel_simulator_buttons(&mut self) {
+        reset_simulator_button_state(
+            &mut self.btn_l_down,
+            &mut self.btn_c_down,
+            &mut self.btn_a_down,
+            &mut self.btn_l_hold,
+            &mut self.btn_c_hold,
+            &mut self.btn_a_hold,
+            &mut self.btn_l_events,
+            &mut self.btn_a_events,
+            &mut self.held_button,
+        );
+        self.watch.light = false;
+        self.watch.set_casio(false);
+    }
+
     fn export_text_file(
         &self,
         filename: &str,
@@ -1843,7 +1931,11 @@ impl StudioApp {
             tr(self.language, Key::FlashRam).replace("{faces}", &self.face_list.len().to_string()),
         );
         ui.add_space(8.0);
-        if let Some(uf2) = &self.last_uf2 {
+        if let Some(uf2) = self
+            .approved_artifact
+            .as_ref()
+            .map(|artifact| &artifact.path)
+        {
             ui.label(
                 tr(self.language, Key::LastBuild).replace("{path}", &uf2.display().to_string()),
             );
@@ -2212,13 +2304,14 @@ impl StudioApp {
             self.push_terminal(reason);
             return;
         }
-        if self.shutting_down || self.building || self.pending_build.is_some() {
-            self.push_terminal("Build already running");
+        if self.shutting_down || self.building || self.pending_build.is_some() || self.flash_busy()
+        {
+            self.push_terminal("Build or flash already running");
             return;
         }
         self.snapshot_before("Before build");
         self.building = true;
-        self.last_uf2 = None;
+        self.pending_artifact = None;
         self.build_message = tr(self.language, Key::Building).to_string();
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
@@ -2334,22 +2427,26 @@ impl StudioApp {
                 .on_hover_text("Add a new preset with the typed name")
                 .clicked()
             {
-                self.presets.add_preset(&self.new_preset_name);
-                self.save_settings_internal();
-                self.faces_log
-                    .log(format!("Added preset {}", self.new_preset_name));
-                self.new_preset_name.clear();
+                if let Some(name) = preset_name(&self.new_preset_name).map(str::to_owned) {
+                    self.presets.add_preset(&name);
+                    self.save_settings_internal();
+                    self.faces_log.log(format!("Added preset {name}"));
+                    self.new_preset_name.clear();
+                } else {
+                    self.status = "Preset name cannot be empty".to_string();
+                }
             }
             if ui
                 .button("Rename")
                 .on_hover_text("Rename the active preset to the typed name")
                 .clicked()
             {
-                let name = self.new_preset_name.clone();
-                if !name.is_empty() {
+                if let Some(name) = preset_name(&self.new_preset_name).map(str::to_owned) {
                     self.presets.rename_active(&name);
                     self.save_settings_internal();
                     self.new_preset_name.clear();
+                } else {
+                    self.status = "Preset name cannot be empty".to_string();
                 }
             }
             if ui
@@ -3525,6 +3622,7 @@ impl StudioApp {
                     });
                 } else if !self.shutting_down
                     && self.pending_build.is_none()
+                    && !self.flash_busy()
                     && ui
                         .button(tr(self.language, Key::BuildUf2))
                         .on_hover_text("Compile the firmware into a .uf2 file for the watch")
@@ -3535,7 +3633,56 @@ impl StudioApp {
                 if !self.build_message.is_empty() {
                     ui.label(&self.build_message);
                 }
-                if let Some(uf2) = &self.last_uf2 {
+
+                ui.separator();
+                ui.strong("Inspect an existing artifact");
+                ui.label(
+                    "Enter a UF2 path and inspect it explicitly. Recovery generation UF2s
+                     are accepted when their matching .uf2.json and .json.sig sidecars exist.",
+                );
+                let artifact_actions_blocked = self.building || self.pending_build.is_some();
+                ui.horizontal(|ui| {
+                    ui.add_enabled(
+                        !artifact_actions_blocked,
+                        egui::TextEdit::singleline(&mut self.artifact_path_input)
+                            .hint_text("Path to .uf2"),
+                    );
+                    if ui
+                        .add_enabled(
+                            !artifact_actions_blocked,
+                            egui::Button::new("Inspect UF2"),
+                        )
+                        .on_hover_text("Verify UF2 structure, family, manifest, and sidecars")
+                        .clicked()
+                    {
+                        self.inspect_artifact_from_input();
+                    }
+                });
+                if artifact_actions_blocked {
+                    ui.weak("Artifact inspection and approval are disabled while a build is in progress.");
+                }
+                if let Some(inspection) = self.pending_artifact.clone() {
+                    ui.group(|ui| {
+                        ui.label("Verification succeeded (local consistency only):");
+                        ui.monospace(artifact_metadata(&inspection));
+                        if ui
+                            .add_enabled(
+                                !artifact_actions_blocked,
+                                egui::Button::new("Approve for this session"),
+                            )
+                            .clicked()
+                        {
+                            approve_artifact_state(
+                                &mut self.status,
+                                &mut self.build_message,
+                                &mut self.pending_artifact,
+                                &mut self.approved_artifact,
+                                artifact_actions_blocked,
+                            );
+                        }
+                    });
+                }
+                if let Some(uf2) = self.approved_artifact.as_ref().map(|artifact| &artifact.path) {
                     ui.label(
                         tr(self.language, Key::Output)
                             .replace("{path}", &uf2.display().to_string()),
@@ -3544,26 +3691,45 @@ impl StudioApp {
 
                 ui.add_space(12.0);
                 ui.separator();
-                // Flash.
+                // Flash. Detection is cached and refreshed explicitly in a worker;
+                // rendering never enumerates drive roots.
                 ui.strong("Flash");
-                match self.detect_watch() {
-                    Some(root) => {
+                ui.horizontal(|ui| {
+                    if self.pending_detection.is_some() {
+                        ui.spinner();
+                        ui.label("Detecting Sensor Watch drives…");
+                    } else if ui.button("Refresh detection").clicked() && !self.flash_busy() {
+                        self.start_watch_detection();
+                    }
+                });
+                match &self.cached_watch {
+                    WatchDriveSelection::One(candidate) => {
                         ui.colored_label(
                             egui::Color32::from_rgb(80, 200, 120),
-                            format!("Watch detected at {root}"),
+                            format!("Watch detected at {}", candidate.root.display()),
                         );
                     }
-                    None => {
+                    WatchDriveSelection::Multiple(count) => {
+                        ui.colored_label(
+                            egui::Color32::from_rgb(220, 160, 80),
+                            format!(
+                                "Ambiguous watch selection: {count} Sensor Watch drives detected; disconnect all but one."
+                            ),
+                        );
+                    }
+                    WatchDriveSelection::None => {
                         ui.colored_label(
                             egui::Color32::from_rgb(220, 160, 80),
                             "No watch detected. Put it in bootloader mode (USB connected).",
                         );
                     }
                 }
-                if self.building || self.pending_build.is_some() {
+                if self.flash_busy() {
+                    ui.weak("Flash or drive detection is in progress; conflicting controls are disabled.");
+                } else if self.building || self.pending_build.is_some() {
                     ui.weak("Build in progress; flashing is disabled until it finishes.");
-                } else if let Some(uf2) = &self.last_uf2 {
-                    let uf2 = uf2.clone();
+                } else if let Some(approved) = &self.approved_artifact {
+                    let approved = approved.clone();
                     if !self.shutting_down
                         && ui
                             .button(tr(self.language, Key::CopyToWatch))
@@ -3573,7 +3739,7 @@ impl StudioApp {
                             .clicked()
                     {
                         self.snapshot_before("Before flash");
-                        self.copy_to_watch(&uf2);
+                        self.copy_to_watch(&approved);
                     }
                 } else {
                     ui.label(tr(self.language, Key::NoBuildYet));
@@ -4193,7 +4359,7 @@ impl StudioApp {
             format!(
                 "board {} - UF2 {}",
                 self.board.label(),
-                if self.last_uf2.is_some() {
+                if self.approved_artifact.is_some() {
                     "available"
                 } else {
                     "not built"
@@ -4203,7 +4369,7 @@ impl StudioApp {
         self.diagnostics.log(format!(
             "board/UF2 -> {} / {}",
             self.board.label(),
-            if self.last_uf2.is_some() {
+            if self.approved_artifact.is_some() {
                 "available"
             } else {
                 "not built"
@@ -5551,6 +5717,7 @@ impl StudioApp {
             faces[self.sim_face_idx.min(faces.len() - 1)].clone()
         };
         if self.face_engine.face_name != face_name {
+            self.cancel_simulator_buttons();
             self.face_engine = face_sim::FaceEngine::new(&face_name);
             // (Re)build the real-face engine for the new face. Faces that have
             // not yet been migrated through the firmware seam stay `None` and
@@ -5700,6 +5867,7 @@ impl StudioApp {
         // If rendering failed, skip drawing the watch but keep the rest of the
         // simulator working rather than crashing.
         let Some(texture) = texture else {
+            self.cancel_simulator_buttons();
             return;
         };
         // This is the last path that actually produced a rendered frame, rather
@@ -5805,15 +5973,26 @@ impl StudioApp {
                     &mut self.btn_a_hold,
                     self.sim_dt,
                 );
+                // Deliver threshold-aware public events to migrated firmware
+                // faces. The face_sim path below intentionally keeps its
+                // existing short-press semantics.
+                if let Some(event) = self.btn_l_events.update(l_down, self.sim_dt) {
+                    if let Some(real) = self.real_face.as_mut() {
+                        real.button_event(real_face::RealButton::Light, event);
+                    }
+                }
+                if let Some(event) = self.btn_a_events.update(a_down, self.sim_dt) {
+                    if let Some(real) = self.real_face.as_mut() {
+                        real.button_event(real_face::RealButton::Alarm, event);
+                    }
+                }
                 // L button: toggle the backlight while held, and act as the
                 // face's Light button on press.
                 match l_act {
                     SimAction::Press => {
                         self.watch.light = true;
                         self.face_engine.press(face_sim::FaceButton::Light);
-                        if let Some(real) = self.real_face.as_mut() {
-                            real.press(true, false);
-                        }
+
                         self.sim_log.log("L: press (Light)".to_string());
                     }
                     SimAction::Release => {
@@ -5843,9 +6022,7 @@ impl StudioApp {
                     self.face_engine.time_mode_24 =
                         self.watch.time_mode == watch_sim::TimeMode::H24;
                     self.face_engine.press(face_sim::FaceButton::Alarm);
-                    if let Some(real) = self.real_face.as_mut() {
-                        real.press(false, true);
-                    }
+
                     self.sim_log
                         .log(if self.watch.time_mode == watch_sim::TimeMode::H24 {
                             "A: press (12/24 -> 24h, Alarm)".to_string()
@@ -5908,7 +6085,11 @@ impl StudioApp {
                 self.watch.light = true;
                 self.face_engine.press(face_sim::FaceButton::Light);
                 if let Some(real) = self.real_face.as_mut() {
-                    real.press(true, false);
+                    real.button_event(
+                        real_face::RealButton::Light,
+                        real_face::RealButtonEvent::Down,
+                    );
+                    real.button_event(real_face::RealButton::Light, real_face::RealButtonEvent::Up);
                 }
                 self.watch.light = false;
             }
@@ -5924,7 +6105,11 @@ impl StudioApp {
                 self.face_engine.time_mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
                 self.face_engine.press(face_sim::FaceButton::Alarm);
                 if let Some(real) = self.real_face.as_mut() {
-                    real.press(false, true);
+                    real.button_event(
+                        real_face::RealButton::Alarm,
+                        real_face::RealButtonEvent::Down,
+                    );
+                    real.button_event(real_face::RealButton::Alarm, real_face::RealButtonEvent::Up);
                 }
             }
         }
@@ -5975,8 +6160,8 @@ impl StudioApp {
                 }
             }
             "build" => {
-                if self.building || self.pending_build.is_some() {
-                    self.push_terminal("Build already running");
+                if self.building || self.pending_build.is_some() || self.flash_busy() {
+                    self.push_terminal("Build or flash already running");
                 } else {
                     self.start_build();
                 }
@@ -5984,8 +6169,8 @@ impl StudioApp {
             "flash" => {
                 if self.building || self.pending_build.is_some() {
                     self.push_terminal("Build in progress; flash unavailable");
-                } else if let Some(uf2) = self.last_uf2.clone() {
-                    self.copy_to_watch(&uf2);
+                } else if let Some(approved) = self.approved_artifact.clone() {
+                    self.copy_to_watch(&approved);
                 } else {
                     self.push_terminal("No build yet".to_string());
                 }
@@ -6400,7 +6585,10 @@ impl StudioApp {
                         ui.weak("Measured output files: unavailable (directory does not exist or could not be read).");
                     }
                 }
-                match self.last_uf2.as_ref().and_then(|path| std::fs::metadata(path).ok()) {
+                match self
+                    .approved_artifact
+                    .as_ref()
+                    .and_then(|artifact| std::fs::metadata(&artifact.path).ok()) {
                     Some(metadata) => ui.monospace(format!("Measured last UF2: {}", fmt_bytes(metadata.len()))),
                     None => ui.weak("Measured last UF2: unavailable (no existing UF2 artifact)."),
                 };
@@ -7131,203 +7319,160 @@ impl StudioApp {
         }
     }
 
-    /// Copies the built .uf2 to the watch's USB drive (if mounted).
-    fn copy_to_watch(&mut self, uf2: &std::path::Path) {
+    fn inspect_artifact_from_input(&mut self) {
+        let path = std::path::PathBuf::from(self.artifact_path_input.trim());
         if self.building || self.pending_build.is_some() {
-            self.status = "Build in progress; flashing is disabled until it finishes.".to_string();
-            self.log_error("Flash blocked while a build is in progress");
+            self.status = ARTIFACT_BUSY_STATUS.to_string();
+            self.build_message = ARTIFACT_BUSY_STATUS.to_string();
             return;
         }
-        self.log
-            .log(format!("Attempting to flash {}", uf2.display()));
-        self.flash_log
-            .log(format!("Attempting to flash {}", uf2.display()));
-        let data = match std::fs::read(uf2) {
-            Ok(d) => d,
-            Err(e) => {
-                self.status = format!("Failed to read uf2: {e}");
-                self.log.log(format!("Failed to read uf2: {e}"));
-                self.flash_log.log(format!("Failed to read uf2: {e}"));
-                return;
+        match build::inspect_artifact(&path) {
+            Ok(inspection) => {
+                set_verified_artifact_state(
+                    &mut self.status,
+                    &mut self.build_message,
+                    &mut self.approved_artifact,
+                    &mut self.pending_artifact,
+                    inspection,
+                    false,
+                );
             }
-        };
-        if let Err(error) = sensor_watch_core::uf2::validate(&data) {
-            self.status = format!("Refusing to copy invalid UF2: {error}");
-            self.log_error(&format!("Refusing to copy invalid UF2: {error}"));
-            self.flash_log
-                .log(format!("UF2 validation failed before copy: {error}"));
-            return;
-        }
-        let manifest = uf2.with_extension("uf2.json");
-        if !manifest.exists() {
-            self.status =
-                "Refusing to copy: artifact manifest is missing (offline verification unavailable)"
-                    .to_string();
-            self.log_error("Refusing to copy: artifact manifest is missing");
-            self.flash_log.log(
-                "UF2 copy blocked: artifact manifest missing; checksum status offline/unverified",
-            );
-            return;
-        }
-        if let Err(error) = verify_artifact_manifest(uf2, &manifest) {
-            self.status =
-                format!("Refusing to copy: offline checksum verification failed ({error})");
-            self.log_error(&format!("Offline checksum verification failed: {error}"));
-            self.flash_log.log(format!(
-                "UF2 copy blocked: offline checksum verification failed: {error}"
-            ));
-            return;
-        }
-        self.flash_log.log(format!(
-            "UF2 validated offline; checksum verified from {}",
-            manifest.display()
-        ));
-        for drive in 'A'..='Z' {
-            let root = format!("{drive}:\\");
-            if let Ok(entries) = std::fs::read_dir(&root) {
-                // CURRENT.UF2 is not a sufficient identity check: any removable
-                // drive can contain a file with that name. Require the UF2
-                // bootloader's information file before allowing a write.
-                let is_watch = entries.flatten().any(|e| {
-                    e.file_name()
-                        .to_string_lossy()
-                        .eq_ignore_ascii_case("info_uf2.txt")
-                        && read_info_uf2(e.path()).is_some()
-                });
-                if is_watch {
-                    let dest = format!("{root}CURRENT.UF2");
-                    // Write to a temp file first, then rename into place so a
-                    // crash or full-drive mid-write doesn't corrupt the existing
-                    // CURRENT.UF2. Then verify the size on disk matches.
-                    let tmp = format!("{root}.current.uf2.tmp");
-                    let destination = std::path::Path::new(&dest);
-                    let temp = std::path::Path::new(&tmp);
-                    let backup_name = format!("{root}.current.uf2.previous");
-                    let backup = std::path::Path::new(&backup_name);
-                    let mut write_ok = regular_or_absent(destination).is_ok()
-                        && regular_or_absent(temp).is_ok()
-                        && regular_or_absent(backup).is_ok()
-                        && std::fs::remove_file(temp)
-                            .or_else(|e| {
-                                (e.kind() == std::io::ErrorKind::NotFound)
-                                    .then_some(())
-                                    .ok_or(e)
-                            })
-                            .is_ok()
-                        && std::fs::write(temp, &data).is_ok()
-                        && std::fs::read(temp)
-                            .map(|written| {
-                                written.len() == data.len()
-                                    && written == data
-                                    && sensor_watch_core::uf2::validate(&written).is_ok()
-                            })
-                            .unwrap_or(false);
-                    if write_ok {
-                        // std::fs::rename does not replace an existing file on
-                        // Windows. Stage the old artifact only after the new
-                        // temp file has been fully validated, and restore it if
-                        // publication or the post-write verification fails.
-                        let had_old = destination.is_file();
-                        let staged_old = if had_old {
-                            (!backup.exists() || std::fs::remove_file(backup).is_ok())
-                                && std::fs::rename(destination, backup).is_ok()
-                        } else {
-                            true
-                        };
-                        write_ok = staged_old && std::fs::rename(temp, destination).is_ok();
-                        if !write_ok && had_old {
-                            let _ = std::fs::rename(backup, destination);
-                        }
-                        if write_ok {
-                            write_ok = std::fs::read(destination)
-                                .map(|published| {
-                                    published == data
-                                        && sensor_watch_core::uf2::validate(&published).is_ok()
-                                })
-                                .unwrap_or(false);
-                            if !write_ok && had_old {
-                                let _ = std::fs::remove_file(destination);
-                                let _ = std::fs::rename(backup, destination);
-                            }
-                        }
-                        if had_old {
-                            let _ = std::fs::remove_file(backup);
-                        }
-                    }
-                    if write_ok {
-                        self.status = format!("Flashed to {dest}");
-                        self.log.log(format!("Flashed to {dest}"));
-                        self.flash_log.log(format!("Flashed to {dest}"));
-                        // Auto-fetch NTP time after flashing for sync.
-                        self.fetch_ntp();
-                        self.flash_log.log("Fetching NTP time for sync...");
-                        return;
-                    } else {
-                        // Best-effort cleanup of any leftover temp file.
-                        let _ = std::fs::remove_file(&tmp);
-                        self.status = format!("Failed to write to {dest}");
-                        self.log_error(&format!("Failed to write to {dest}"));
-                        self.flash_log.log(format!("Failed to write to {dest}"));
-                        return;
-                    }
-                }
+            Err(error) => {
+                // Do not disturb an already approved artifact when a new candidate
+                // fails verification; the failed candidate never enters flash state.
+                set_failed_artifact_state(
+                    &mut self.status,
+                    &mut self.build_message,
+                    &mut self.approved_artifact,
+                    &mut self.pending_artifact,
+                    error,
+                );
             }
         }
-        self.status = "Watch not found (is it in bootloader mode?)".to_string();
-        self.log_error("Watch not found (is it in bootloader mode?)");
-        self.flash_log
-            .log("Watch not found (is it in bootloader mode?)");
     }
 
-    /// Detects whether a Sensor Watch is mounted as a USB drive, and if so
-    /// auto-selects the matching board revision from its INFO_UF2.TXT.
-    fn detect_watch(&mut self) -> Option<String> {
-        for drive in 'A'..='Z' {
-            let root = format!("{drive}:\\");
-            if let Ok(entries) = std::fs::read_dir(&root) {
-                let mut is_watch = false;
-                for e in entries.flatten() {
-                    let name = e.file_name().to_string_lossy().to_lowercase();
-                    if name == "info_uf2.txt" {
-                        // Require a bounded, regular INFO_UF2.TXT read so a
-                        // symlink or unexpectedly large file cannot influence
-                        // detection or consume unbounded memory.
-                        let Some(text) = read_info_uf2(e.path()) else {
-                            continue;
-                        };
-                        is_watch = true;
-                        // Try to auto-select the board from the info file.
-                        {
-                            let lower = text.to_lowercase();
-                            let board = if lower.contains("pro") {
-                                Some(Board::Pro)
-                            } else if lower.contains("blue") {
-                                Some(Board::Blue)
-                            } else if lower.contains("red") || lower.contains("lite") {
-                                Some(Board::RedLite)
-                            } else if lower.contains("green") {
-                                Some(Board::Green)
-                            } else {
-                                None
-                            };
-                            if let Some(b) = board {
-                                if self.board != b {
-                                    self.board = b;
+    /// Starts one worker that owns all artifact and removable-drive filesystem
+    /// work. The UI thread only snapshots approval state and schedules it.
+    fn copy_to_watch(&mut self, approved: &ApprovedArtifact) {
+        if self.flash_busy() || self.building || self.pending_build.is_some() {
+            self.status = "Flash is unavailable while another operation is active.".to_string();
+            self.log_error("Flash blocked while another operation is active");
+            return;
+        }
+        if !self.flash_worker_state.start_flash() {
+            self.status = "Flash is unavailable while another operation is active.".to_string();
+            return;
+        }
+        let path = approved.path.clone();
+        let approved_metadata = build::ArtifactInspection {
+            path: path.clone(),
+            generation: approved.generation.clone(),
+            family_id: approved.family_id.clone(),
+            uf2_bytes: approved.uf2_bytes.clone(),
+            uf2_blocks: approved.uf2_blocks.clone(),
+            payload_bytes: approved.payload_bytes.clone(),
+            sha256: approved.sha256.clone(),
+            payload_sha256: approved.payload_sha256.clone(),
+            manifest_digest: approved.manifest_digest.clone(),
+        };
+        self.log
+            .log(format!("Attempting to flash {}", path.display()));
+        self.flash_log
+            .log(format!("Attempting to flash {}", path.display()));
+        self.pending_flash = Some(std::thread::spawn(move || {
+            flash::flash(FlashRequest {
+                path,
+                approved: approved_metadata,
+            })
+        }));
+        self.status = "Flashing in background…".to_string();
+        self.flash_log
+            .log("Artifact verification, drive detection, and host copy started in background");
+    }
+
+    fn flash_busy(&self) -> bool {
+        self.pending_flash.is_some() || self.pending_detection.is_some()
+    }
+
+    fn start_watch_detection(&mut self) {
+        if self.flash_busy() || self.shutting_down {
+            return;
+        }
+        if !self.flash_worker_state.start_detection() {
+            return;
+        }
+        self.pending_detection = Some(std::thread::spawn(|| {
+            flash::select_watch_drive(flash::windows_drive_roots())
+        }));
+        self.status = "Refreshing Sensor Watch detection…".to_string();
+    }
+
+    fn poll_flash_workers(&mut self) {
+        if let Some(handle) = self.pending_detection.take() {
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(selection) => {
+                        self.flash_worker_state.finish();
+                        self.cached_watch = selection;
+                        if let WatchDriveSelection::One(candidate) = &self.cached_watch {
+                            if let Some(board) = board_from_info(&candidate.info) {
+                                if self.board != board {
+                                    self.board = board;
                                     self.log.log(format!(
                                         "Auto-selected board {} from watch",
-                                        b.label()
+                                        board.label()
                                     ));
                                 }
                             }
                         }
+                        self.status = "Sensor Watch detection refreshed".to_string();
+                    }
+                    Err(_) => {
+                        self.flash_worker_state.finish();
+                        self.status = "Watch detection worker panicked".to_string();
                     }
                 }
-                if is_watch {
-                    return Some(root);
-                }
+            } else {
+                self.pending_detection = Some(handle);
             }
         }
-        None
+        if let Some(handle) = self.pending_flash.take() {
+            if handle.is_finished() {
+                match handle.join() {
+                    Ok(result) => {
+                        self.flash_worker_state.finish();
+                        self.apply_flash_result(result);
+                    }
+                    Err(_) => {
+                        self.flash_worker_state.finish();
+                        self.status = "Flash worker panicked; no completion is assumed".to_string();
+                        self.log_error(&self.status.clone());
+                    }
+                }
+            } else {
+                self.pending_flash = Some(handle);
+            }
+        }
+    }
+
+    fn apply_flash_result(&mut self, result: FlashResult) {
+        self.status = result.message.clone();
+        self.flash_log.log(&result.message);
+        match result.status {
+            FlashStatus::HostCopySucceeded => {
+                self.log.log(&result.message);
+                self.fetch_ntp();
+                self.flash_log.log("Fetching NTP time for sync...");
+            }
+            FlashStatus::ArtifactInvalid
+            | FlashStatus::ArtifactChanged
+            | FlashStatus::NoWatch
+            | FlashStatus::Ambiguous
+            | FlashStatus::DriveDisappeared
+            | FlashStatus::Failed => {
+                self.log_error(&result.message);
+            }
+        }
     }
 
     /// The label for the current stats sampling rate.
@@ -7341,38 +7486,18 @@ impl StudioApp {
     }
 }
 
-const MAX_INFO_UF2_BYTES: u64 = 16 * 1024;
-
-fn read_info_uf2(path: std::path::PathBuf) -> Option<String> {
-    let metadata = std::fs::symlink_metadata(&path).ok()?;
-    if metadata.file_type().is_symlink()
-        || !metadata.is_file()
-        || metadata.len() > MAX_INFO_UF2_BYTES
-    {
-        return None;
-    }
-    let file = std::fs::File::open(path).ok()?;
-    let mut bytes = Vec::new();
-    file.take(MAX_INFO_UF2_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .ok()?;
-    if bytes.len() as u64 > MAX_INFO_UF2_BYTES {
-        return None;
-    }
-    String::from_utf8(bytes).ok()
-}
-
-fn regular_or_absent(path: &std::path::Path) -> Result<(), String> {
-    match std::fs::symlink_metadata(path) {
-        Ok(metadata) if metadata.file_type().is_symlink() => {
-            Err(format!("refusing symlinked path: {}", path.display()))
-        }
-        Ok(metadata) if !metadata.is_file() => {
-            Err(format!("path is not a regular file: {}", path.display()))
-        }
-        Ok(_) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(format!("cannot inspect path: {error}")),
+fn board_from_info(info: &str) -> Option<Board> {
+    let lower = info.to_ascii_lowercase();
+    if lower.contains("pro") {
+        Some(Board::Pro)
+    } else if lower.contains("blue") {
+        Some(Board::Blue)
+    } else if lower.contains("red") || lower.contains("lite") {
+        Some(Board::RedLite)
+    } else if lower.contains("green") {
+        Some(Board::Green)
+    } else {
+        None
     }
 }
 
@@ -7800,6 +7925,30 @@ fn parse_hex_color(s: &str) -> Option<egui::Color32> {
     ))
 }
 
+/// Clears every simulator-side button latch without emitting a release event.
+#[allow(clippy::too_many_arguments)]
+fn reset_simulator_button_state(
+    btn_l_down: &mut bool,
+    btn_c_down: &mut bool,
+    btn_a_down: &mut bool,
+    btn_l_hold: &mut f32,
+    btn_c_hold: &mut f32,
+    btn_a_hold: &mut f32,
+    btn_l_events: &mut real_face::ButtonEventState,
+    btn_a_events: &mut real_face::ButtonEventState,
+    held_button: &mut Option<ButtonId>,
+) {
+    *btn_l_down = false;
+    *btn_c_down = false;
+    *btn_a_down = false;
+    *btn_l_hold = 0.0;
+    *btn_c_hold = 0.0;
+    *btn_a_hold = 0.0;
+    *btn_l_events = real_face::ButtonEventState::default();
+    *btn_a_events = real_face::ButtonEventState::default();
+    *held_button = None;
+}
+
 /// Edge-detects a simulator button and returns the action to apply.
 ///
 /// - Fires `Press` exactly once on the press edge.
@@ -7915,56 +8064,17 @@ fn days_in_month(year: i32, month: u32) -> u32 {
     }
 }
 
+/// Re-verify the candidate immediately before flashing using the same shared
+/// verifier as explicit inspection. This is local consistency checking only;
+/// it does not establish authenticity.
+#[cfg(test)]
 fn verify_artifact_manifest(
     artifact: &std::path::Path,
     manifest_path: &std::path::Path,
 ) -> Result<(), String> {
-    let bytes = std::fs::read(artifact).map_err(|e| e.to_string())?;
-    let text = std::fs::read_to_string(manifest_path).map_err(|e| e.to_string())?;
-    let mut value: serde_json::Value = serde_json::from_str(&text).map_err(|e| e.to_string())?;
-    let expected = value
-        .get("sha256")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "manifest has no SHA-256".to_string())?;
-    let parsed = sensor_watch_core::uf2::validate(&bytes)
-        .map_err(|error| format!("UF2 validation failed: {error}"))?;
-    let expected_crc = value
-        .get("crc32_ieee")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "manifest has no CRC-32".to_string())?;
-    let actual_crc = format!("0x{:08X}", sensor_watch_core::uf2::crc32(&parsed.image));
-    if expected_crc != actual_crc {
-        return Err(format!(
-            "payload CRC-32 mismatch (expected {expected_crc}, got {actual_crc})"
-        ));
-    }
-    let actual = Sha256::digest(&bytes)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    if expected != actual {
-        return Err(format!(
-            "artifact SHA-256 mismatch (expected {expected}, got {actual})"
-        ));
-    }
-    let signature = value
-        .get("signature")
-        .and_then(serde_json::Value::as_str)
-        .ok_or_else(|| "manifest has no signature".to_string())?
-        .to_string();
-    let object = value
-        .as_object_mut()
-        .ok_or_else(|| "manifest is not an object".to_string())?;
-    object.remove("signature");
-    let canonical = serde_json::to_vec(&value).map_err(|e| e.to_string())?;
-    let digest = Sha256::digest(canonical)
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<String>();
-    if signature != format!("sha256:{digest}") {
-        return Err("manifest signature mismatch".to_string());
-    }
-    Ok(())
+    sensor_watch_tools::verify_uf2(artifact, Some(manifest_path), None)
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn is_valid_sha256(value: &str) -> bool {
@@ -7988,11 +8098,608 @@ fn invalidate_ntp_reference(ntp_time: &mut Option<u64>, ntp_ping: &mut f64, ntp_
     *ntp_offset = 0.0;
 }
 
+/// Existing output files are for explicit inspection/recovery only. They are
+/// never implicitly promoted to this session's flashable artifact.
+fn initial_flashable_uf2() -> Option<ApprovedArtifact> {
+    None
+}
+
+fn flashable_uf2_after_build(result: &build::BuildResult) -> Option<std::path::PathBuf> {
+    result.success.then(|| result.uf2_path.clone()).flatten()
+}
+
+/// A build is publishable only after its UF2 and both manifest sidecars pass
+/// the shared verifier. Verification failure must not affect approved flash
+/// state or build accounting.
+fn verified_artifact_after_build(
+    result: &build::BuildResult,
+) -> Result<build::ArtifactInspection, String> {
+    let path = flashable_uf2_after_build(result)
+        .ok_or_else(|| "successful build produced no UF2 artifact".to_string())?;
+    build::inspect_artifact(&path)
+}
+
+const ARTIFACT_VERIFIED_PENDING_STATUS: &str = "Artifact verified; approval pending";
+const ARTIFACT_APPROVED_STATUS: &str = "Artifact approved for this session";
+const ARTIFACT_VERIFICATION_FAILED_STATUS: &str = "Artifact verification failed";
+const ARTIFACT_BUSY_STATUS: &str = "Artifact inspection unavailable while build is in progress";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ApprovedArtifact {
+    path: std::path::PathBuf,
+    generation: String,
+    family_id: String,
+    uf2_bytes: String,
+    uf2_blocks: String,
+    payload_bytes: String,
+    sha256: String,
+    payload_sha256: String,
+    manifest_digest: String,
+}
+
+impl ApprovedArtifact {
+    fn from_inspection(inspection: &build::ArtifactInspection) -> Self {
+        Self {
+            path: inspection.path.clone(),
+            generation: inspection.generation.clone(),
+            family_id: inspection.family_id.clone(),
+            uf2_bytes: inspection.uf2_bytes.clone(),
+            uf2_blocks: inspection.uf2_blocks.clone(),
+            payload_bytes: inspection.payload_bytes.clone(),
+            sha256: inspection.sha256.clone(),
+            payload_sha256: inspection.payload_sha256.clone(),
+            manifest_digest: inspection.manifest_digest.clone(),
+        }
+    }
+
+    #[cfg_attr(not(test), allow(dead_code))]
+    fn matches(&self, inspection: &build::ArtifactInspection) -> bool {
+        self == &Self::from_inspection(inspection)
+    }
+}
+
+fn set_verified_artifact_state(
+    status: &mut String,
+    build_message: &mut String,
+    approved_artifact: &mut Option<ApprovedArtifact>,
+    pending_artifact: &mut Option<build::ArtifactInspection>,
+    inspection: build::ArtifactInspection,
+    artifact_actions_blocked: bool,
+) {
+    if artifact_actions_blocked {
+        *status = ARTIFACT_BUSY_STATUS.to_string();
+        *build_message = ARTIFACT_BUSY_STATUS.to_string();
+        return;
+    }
+    // A newly verified candidate supersedes the prior approval. It must be
+    // explicitly approved before it can become flashable.
+    *approved_artifact = None;
+    *status = ARTIFACT_VERIFIED_PENDING_STATUS.to_string();
+    *build_message = format!(
+        "Artifact verified locally; approve it before flashing.\n{}",
+        artifact_metadata(&inspection)
+    );
+    *pending_artifact = Some(inspection);
+}
+
+fn approve_artifact_state(
+    status: &mut String,
+    build_message: &mut String,
+    pending_artifact: &mut Option<build::ArtifactInspection>,
+    approved_artifact: &mut Option<ApprovedArtifact>,
+    artifact_actions_blocked: bool,
+) {
+    if artifact_actions_blocked {
+        *status = ARTIFACT_BUSY_STATUS.to_string();
+        *build_message = ARTIFACT_BUSY_STATUS.to_string();
+        return;
+    }
+    let Some(inspection) = pending_artifact.take() else {
+        return;
+    };
+    *status = ARTIFACT_APPROVED_STATUS.to_string();
+    *approved_artifact = Some(ApprovedArtifact::from_inspection(&inspection));
+    *build_message = format!("Approved for flashing: {}", inspection.path.display());
+}
+
+fn set_failed_artifact_state(
+    status: &mut String,
+    build_message: &mut String,
+    _approved_artifact: &mut Option<ApprovedArtifact>,
+    pending_artifact: &mut Option<build::ArtifactInspection>,
+    error: String,
+) {
+    *status = ARTIFACT_VERIFICATION_FAILED_STATUS.to_string();
+    *build_message = format!("Artifact rejected: {error}");
+    *pending_artifact = None;
+}
+
+fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
+    format!(
+        "Path: {}\nGeneration: {}\nFamily: {}\nUF2: {} bytes / {} blocks\nPayload: {} bytes\nUF2 SHA-256: {}\nPayload SHA-256: {}\nManifest digest: {}",
+        inspection.path.display(),
+        inspection.generation,
+        inspection.family_id,
+        inspection.uf2_bytes,
+        inspection.uf2_blocks,
+        inspection.payload_bytes,
+        inspection.sha256,
+        inspection.payload_sha256,
+        inspection.manifest_digest,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        credit_matches, first_run_start_panel, CreditEntry, Panel, CREDIT_GROUPS, FIRST_RUN_STEPS,
+        approve_artifact_state, credit_matches, first_run_start_panel, flashable_uf2_after_build,
+        initial_flashable_uf2, preset_name, set_failed_artifact_state, set_verified_artifact_state,
+        verified_artifact_after_build, verify_artifact_manifest, ApprovedArtifact, CreditEntry,
+        Panel, WatchDriveSelection, ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS,
+        ARTIFACT_VERIFICATION_FAILED_STATUS, ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS,
+        FIRST_RUN_STEPS,
     };
+    use super::{handle_sim_button, reset_simulator_button_state, ButtonId, SimAction};
+    use crate::flash::select_watch_drive;
+
+    #[cfg(feature = "real-faces")]
+    #[test]
+    fn terminal_short_press_matches_gui_down_up_and_keeps_fallback() {
+        // STOPWATCH changes its running state on Alarm Down. An Up-only
+        // terminal press (the old compatibility path) therefore leaves it
+        // stopped, while the GUI's Down -> Up sequence starts it.
+        let expected = {
+            let mut real = super::real_face::RealFace::new("STOPWATCH")
+                .expect("STOPWATCH is a migrated real face");
+            real.set_time(2023, 1, 6, 15, 4, 0);
+            real.activate(true);
+            real.button_event(
+                super::real_face::RealButton::Alarm,
+                super::real_face::RealButtonEvent::Down,
+            );
+            real.button_event(
+                super::real_face::RealButton::Alarm,
+                super::real_face::RealButtonEvent::Up,
+            );
+            let snapshot = real.snapshot();
+            // Reset the stateful face before dropping it so the next isolated
+            // real-face instance starts from the same deterministic state.
+            real.button_event(
+                super::real_face::RealButton::Alarm,
+                super::real_face::RealButtonEvent::Down,
+            );
+            snapshot
+        };
+        {
+            let mut app = super::StudioApp::default();
+            let mut real = super::real_face::RealFace::new("STOPWATCH")
+                .expect("STOPWATCH is a migrated real face");
+            real.set_time(2023, 1, 6, 15, 4, 0);
+            real.activate(true);
+            app.real_face = Some(real);
+
+            app.press_sim_button(super::ButtonId::A);
+            let actual = app.real_face.as_ref().unwrap().snapshot();
+            assert_eq!(actual.chars, expected.chars);
+            assert_eq!(actual.colon, expected.colon);
+            assert_eq!(actual.lap, expected.lap);
+        }
+
+        // A face without a migrated real-face implementation still uses the
+        // stateful face_sim engine and must retain the terminal action.
+        let mut fallback = super::StudioApp::default();
+        fallback.face_engine = super::face_sim::FaceEngine::new("STOPWATCH");
+        fallback.press_sim_button(super::ButtonId::A);
+        assert!(fallback.face_engine.sw_running);
+    }
+
+    #[test]
+    fn face_switch_while_held_starts_the_next_press_with_down() {
+        let mut l_down = false;
+        let mut c_down = true;
+        let mut a_down = true;
+        let mut l_hold = 0.0;
+        let mut c_hold = 0.5;
+        let mut a_hold = 0.5;
+        let mut l_events = super::real_face::ButtonEventState::default();
+        let mut a_events = super::real_face::ButtonEventState::default();
+        let mut held = Some(ButtonId::L);
+
+        assert!(matches!(
+            handle_sim_button(true, &mut l_down, &mut l_hold, 0.0),
+            SimAction::Press
+        ));
+        assert_eq!(
+            l_events.update(true, 0.0),
+            Some(super::real_face::RealButtonEvent::Down)
+        );
+        assert_eq!(
+            l_events.update(true, 1.1),
+            Some(super::real_face::RealButtonEvent::LongPress)
+        );
+
+        // C face cycling replaces the face while the pointer is still held.
+        reset_simulator_button_state(
+            &mut l_down,
+            &mut c_down,
+            &mut a_down,
+            &mut l_hold,
+            &mut c_hold,
+            &mut a_hold,
+            &mut l_events,
+            &mut a_events,
+            &mut held,
+        );
+
+        assert!(!l_down && !c_down && !a_down);
+        assert_eq!((l_hold, c_hold, a_hold), (0.0, 0.0, 0.0));
+        assert_eq!(held, None);
+        assert_eq!(l_events, super::real_face::ButtonEventState::default());
+        assert_eq!(a_events, super::real_face::ButtonEventState::default());
+        assert_eq!(
+            l_events.update(true, 0.0),
+            Some(super::real_face::RealButtonEvent::Down)
+        );
+        assert_eq!(
+            l_events.update(false, 0.0),
+            Some(super::real_face::RealButtonEvent::Up)
+        );
+    }
+
+    #[test]
+    fn leaving_and_reentering_simulator_while_held_does_not_release_into_new_face() {
+        let mut l_down = true;
+        let mut c_down = false;
+        let mut a_down = true;
+        let mut l_hold = 1.2;
+        let mut c_hold = 0.0;
+        let mut a_hold = 1.2;
+        let mut l_events = super::real_face::ButtonEventState::default();
+        let mut a_events = super::real_face::ButtonEventState::default();
+        let mut held = Some(ButtonId::A);
+        l_events.update(true, 1.2);
+        a_events.update(true, 1.2);
+
+        // Leaving the tab cancels ownership; re-entering must not synthesize Up.
+        reset_simulator_button_state(
+            &mut l_down,
+            &mut c_down,
+            &mut a_down,
+            &mut l_hold,
+            &mut c_hold,
+            &mut a_hold,
+            &mut l_events,
+            &mut a_events,
+            &mut held,
+        );
+
+        assert_eq!(l_events.update(false, 0.0), None);
+        assert_eq!(a_events.update(false, 0.0), None);
+        assert!(matches!(
+            handle_sim_button(true, &mut a_down, &mut a_hold, 0.0),
+            SimAction::Press
+        ));
+        assert_eq!(
+            a_events.update(true, 0.0),
+            Some(super::real_face::RealButtonEvent::Down)
+        );
+    }
+
+    fn shared_manifest_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root =
+            std::env::temp_dir().join(format!("sensor-watch-studio-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("candidate.uf2");
+        std::fs::write(
+            &artifact,
+            sensor_watch_core::uf2::convert_to_uf2(b"shared-tool-compatible"),
+        )
+        .unwrap();
+        let manifest_path = artifact.with_extension("uf2.json");
+        let manifest = sensor_watch_tools::create_manifest(
+            &artifact,
+            Some("studio-test".into()),
+            Some(&artifact),
+        )
+        .unwrap();
+        sensor_watch_tools::write_manifest(&manifest_path, &manifest).unwrap();
+        (root, artifact)
+    }
+
+    fn drive_fixture(name: &str, info: Option<&str>) -> std::path::PathBuf {
+        let root = std::env::temp_dir().join(format!(
+            "sensor-watch-studio-drive-{name}-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        if let Some(info) = info {
+            std::fs::write(root.join("INFO_UF2.TXT"), info).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn drive_selection_distinguishes_zero_matching_drives() {
+        let root = drive_fixture("zero", None);
+        assert_eq!(
+            select_watch_drive([root.clone()]),
+            WatchDriveSelection::None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn drive_selection_returns_one_matching_drive() {
+        let root = drive_fixture("one", Some("UF2 Bootloader; Board-ID: Sensor Watch Green"));
+        match select_watch_drive([root.clone()]) {
+            WatchDriveSelection::One(candidate) => assert_eq!(candidate.root, root),
+            selection => panic!("expected one drive, got {selection:?}"),
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn drive_selection_refuses_multiple_matching_drives() {
+        let first = drive_fixture(
+            "multiple-first",
+            Some("UF2 Bootloader; Board-ID: Sensor Watch"),
+        );
+        let second = drive_fixture(
+            "multiple-second",
+            Some("UF2 Bootloader; Family ID: 0x2C29472F"),
+        );
+        assert_eq!(
+            select_watch_drive([first.clone(), second.clone()]),
+            WatchDriveSelection::Multiple(2)
+        );
+        std::fs::remove_dir_all(first).unwrap();
+        std::fs::remove_dir_all(second).unwrap();
+    }
+
+    #[test]
+    fn drive_selection_ignores_non_watch_candidates() {
+        let root = drive_fixture("non-watch", Some("UF2 Bootloader; Board-ID: Generic UF2"));
+        assert_eq!(
+            select_watch_drive([root.clone()]),
+            WatchDriveSelection::None
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn flash_revalidation_accepts_shared_tool_manifest_and_sidecar() {
+        let (root, artifact) = shared_manifest_fixture("compatible");
+        let manifest = artifact.with_extension("uf2.json");
+        assert!(verify_artifact_manifest(&artifact, &manifest).is_ok());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn flash_revalidation_rejects_missing_or_tampered_sidecar() {
+        let (root, artifact) = shared_manifest_fixture("sidecar");
+        let manifest = artifact.with_extension("uf2.json");
+        let sidecar = manifest.with_extension("json.sig");
+        std::fs::remove_file(&sidecar).unwrap();
+        let missing_error = verify_artifact_manifest(&artifact, &manifest).unwrap_err();
+        assert!(missing_error.contains("json.sig") || missing_error.contains("No such file"));
+
+        let (root_tampered, artifact_tampered) = shared_manifest_fixture("tampered-sidecar");
+        let manifest_tampered = artifact_tampered.with_extension("uf2.json");
+        let sidecar_tampered = manifest_tampered.with_extension("json.sig");
+        std::fs::write(sidecar_tampered, "sha256:tampered").unwrap();
+        let tampered_error =
+            verify_artifact_manifest(&artifact_tampered, &manifest_tampered).unwrap_err();
+        assert!(tampered_error.contains("sidecar"));
+
+        std::fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(root_tampered).unwrap();
+    }
+
+    #[test]
+    fn startup_does_not_adopt_an_existing_uf2_as_flashable() {
+        // An existing output path remains available to explicit inspection via
+        // build::last_uf2, but cannot initialize this session's flash state.
+        assert!(initial_flashable_uf2().is_none());
+    }
+
+    #[test]
+    fn successful_build_promotes_its_uf2() {
+        let path = std::path::PathBuf::from("session-build/sensor-watch.uf2");
+        let result = super::build::BuildResult {
+            success: true,
+            message: String::new(),
+            uf2_path: Some(path.clone()),
+        };
+
+        assert_eq!(flashable_uf2_after_build(&result), Some(path));
+    }
+
+    #[test]
+    fn successful_build_without_verified_artifact_is_rejected() {
+        let result = super::build::BuildResult {
+            success: true,
+            message: String::new(),
+            uf2_path: Some(std::path::PathBuf::from("missing.uf2")),
+        };
+
+        let error = verified_artifact_after_build(&result).unwrap_err();
+        assert!(error.contains("No such file") || error.contains("missing.uf2"));
+    }
+
+    #[test]
+    fn successful_build_with_verified_artifact_is_accepted() {
+        let (root, artifact) = shared_manifest_fixture("build-success");
+        let result = super::build::BuildResult {
+            success: true,
+            message: String::new(),
+            uf2_path: Some(artifact.clone()),
+        };
+
+        let inspection = verified_artifact_after_build(&result).unwrap();
+        assert_eq!(inspection.path, artifact);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_build_does_not_promote_an_artifact() {
+        let result = super::build::BuildResult {
+            success: false,
+            message: String::from("build failed"),
+            uf2_path: Some(std::path::PathBuf::from("stale.uf2")),
+        };
+
+        assert_eq!(flashable_uf2_after_build(&result), None);
+    }
+
+    fn test_inspection(path: &str) -> super::build::ArtifactInspection {
+        super::build::ArtifactInspection {
+            path: std::path::PathBuf::from(path),
+            generation: "test-generation".to_string(),
+            family_id: "test-family".to_string(),
+            uf2_bytes: "1".to_string(),
+            uf2_blocks: "1".to_string(),
+            payload_bytes: "1".to_string(),
+            sha256: "uf2-sha".to_string(),
+            payload_sha256: "payload-sha".to_string(),
+            manifest_digest: "manifest-sha".to_string(),
+        }
+    }
+
+    #[test]
+    fn successful_inspection_sets_distinct_verified_pending_state() {
+        let mut status = String::new();
+        let mut message = String::new();
+        let mut approved = Some(ApprovedArtifact::from_inspection(&test_inspection(
+            "old-approved.uf2",
+        )));
+        let mut pending = None;
+
+        set_verified_artifact_state(
+            &mut status,
+            &mut message,
+            &mut approved,
+            &mut pending,
+            test_inspection("candidate.uf2"),
+            false,
+        );
+
+        assert!(approved.is_none());
+
+        assert_eq!(status, ARTIFACT_VERIFIED_PENDING_STATUS);
+        assert!(message.contains("approve it before flashing"));
+        assert_eq!(
+            pending.as_ref().unwrap().path,
+            std::path::PathBuf::from("candidate.uf2")
+        );
+    }
+
+    #[test]
+    fn explicit_approval_sets_session_approved_state() {
+        let mut status = ARTIFACT_VERIFIED_PENDING_STATUS.to_string();
+        let mut message = String::new();
+        let mut pending = Some(test_inspection("candidate.uf2"));
+        let mut approved = Some(ApprovedArtifact::from_inspection(&test_inspection(
+            "old-approved.uf2",
+        )));
+
+        approve_artifact_state(
+            &mut status,
+            &mut message,
+            &mut pending,
+            &mut approved,
+            false,
+        );
+
+        assert_eq!(status, ARTIFACT_APPROVED_STATUS);
+        assert_eq!(
+            approved.as_ref().map(|artifact| &artifact.path),
+            Some(&std::path::PathBuf::from("candidate.uf2"))
+        );
+        assert!(pending.is_none());
+        assert!(message.contains("Approved for flashing"));
+    }
+
+    #[test]
+    fn build_completion_cannot_overwrite_newer_approved_artifact_while_busy() {
+        let newer = test_inspection("newer-approved.uf2");
+        let mut status = ARTIFACT_APPROVED_STATUS.to_string();
+        let mut message = String::new();
+        let mut approved = Some(ApprovedArtifact::from_inspection(&newer));
+        let mut pending = None;
+
+        // This models an older worker result arriving after a newer candidate
+        // was approved. The busy guard is the same policy used by the UI and
+        // explicit inspection entry point while that worker is still active.
+        set_verified_artifact_state(
+            &mut status,
+            &mut message,
+            &mut approved,
+            &mut pending,
+            test_inspection("older-build.uf2"),
+            true,
+        );
+
+        assert_eq!(status, ARTIFACT_BUSY_STATUS);
+        assert_eq!(message, ARTIFACT_BUSY_STATUS);
+        assert!(pending.is_none());
+        assert_eq!(approved, Some(ApprovedArtifact::from_inspection(&newer)));
+    }
+
+    #[test]
+    fn approved_metadata_accepts_unchanged_artifact() {
+        let inspection = test_inspection("candidate.uf2");
+        let approved = ApprovedArtifact::from_inspection(&inspection);
+
+        assert!(approved.matches(&inspection));
+    }
+
+    #[test]
+    fn approved_metadata_rejects_a_different_valid_replacement() {
+        let approved_inspection = test_inspection("candidate.uf2");
+        let approved = ApprovedArtifact::from_inspection(&approved_inspection);
+        let mut replacement = test_inspection("candidate.uf2");
+        replacement.sha256 = "different-valid-uf2-sha".to_string();
+        replacement.payload_sha256 = "different-valid-payload-sha".to_string();
+        replacement.manifest_digest = "different-valid-manifest-digest".to_string();
+        replacement.generation = "replacement-generation".to_string();
+
+        assert!(!approved.matches(&replacement));
+    }
+
+    #[test]
+    fn failed_inspection_preserves_approved_artifact_and_reports_failure() {
+        let mut status = ARTIFACT_APPROVED_STATUS.to_string();
+        let mut message = String::new();
+        let mut pending = Some(test_inspection("old-candidate.uf2"));
+        let mut approved = Some(ApprovedArtifact::from_inspection(&test_inspection(
+            "approved.uf2",
+        )));
+
+        set_failed_artifact_state(
+            &mut status,
+            &mut message,
+            &mut approved,
+            &mut pending,
+            "invalid manifest".to_string(),
+        );
+
+        assert_eq!(status, ARTIFACT_VERIFICATION_FAILED_STATUS);
+        assert!(message.contains("invalid manifest"));
+        assert!(pending.is_none());
+        assert_eq!(
+            approved.as_ref().map(|artifact| &artifact.path),
+            Some(&std::path::PathBuf::from("approved.uf2"))
+        );
+    }
+
+    #[test]
+    fn empty_preset_names_are_rejected_before_mutation() {
+        assert_eq!(preset_name(""), None);
+        assert_eq!(preset_name("   \t\n"), None);
+        assert_eq!(preset_name("  travel  "), Some("travel"));
+    }
 
     #[test]
     fn removing_a_custom_ntp_server_preserves_or_resets_selection() {

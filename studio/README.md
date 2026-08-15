@@ -41,9 +41,9 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   firmware's real 7-segment character set. Shows both the sim's face counter
   and the engine's actual loaded face for catching face-switching bugs. These
   diagnostics are simulated unless a UART jig is connected. With Studio's
-  default `real-faces` feature, the simulator runs **95 real firmware faces**
+  default `real-faces` feature, the simulator runs **97 real firmware faces**
   through the `real_face.rs` host seam (see below) instead of the hand-written
-  engine, the remaining **16 faces** use `face_sim`. Host seam coverage does not
+  engine, the remaining **14 faces** use `face_sim`. Host seam coverage does not
   constitute physical hardware testing.
 - **Build & Flash** - combined panel: review the target board and component
   profile, then request a firmware build. The build preflight is explicitly
@@ -216,11 +216,13 @@ The Simulator can also run the **real firmware faces** through a host seam:
 so the rendered digits come from the same code the firmware runs. The host seam
 and its real-face coverage are available through Studio's default `real-faces`
 feature because it requires the firmware host lib to compile as a host
- dependency. If the feature is disabled, the Simulator falls back to the
- hand-written `face_sim` engine. This remains host-side coverage, not physical
- hardware validation. The current workspace baseline is 284 passing host tests:
-109 firmware host-seam, 67 core, 94 Studio, and 14 tools. None of these totals
-represent on-silicon validation.
+dependency. If the feature is disabled, the Simulator falls back to the
+hand-written `face_sim` engine; CI checks this configuration with
+`cargo test -p sensor-watch-studio --no-default-features`. This remains
+host-side coverage, not physical hardware validation. The latest validated
+workspace run passed 365 host tests: 121 firmware host-seam, 69 core, 145
+Studio, and 30 tools. The ARM release package build is a separate build check;
+none of these results represent on-silicon validation.
 
 ## Dependencies
 

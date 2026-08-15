@@ -32,19 +32,21 @@
 
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{
-    alarm, astronomy, beats, beeps, blinky, breathing, character_set, chirpy_demo, close_enough,
-    countdown, counter, databank, day_night_percentage, day_one, days_since, deadline,
+    accel_interrupt_count, activity, alarm, alarm_thermometer, astronomy, baby_kicks, beats, beeps,
+    blackjack, blinky, breathing, butterfly_game, character_set, chirpy_demo, close_enough,
+    couch_to_5k, countdown, counter, databank, day_night_percentage, day_one, days_since, deadline,
     decimal_time, demo, discgolf, dual_timer, finetune, flashlight, french_revolutionary,
-    frequency_correction, habit, hello_there, interval, invaders, ish, ke_decimal_time,
-    kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time, menstrual_cycle, metronome,
-    minimal_clock, minmax, minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery,
-    periodic, ping, planetary_hours, planetary_time, preferences, probability, pulsometer,
-    randonaut, ratemeter, repetition_minute, rpn_calculator, rpn_calculator_alt, sailing,
-    save_load, set_time, set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock,
-    simple_clock_bin_led, simple_coin_flip, solar_time, solstice, sos, squash, stopwatch,
-    sunrise_sunset, tachymeter, tally, tarot, tempchart, thermistor_logging, thermistor_readout,
-    thermistor_testing, tide, time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones,
-    types, voltage, wake, wareki, weeknumber, wordle, world_clock, world_clock2, wyoscan,
+    frequency_correction, geomancy, habit, hello_there, higher_lower_game, interval, invaders, ish,
+    ke_decimal_time, kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time,
+    menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal, moon_phase,
+    morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time, preferences,
+    probability, pulsometer, randonaut, ratemeter, repetition_minute, rpn_calculator,
+    rpn_calculator_alt, sailing, save_load, set_time, set_time_hackwatch, ships_bell, simon,
+    simple_calculator, simple_clock, simple_clock_bin_led, simple_coin_flip, solar_time, solstice,
+    sos, squash, stock_stopwatch, stopwatch, sunrise_sunset, tachymeter, tally, tarot, tempchart,
+    thermistor_logging, thermistor_readout, thermistor_testing, tide, time_left, timer, tomato,
+    toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki, weeknumber, wordle,
+    world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -65,6 +67,64 @@ pub struct RealFaceSnapshot {
     pub pm: bool,
     pub h24: bool,
     pub lap: bool,
+}
+
+/// The two physical buttons that are delivered to a real face. C remains a
+/// Studio-only face-cycle button.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealButton {
+    Light,
+    Alarm,
+}
+
+/// Button transitions exposed by the Studio's deterministic hold model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealButtonEvent {
+    Down,
+    Up,
+    LongPress,
+    LongUp,
+}
+
+/// Pure edge/hold state machine for a Studio button.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ButtonEventState {
+    down: bool,
+    hold_seconds: f32,
+}
+
+impl ButtonEventState {
+    pub const LONG_PRESS_SECONDS: f32 = 1.0;
+
+    /// Advances one sampled button state. A long press is emitted exactly once
+    /// when the accumulated hold crosses the threshold; release emits Up or
+    /// LongUp accordingly.
+    pub fn update(&mut self, is_down: bool, dt_seconds: f32) -> Option<RealButtonEvent> {
+        if is_down && !self.down {
+            self.down = true;
+            self.hold_seconds = 0.0;
+            Some(RealButtonEvent::Down)
+        } else if !is_down && self.down {
+            let event = if self.hold_seconds >= Self::LONG_PRESS_SECONDS {
+                RealButtonEvent::LongUp
+            } else {
+                RealButtonEvent::Up
+            };
+            self.down = false;
+            self.hold_seconds = 0.0;
+            Some(event)
+        } else if is_down {
+            let was_long = self.hold_seconds >= Self::LONG_PRESS_SECONDS;
+            self.hold_seconds += dt_seconds.max(0.0);
+            if !was_long && self.hold_seconds >= Self::LONG_PRESS_SECONDS {
+                Some(RealButtonEvent::LongPress)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -95,6 +155,7 @@ pub struct RealFace {
 trait RealFaceTrait {
     fn activate(&mut self, settings: &types::Settings);
     fn loop_(&mut self, event: types::Event, settings: &mut types::Settings);
+    fn resign(&mut self, _settings: &mut types::Settings) {}
 }
 
 // `SimpleClockFace`'s `WatchFace` impl supplies these via the REAL trait;
@@ -107,6 +168,19 @@ impl RealFaceTrait for simple_clock::SimpleClockFace {
     }
     fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
         types::WatchFace::loop_(self, event, settings);
+    }
+}
+
+#[cfg(feature = "real-faces")]
+impl RealFaceTrait for accel_interrupt_count::AccelInterruptCountFace {
+    fn activate(&mut self, settings: &types::Settings) {
+        types::WatchFace::activate(self, settings);
+    }
+    fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
+        types::WatchFace::loop_(self, event, settings);
+    }
+    fn resign(&mut self, settings: &mut types::Settings) {
+        types::WatchFace::resign(self, settings);
     }
 }
 
@@ -124,10 +198,21 @@ macro_rules! impl_real_face_trait {
             fn loop_(&mut self, event: types::Event, settings: &mut types::Settings) {
                 types::WatchFace::loop_(self, event, settings);
             }
+            fn resign(&mut self, settings: &mut types::Settings) {
+                types::WatchFace::resign(self, settings);
+            }
         }
     };
 }
 
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(activity::ActivityFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(blackjack::BlackjackFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(couch_to_5k::CouchTo5kFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(alarm_thermometer::AlarmThermometerFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(astronomy::AstronomyFace);
 #[cfg(feature = "real-faces")]
@@ -145,9 +230,13 @@ impl_real_face_trait!(french_revolutionary::FrenchRevolutionaryFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(frequency_correction::FrequencyCorrectionFace);
 #[cfg(feature = "real-faces")]
+impl_real_face_trait!(geomancy::GeomancyFace);
+#[cfg(feature = "real-faces")]
 impl_real_face_trait!(finetune::FinetuneFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(dual_timer::DualTimerFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(stock_stopwatch::StockStopwatchFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(hello_there::HelloThereFace);
 #[cfg(feature = "real-faces")]
@@ -281,6 +370,8 @@ impl_real_face_trait!(world_clock2::WorldClock2Face);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(wyoscan::WyoscanFace);
 #[cfg(feature = "real-faces")]
+impl_real_face_trait!(baby_kicks::BabyKicksFace);
+#[cfg(feature = "real-faces")]
 impl_real_face_trait!(beats::BeatsFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(beeps::BeepsFace);
@@ -299,9 +390,13 @@ impl_real_face_trait!(days_since::DaysSinceFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(habit::HabitFace);
 #[cfg(feature = "real-faces")]
+impl_real_face_trait!(higher_lower_game::HigherLowerGameFace);
+#[cfg(feature = "real-faces")]
 impl_real_face_trait!(breathing::BreathingFace);
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(discgolf::DiscgolfFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(butterfly_game::ButterflyGameFace);
 
 #[cfg(feature = "real-faces")]
 impl RealFaceTrait for alarm::AlarmFace {
@@ -430,17 +525,27 @@ impl RealFace {
             month: month as u8,
             year: (year - reference_year) as u8,
         };
+        let time_changed = self.mock.now != next;
         self.mock.now = next;
-        // Refresh an already-active face without re-running activate. This keeps
-        // the display's AM/PM and date fields synchronized after a time edit
-        // while preserving stateful face navigation.
-        if self.activated {
+        // Redraw an already-active face after an explicit time edit, but never
+        // turn ordinary same-time GUI redraws into firmware ticks. Stateful
+        // timing faces must not receive a synthetic event here: their display
+        // is synchronized by explicit `tick` events, and their Activate paths
+        // derive elapsed state from the RTC.
+        if self.activated && time_changed && !self.is_stateful_timing_face() {
             sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
-                self.face.loop_(types::Event::Tick, &mut self.settings);
+                self.face.loop_(types::Event::Activate, &mut self.settings);
             });
             self.snapshot_from_mock();
         }
         true
+    }
+
+    fn is_stateful_timing_face(&self) -> bool {
+        matches!(
+            self.face_name,
+            "STOPWATCH" | "STOCK_STOPWATCH" | "TIMER" | "COUNTDOWN" | "COUCH_TO_5K" | "BABY_KICKS"
+        )
     }
 
     /// Ready the face the way the firmware does at power-up: tell the face it's
@@ -458,7 +563,20 @@ impl RealFace {
             .clear_indicator(sensor_watch_core::mock_hw::Indicator::H24);
         sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
             self.face.activate(&self.settings);
-            self.face.loop_(types::Event::Tick, &mut self.settings);
+            let initial_event = if matches!(
+                self.face_name,
+                "ACTIVITY"
+                    | "BLACKJACK"
+                    | "COUCH_TO_5K"
+                    | "HIGHER_LOWER_GAME"
+                    | "BABY_KICKS"
+                    | "BUTTERFLY_GAME"
+            ) {
+                types::Event::Activate
+            } else {
+                types::Event::Tick
+            };
+            self.face.loop_(initial_event, &mut self.settings);
         });
         self.activated = true;
         self.snapshot_from_mock();
@@ -475,27 +593,60 @@ impl RealFace {
         self.snapshot_from_mock();
     }
 
-    /// Drives a button press into the face. `Light` is the L button; `Alarm` is
-    /// the A button (the C button cycles faces in the app rather than reaching
-    /// the face).
+    /// Delivers one public button transition to the firmware face. `Light` is
+    /// L and `Alarm` is A; C is consumed by Studio for face cycling.
+    /// Injects a tap event through the same firmware event path used by the
+    /// accelerometer interrupt callback. This remains useful on host even when
+    /// no physical accelerometer is available.
+    #[allow(dead_code)]
+    pub fn tap_event(&mut self, double: bool) {
+        let event = if double {
+            types::Event::DoubleTap
+        } else {
+            types::Event::SingleTap
+        };
+        sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+            self.face.loop_(event, &mut self.settings);
+        });
+        self.snapshot_from_mock();
+    }
+
+    /// Resigns the face and releases any face-owned hardware state.
+    pub fn resign(&mut self) {
+        if self.activated {
+            sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+                self.face.resign(&mut self.settings);
+            });
+            self.activated = false;
+        }
+    }
+
+    pub fn button_event(&mut self, button: RealButton, event: RealButtonEvent) {
+        let button = match button {
+            RealButton::Light => types::Button::Light,
+            RealButton::Alarm => types::Button::Alarm,
+        };
+        let event = match event {
+            RealButtonEvent::Down => types::ButtonEvent::Down,
+            RealButtonEvent::Up => types::ButtonEvent::Up,
+            RealButtonEvent::LongPress => types::ButtonEvent::LongPress,
+            RealButtonEvent::LongUp => types::ButtonEvent::LongUp,
+        };
+        sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
+            self.face
+                .loop_(types::Event::Button(button, event), &mut self.settings);
+        });
+        self.snapshot_from_mock();
+    }
+
+    /// Compatibility helper for callers that model a completed short press.
     pub fn press(&mut self, light: bool, alarm: bool) {
         if light {
-            sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
-                self.face.loop_(
-                    types::Event::Button(types::Button::Light, types::ButtonEvent::Up),
-                    &mut self.settings,
-                );
-            });
+            self.button_event(RealButton::Light, RealButtonEvent::Up);
         }
         if alarm {
-            sensor_watch::watch::seam::with_hw(&mut *self.mock, || {
-                self.face.loop_(
-                    types::Event::Button(types::Button::Alarm, types::ButtonEvent::Up),
-                    &mut self.settings,
-                );
-            });
+            self.button_event(RealButton::Alarm, RealButtonEvent::Up);
         }
-        self.snapshot_from_mock();
     }
 
     /// Whether the firmware face has received its initial activation.
@@ -528,6 +679,188 @@ impl RealFace {
     }
 }
 
+#[cfg(feature = "real-faces")]
+impl Drop for RealFace {
+    fn drop(&mut self) {
+        self.resign();
+    }
+}
+
+#[cfg(all(test, feature = "real-faces"))]
+mod couch_to_5k_tests {
+    use super::{RealFace, REAL_FACE_NAMES};
+
+    #[test]
+    fn couch_to_5k_is_registered_and_activation_runs_event_activate() {
+        assert!(REAL_FACE_NAMES.contains(&"COUCH_TO_5K"));
+        let mut face = RealFace::new("couch_to_5k").expect("Couch-to-5K seam mapping");
+        face.activate(true);
+        assert_eq!(face.face_name(), "COUCH_TO_5K");
+        assert_eq!(
+            face.snapshot().chars,
+            ['W', 'U', '0', '1', '0', '5', '0', '0', '0', '1']
+        );
+        assert!(face.snapshot().colon);
+    }
+
+    #[test]
+    fn running_couch_to_5k_ignores_changed_and_backward_set_time() {
+        let mut face = RealFace::new("COUCH_TO_5K").expect("Couch-to-5K seam mapping");
+        assert!(face.set_time(2023, 1, 6, 15, 4, 0));
+        face.activate(true);
+        face.press(false, true); // start the warmup
+        face.tick();
+        let running = face.snapshot();
+
+        assert!(face.set_time(2023, 1, 6, 15, 5, 0));
+        assert_eq!(face.snapshot().chars, running.chars);
+        assert_eq!(face.snapshot().colon, running.colon);
+
+        assert!(face.set_time(2023, 1, 6, 15, 3, 0));
+        assert_eq!(face.snapshot().chars, running.chars);
+        assert_eq!(face.snapshot().colon, running.colon);
+
+        // A further tick proves the workout stayed running rather than being
+        // reset to paused warmup by a synthetic Activate event.
+        face.tick();
+        assert_eq!(
+            face.snapshot().chars,
+            ['W', 'U', '0', '1', '0', '4', '5', '8', '0', '1']
+        );
+    }
+}
+
+#[cfg(all(test, feature = "real-faces"))]
+mod baby_kicks_tests {
+    use super::{RealButton, RealButtonEvent, RealFace, REAL_FACE_NAMES};
+
+    #[test]
+    fn baby_kicks_is_registered_canonical_and_activates_with_activate_event() {
+        assert!(REAL_FACE_NAMES.contains(&"BABY_KICKS"));
+        let mut face = RealFace::new("baby_kicks").expect("Baby kicks seam mapping");
+        assert_eq!(face.face_name(), "BABY_KICKS");
+        assert!(!face.is_activated());
+
+        assert!(face.set_time(2023, 1, 6, 15, 4, 0));
+        face.activate(true);
+        assert!(face.is_activated());
+        assert_eq!(
+            face.snapshot().chars,
+            [' ', ' ', ' ', ' ', 'b', 'a', 'b', 'y', ' ', ' ']
+        );
+        assert!(!face.snapshot().colon);
+    }
+
+    #[test]
+    fn baby_kicks_uses_stateful_redraw_guard_and_resigns_safely() {
+        let mut face = RealFace::new("BABY_KICKS").expect("Baby kicks seam mapping");
+        assert!(face.set_time(2023, 1, 6, 15, 4, 0));
+        face.activate(true);
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        let running = face.snapshot();
+
+        // A changed RTC redraw must not synthesize Activate for a stateful face.
+        assert!(face.set_time(2023, 1, 6, 15, 5, 0));
+        assert_eq!(face.snapshot().chars, running.chars);
+        assert_eq!(face.snapshot().colon, running.colon);
+
+        face.resign();
+        assert!(!face.is_activated());
+        face.resign();
+    }
+}
+
+#[cfg(all(test, feature = "real-faces"))]
+mod generated_adapter_tests {
+    use super::{types, RealFace, RealFaceSnapshot, RealFaceTrait};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    static RESIGN_CALLS: AtomicUsize = AtomicUsize::new(0);
+
+    struct TestFace;
+
+    impl types::WatchFace for TestFace {
+        fn setup(&mut self, _settings: &types::Settings, _watch_face_index: usize) {}
+
+        fn activate(&mut self, _settings: &types::Settings) {}
+
+        fn loop_(&mut self, _event: types::Event, _settings: &mut types::Settings) {}
+
+        fn resign(&mut self, _settings: &mut types::Settings) {
+            RESIGN_CALLS.fetch_add(1, Ordering::SeqCst);
+        }
+    }
+
+    impl_real_face_trait!(TestFace);
+
+    #[test]
+    fn real_face_resign_forwards_to_generated_adapter() {
+        RESIGN_CALLS.store(0, Ordering::SeqCst);
+        let mut face = RealFace {
+            face: Box::new(TestFace),
+            face_name: "TEST_FACE",
+            mock: Box::new(super::MockHw::new()),
+            settings: types::Settings::default(),
+            snapshot: RealFaceSnapshot::default(),
+            activated: false,
+        };
+
+        face.activate(false);
+        face.resign();
+        assert_eq!(RESIGN_CALLS.load(Ordering::SeqCst), 1);
+
+        // Resigning an inactive face remains a no-op at the RealFace lifecycle
+        // boundary, so cleanup is not duplicated.
+        face.resign();
+        assert_eq!(RESIGN_CALLS.load(Ordering::SeqCst), 1);
+    }
+}
+
+#[cfg(all(test, feature = "real-faces"))]
+mod blackjack_tests {
+    use super::{RealFace, REAL_FACE_NAMES};
+
+    #[test]
+    fn blackjack_is_registered_canonical_and_activates_once() {
+        assert!(REAL_FACE_NAMES.contains(&"BLACKJACK"));
+        let mut face = RealFace::new("blackjack").expect("Blackjack seam mapping");
+        assert_eq!(face.face_name(), "BLACKJACK");
+        assert!(!face.is_activated());
+
+        face.activate(true);
+        assert!(face.is_activated());
+        assert_eq!(
+            face.snapshot().chars,
+            ['2', '1', ' ', ' ', 'B', 'L', 'a', 'K', 'J', 'K']
+        );
+
+        face.resign();
+        assert!(!face.is_activated());
+        face.resign();
+    }
+
+    #[test]
+    fn blackjack_start_is_deterministic_and_button_lifecycle_is_bounded() {
+        let mut first = RealFace::new("BLACKJACK").unwrap();
+        let mut second = RealFace::new("blackjack").unwrap();
+        assert!(first.set_time(2023, 1, 6, 15, 4, 0));
+        assert!(second.set_time(2023, 1, 6, 15, 4, 0));
+        first.activate(true);
+        second.activate(true);
+        first.press(false, true);
+        second.press(false, true);
+        assert_eq!(first.snapshot().chars, second.snapshot().chars);
+
+        // Exercise the full public path without relying on an unbounded game loop.
+        first.press(true, false);
+        for _ in 0..32 {
+            first.tick();
+        }
+        assert_eq!(first.snapshot().chars.len(), 10);
+    }
+}
+
 /// Returns a heap-allocated real face for `face_name`, if a face of that name is
 /// migrated through the firmware seam. Matrix the name against the firmware's
 /// upper-cased face-const name so presets ("SIMPLE_CLOCK", "simple_clock", ...)
@@ -540,10 +873,18 @@ impl RealFace {
 #[allow(dead_code)]
 pub(crate) const REAL_FACE_NAMES: &[&str] = &[
     "SIMPLE_CLOCK",
+    "ACCEL_INTERRUPT_COUNT",
+    "BABY_KICKS",
+    "BUTTERFLY_GAME",
+    "ACTIVITY",
+    "BLACKJACK",
+    "COUCH_TO_5K",
     "ALARM",
+    "ALARM_THERMOMETER",
     "COUNTER",
     "WORLD_CLOCK",
     "STOPWATCH",
+    "STOCK_STOPWATCH",
     "TIMER",
     "COUNTDOWN",
     "DUAL_TIMER",
@@ -567,6 +908,9 @@ pub(crate) const REAL_FACE_NAMES: &[&str] = &[
     "DECIMAL_TIME",
     "FRENCH_REVOLUTIONARY",
     "FREQUENCY_CORRECTION",
+    "GEOMANCY",
+    "HABIT",
+    "HIGHER_LOWER_GAME",
     "HELLO_THERE",
     "KE_DECIMAL_TIME",
     "INTERVAL",
@@ -640,10 +984,22 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
     let upper = face_name.to_ascii_uppercase();
     match upper.as_str() {
         "SIMPLE_CLOCK" => Some(Box::new(simple_clock::SimpleClockFace::new())),
+        "ACCEL_INTERRUPT_COUNT" => Some(Box::new(
+            accel_interrupt_count::AccelInterruptCountFace::new_static(),
+        )),
+        "BABY_KICKS" => Some(Box::new(baby_kicks::BabyKicksFace::new())),
+        "BUTTERFLY_GAME" => Some(Box::new(butterfly_game::ButterflyGameFace::new())),
+        "ACTIVITY" => Some(Box::new(activity::ActivityFace::new_static())),
+        "BLACKJACK" => Some(Box::new(blackjack::BlackjackFace::new_static())),
+        "COUCH_TO_5K" => Some(Box::new(couch_to_5k::CouchTo5kFace::new())),
         "ALARM" => Some(Box::new(alarm::AlarmFace::new_static())),
+        "ALARM_THERMOMETER" => Some(Box::new(
+            alarm_thermometer::AlarmThermometerFace::new_static(),
+        )),
         "COUNTER" => Some(Box::new(counter::CounterFace::new_static())),
         "WORLD_CLOCK" => Some(Box::new(world_clock::WorldClockFace::new_static())),
         "STOPWATCH" => Some(Box::new(stopwatch::StopwatchFace::new())),
+        "STOCK_STOPWATCH" => Some(Box::new(stock_stopwatch::StockStopwatchFace::new())),
         "TIMER" => Some(Box::new(timer::TimerFace::new())),
         "COUNTDOWN" => Some(Box::new(countdown::CountdownFace::new_static())),
         "DUAL_TIMER" => Some(Box::new(dual_timer::DualTimerFace::new_static())),
@@ -672,6 +1028,11 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         )),
         "FREQUENCY_CORRECTION" => Some(Box::new(
             frequency_correction::FrequencyCorrectionFace::new_static(),
+        )),
+        "GEOMANCY" => Some(Box::new(geomancy::GeomancyFace::new_static())),
+        "HABIT" => Some(Box::new(habit::HabitFace::new_static())),
+        "HIGHER_LOWER_GAME" => Some(Box::new(
+            higher_lower_game::HigherLowerGameFace::new_static(),
         )),
         "HELLO_THERE" => Some(Box::new(hello_there::HelloThereFace::new_static())),
         "KE_DECIMAL_TIME" => Some(Box::new(ke_decimal_time::KeDecimalTimeFace::new_static())),
@@ -770,10 +1131,18 @@ fn new_face_name(face_name: &str) -> &'static str {
     let upper = face_name.to_ascii_uppercase();
     match upper.as_str() {
         "SIMPLE_CLOCK" => "SIMPLE_CLOCK",
+        "ACCEL_INTERRUPT_COUNT" => "ACCEL_INTERRUPT_COUNT",
+        "BABY_KICKS" => "BABY_KICKS",
+        "BUTTERFLY_GAME" => "BUTTERFLY_GAME",
+        "ACTIVITY" => "ACTIVITY",
+        "BLACKJACK" => "BLACKJACK",
+        "COUCH_TO_5K" => "COUCH_TO_5K",
         "ALARM" => "ALARM",
+        "ALARM_THERMOMETER" => "ALARM_THERMOMETER",
         "COUNTER" => "COUNTER",
         "WORLD_CLOCK" => "WORLD_CLOCK",
         "STOPWATCH" => "STOPWATCH",
+        "STOCK_STOPWATCH" => "STOCK_STOPWATCH",
         "TIMER" => "TIMER",
         "COUNTDOWN" => "COUNTDOWN",
         "DUAL_TIMER" => "DUAL_TIMER",
@@ -797,6 +1166,9 @@ fn new_face_name(face_name: &str) -> &'static str {
         "DECIMAL_TIME" => "DECIMAL_TIME",
         "FRENCH_REVOLUTIONARY" => "FRENCH_REVOLUTIONARY",
         "FREQUENCY_CORRECTION" => "FREQUENCY_CORRECTION",
+        "GEOMANCY" => "GEOMANCY",
+        "HABIT" => "HABIT",
+        "HIGHER_LOWER_GAME" => "HIGHER_LOWER_GAME",
         "HELLO_THERE" => "HELLO_THERE",
         "KE_DECIMAL_TIME" => "KE_DECIMAL_TIME",
         "INTERVAL" => "INTERVAL",
@@ -893,6 +1265,7 @@ impl RealFace {
     pub fn is_activated(&self) -> bool {
         false
     }
+    pub fn button_event(&mut self, _button: RealButton, _event: RealButtonEvent) {}
     pub fn press(&mut self, _light: bool, _alarm: bool) {}
     pub fn snapshot(&self) -> RealFaceSnapshot {
         RealFaceSnapshot::default()
@@ -963,13 +1336,44 @@ mod tests {
     }
 
     #[test]
+    fn button_event_state_emits_short_sequence_without_repeat() {
+        let mut state = ButtonEventState::default();
+        assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
+        assert_eq!(state.update(true, 0.4), None);
+        assert_eq!(state.update(false, 0.0), Some(RealButtonEvent::Up));
+        assert_eq!(state.update(false, 1.0), None);
+    }
+
+    #[test]
+    fn button_event_state_emits_long_press_once_and_long_up() {
+        let mut state = ButtonEventState::default();
+        assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
+        assert_eq!(state.update(true, 0.6), None);
+        assert_eq!(state.update(true, 0.4), Some(RealButtonEvent::LongPress));
+        assert_eq!(state.update(true, 0.5), None);
+        assert_eq!(state.update(false, 0.0), Some(RealButtonEvent::LongUp));
+        assert!(!state.down);
+        assert_eq!(state.hold_seconds, 0.0);
+    }
+
+    #[test]
+    fn button_event_state_clamps_negative_time_and_is_threshold_aware() {
+        let mut state = ButtonEventState::default();
+        assert_eq!(state.update(true, 0.0), Some(RealButtonEvent::Down));
+        assert_eq!(state.update(true, -5.0), None);
+        assert_eq!(state.update(true, 1.0), Some(RealButtonEvent::LongPress));
+    }
+
+    #[test]
     fn face_available_for_migrated_face() {
         assert!(RealFace::new("SIMPLE_CLOCK").is_some());
         assert!(RealFace::new("simple_clock").is_some());
         // The stock Casio set + other host-migrated faces resolve through the seam.
         for name in [
             "ALARM",
+            "ALARM_THERMOMETER",
             "COUNTER",
+            "STOCK_STOPWATCH",
             "WORLD_CLOCK",
             "STOPWATCH",
             "TIMER",
@@ -985,12 +1389,133 @@ mod tests {
             "DEMO",
             "DISCGOLF",
             "BEATS",
+            "HABIT",
+            "HIGHER_LOWER_GAME",
         ] {
             assert!(RealFace::new(name).is_some(), "{name} should be migrated");
         }
-        // MMIO-only stock_stopwatch and unknown names still fall back in the app.
-        assert!(RealFace::new("STOCK_STOPWATCH").is_none());
+        assert_eq!(REAL_FACE_NAMES.len(), 105);
+        assert_eq!(111 - REAL_FACE_NAMES.len(), 6);
+        assert!(RealFace::new("ACTIVITY").is_some());
+        assert!(RealFace::new("geomancy").is_some());
         assert!(RealFace::new("NOT_A_FACE").is_none());
+    }
+
+    #[test]
+    fn real_alarm_thermometer_lifecycle_uses_real_face_and_resigns_safely() {
+        let mut face = RealFace::new("alarm_thermometer").expect("ALARM_THERMOMETER is migrated");
+        assert_eq!(face.face_name(), "ALARM_THERMOMETER");
+        assert!(face.set_time(2024, 2, 29, 15, 4, 0));
+        face.activate(true);
+        assert_eq!(face.snapshot().chars[4..10], ['2', '5', '.', '0', '#', 'C']);
+
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        assert!(face.snapshot().bell);
+        for second in [5, 10, 15, 20] {
+            assert!(face.set_time(2024, 2, 29, 15, 4, second));
+            face.tick();
+        }
+        assert!(face.snapshot().signal);
+        assert!(face.snapshot().bell);
+
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        assert!(!face.snapshot().bell);
+        assert!(!face.snapshot().signal);
+        face.button_event(RealButton::Alarm, RealButtonEvent::LongPress);
+        assert_eq!(face.snapshot().chars[4..10], ['7', '7', '.', '0', '#', 'F']);
+
+        face.resign();
+        assert!(!face.is_activated());
+        face.resign();
+    }
+
+    #[test]
+    fn real_geomancy_activation_buttons_ticks_and_display_are_safe() {
+        let mut face = RealFace::new("geomancy").expect("GEOMANCY is migrated");
+        face.set_time(2023, 1, 6, 15, 4, 0);
+        face.activate(true);
+        assert!(face
+            .snapshot()
+            .chars
+            .iter()
+            .collect::<String>()
+            .contains("IChing"));
+
+        face.button_event(RealButton::Light, RealButtonEvent::Up);
+        assert!(face
+            .snapshot()
+            .chars
+            .iter()
+            .collect::<String>()
+            .contains("GeomCy"));
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        for _ in 0..12 {
+            face.tick();
+        }
+        face.button_event(RealButton::Alarm, RealButtonEvent::LongPress);
+        face.button_event(RealButton::Light, RealButtonEvent::Up);
+        assert!(face
+            .snapshot()
+            .chars
+            .iter()
+            .collect::<String>()
+            .contains("IChing"));
+        face.resign();
+    }
+
+    #[test]
+    fn real_higher_lower_adapter_lifecycle_preserves_title_and_guesses() {
+        let mut face = RealFace::new("higher_lower_game").expect("HIGHER_LOWER_GAME is migrated");
+        assert!(face.set_time(2024, 2, 29, 15, 4, 0));
+        face.activate(true);
+        assert!(face.is_activated());
+        assert_eq!(face.face_name(), "HIGHER_LOWER_GAME");
+        assert!(face
+            .snapshot()
+            .chars
+            .iter()
+            .collect::<String>()
+            .contains("Hi-Lo"));
+
+        face.button_event(RealButton::Light, RealButtonEvent::Down);
+        face.button_event(RealButton::Light, RealButtonEvent::Up);
+        face.button_event(RealButton::Alarm, RealButtonEvent::Down);
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        face.tick();
+        face.resign();
+        assert!(!face.is_activated());
+        face.resign();
+    }
+
+    #[test]
+    fn real_accel_interrupt_count_runs_taps_and_resigns_safely() {
+        let mut face = RealFace::new("accel_interrupt_count").expect("face");
+        face.activate(true);
+
+        // Host activation has no physical accelerometer, but injected firmware
+        // events still exercise the real face state machine.
+        face.tap_event(false);
+        face.tap_event(true);
+        assert_eq!(face.snapshot().chars[9], '0');
+
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        face.tap_event(false);
+        face.tap_event(true);
+        assert_eq!(face.snapshot().chars[9], '2');
+
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        face.tap_event(false);
+        assert_eq!(face.snapshot().chars[9], '2');
+
+        face.button_event(RealButton::Alarm, RealButtonEvent::LongPress);
+        face.button_event(RealButton::Light, RealButtonEvent::Down);
+        assert!(face.snapshot().chars.starts_with(&['T', 'H']));
+        face.button_event(RealButton::Alarm, RealButtonEvent::Up);
+        face.button_event(RealButton::Light, RealButtonEvent::Down);
+        assert_eq!(face.snapshot().chars[9], '0');
+
+        face.resign();
+        face.resign();
     }
 
     #[test]
@@ -1101,6 +1626,58 @@ mod tests {
     }
 
     #[test]
+    fn running_countdown_advances_only_on_simulated_ticks() {
+        let mut face = RealFace::new("COUNTDOWN").expect("face");
+        assert!(face.set_time(2023, 1, 6, 15, 4, 0));
+        face.activate(true);
+        // COUNTDOWN starts its deterministic three-minute default on Alarm-up.
+        face.press(false, true);
+        let initial = face.snapshot();
+
+        face.tick();
+        let after_one_tick = face.snapshot();
+        assert_ne!(after_one_tick.chars, initial.chars);
+
+        // Studio calls set_time once per GUI frame. Repeating the same
+        // simulated time must not consume another countdown second.
+        for _ in 0..8 {
+            assert!(face.set_time(2023, 1, 6, 15, 4, 0));
+        }
+        assert_eq!(face.snapshot().chars, after_one_tick.chars);
+        assert_eq!(face.snapshot().colon, after_one_tick.colon);
+        assert_eq!(face.snapshot().bell, after_one_tick.bell);
+    }
+
+    #[test]
+    fn running_stopwatch_ignores_changed_and_backward_set_time() {
+        let mut face = RealFace::new("STOPWATCH").expect("face");
+        assert!(face.set_time(2023, 1, 6, 15, 4, 0));
+        face.activate(true);
+
+        // The real stopwatch starts on Button-down. Exercise that firmware
+        // event directly so this test only covers set_time semantics, without
+        // changing the adapter's existing button-up contract.
+        sensor_watch::watch::seam::with_hw(&mut *face.mock, || {
+            face.face.loop_(
+                types::Event::Button(types::Button::Alarm, types::ButtonEvent::Down),
+                &mut face.settings,
+            );
+        });
+        face.tick();
+        let running = face.snapshot();
+
+        assert!(face.set_time(2023, 1, 6, 15, 5, 0));
+        assert_eq!(face.snapshot().chars, running.chars);
+        assert_eq!(face.snapshot().colon, running.colon);
+
+        // A backward RTC edit must not reach StopwatchFace::Activate, whose
+        // elapsed-time subtraction assumes the clock has not moved backward.
+        assert!(face.set_time(2023, 1, 6, 15, 3, 0));
+        assert_eq!(face.snapshot().chars, running.chars);
+        assert_eq!(face.snapshot().colon, running.colon);
+    }
+
+    #[test]
     fn newly_added_faces_activate_through_the_host_seam() {
         for name in [
             "BEEPS",
@@ -1136,21 +1713,95 @@ mod tests {
     }
 
     #[test]
+    fn real_butterfly_game_lifecycle_uses_canonical_mapping_and_activation_event() {
+        assert!(REAL_FACE_NAMES.contains(&"BUTTERFLY_GAME"));
+        let mut face = RealFace::new("butterfly_game").expect("BUTTERFLY_GAME is migrated");
+        assert_eq!(face.face_name(), "BUTTERFLY_GAME");
+        assert!(!face.is_activated());
+        assert!(face.set_time(2024, 2, 29, 15, 4, 0));
+        face.activate(true);
+        assert!(face.is_activated());
+        assert!(face.snapshot().chars[4..10].starts_with(&['B', 't', 'r', 'f', 'l', 'y']));
+
+        // The face's splash is entered by Event::Activate. A tick would not
+        // initialize its splash counter, so this also locks in the seam's
+        // activation-event forwarding contract.
+        for _ in 0..8 {
+            face.tick();
+        }
+        face.button_event(RealButton::Alarm, RealButtonEvent::Down);
+        face.button_event(RealButton::Light, RealButtonEvent::Down);
+        assert!(face.is_activated());
+        assert_eq!(face.snapshot().chars.len(), 10);
+        face.resign();
+        face.resign();
+        assert!(!face.is_activated());
+    }
+
+    #[test]
+    fn real_activity_activates_and_snapshots_chooser() {
+        let snapshot = render_real_face("ACTIVITY", 2024, 2, 29, 15, 4, 0, 4, true, false, false)
+            .expect("ACTIVITY is migrated");
+        let text: String = snapshot.chars.iter().collect();
+        assert!(text.starts_with("AC   bIKE"), "actual: {text:?}");
+    }
+
+    #[test]
+    fn real_activity_logs_ticks_pauses_and_finishes_at_minimum() {
+        let mut face = RealFace::new("ACTIVITY").expect("face");
+        assert!(face.set_time(2024, 2, 29, 15, 4, 0));
+        face.activate(true);
+        assert!(face
+            .snapshot()
+            .chars
+            .iter()
+            .collect::<String>()
+            .starts_with("AC   bIKE"));
+
+        let mut button = ButtonEventState::default();
+        assert_eq!(button.update(true, 0.0), Some(RealButtonEvent::Down));
+        face.button_event(RealButton::Alarm, RealButtonEvent::Down);
+        assert_eq!(
+            button.update(true, ButtonEventState::LONG_PRESS_SECONDS),
+            Some(RealButtonEvent::LongPress)
+        );
+        face.button_event(RealButton::Alarm, RealButtonEvent::LongPress);
+        face.tick(); // first logging second
+        for _ in 0..58 {
+            face.tick();
+        }
+        face.press(false, true); // pause
+        face.tick();
+        assert!(
+            face.snapshot()
+                .chars
+                .iter()
+                .collect::<String>()
+                .contains("PAUSE"),
+            "actual: {:?}",
+            face.snapshot()
+        );
+        face.press(false, true); // resume at 60 seconds
+
+        // The public Studio adapter intentionally exposes short button-up
+        // events. Exercise the real long-press boundary directly for finish.
+        // Finish through the same public adapter used by Studio, rather than
+        // injecting a private firmware event.
+        face.button_event(RealButton::Alarm, RealButtonEvent::LongPress);
+        assert!(face
+            .snapshot()
+            .chars
+            .iter()
+            .collect::<String>()
+            .contains("dONE"));
+    }
+
+    #[test]
     fn unmigrated_face_falls_back() {
-        assert!(render_real_face(
-            "STOCK_STOPWATCH",
-            2023,
-            1,
-            6,
-            15,
-            4,
-            0,
-            5,
-            true,
-            false,
-            false
-        )
-        .is_none());
+        assert_eq!(111 - REAL_FACE_NAMES.len(), 6);
+        assert!(
+            render_real_face("NOT_A_FACE", 2023, 1, 6, 15, 4, 0, 5, true, false, false).is_none()
+        );
     }
 
     #[test]

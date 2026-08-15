@@ -12,7 +12,7 @@ use super::modules::ModuleManager;
 use super::ntp;
 use super::presets::PresetManager;
 use super::theme::Theme;
-use super::watch_config::WatchConfig;
+use super::watch_config::{WatchConfig, TIMEZONE_OFFSETS};
 
 /// Preferred number of rows for the top-level tab bar.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -254,16 +254,18 @@ impl AppSettings {
         }
         for (name, host) in &self.ntp_servers {
             if name.len() > MAX_SETTINGS_TEXT_BYTES
-                || host.len() > MAX_SETTINGS_TEXT_BYTES
                 || name.chars().any(|c| c.is_control())
-                || host.chars().any(|c| c.is_control())
-                || host.trim().is_empty()
+                || !valid_ntp_host(host)
             {
                 return Err("custom NTP server contains invalid or excessive text".into());
             }
         }
         if !self.sim_scale.is_finite() || !(0.5..=2.0).contains(&self.sim_scale) {
             return Err("simulator scale must be finite and between 0.5 and 2.0".into());
+        }
+        self.watch_config.validate()?;
+        if self.watch_config.time_zone as usize >= TIMEZONE_OFFSETS.len() {
+            return Err("time zone is out of range".into());
         }
         if !self.catalog_width.is_finite()
             || !(0.0..=10_000.0).contains(&self.catalog_width)
@@ -280,20 +282,6 @@ impl AppSettings {
         }
         if self.output_dir.chars().any(|c| c.is_control()) {
             return Err("output directory cannot contain control characters".into());
-        }
-        for (name, host) in &self.ntp_servers {
-            if name.is_empty()
-                || host.is_empty()
-                || name.len() > 256
-                || host.len() > 256
-                || name.chars().any(|c| c.is_control())
-                || host.chars().any(|c| c.is_control())
-            {
-                return Err(
-                    "custom NTP server names and hosts must be non-empty, bounded, and printable"
-                        .into(),
-                );
-            }
         }
         if self.ntp_server >= sensor_watch_studio_ntp_server_count(&self.ntp_servers) {
             return Err("selected NTP server is out of range".into());
@@ -395,6 +383,24 @@ fn sensor_watch_studio_ntp_server_count(custom: &[(String, String)]) -> usize {
     super::ntp::SERVERS.len() + custom.len()
 }
 
+fn valid_ntp_host(host: &str) -> bool {
+    let trimmed = host.trim();
+    if trimmed.is_empty()
+        || trimmed.len() > MAX_SETTINGS_TEXT_BYTES
+        || trimmed != host
+        || trimmed.chars().any(|c| c.is_control() || c.is_whitespace())
+    {
+        return false;
+    }
+    // `query_ntp` appends the NTP port. Permit bracketed IPv6 literals, but
+    // reject embedded ports/colon syntax that would create an invalid address.
+    if trimmed.contains(':') {
+        trimmed.starts_with('[') && trimmed.ends_with(']')
+    } else {
+        true
+    }
+}
+
 pub fn default_tick_verbosity() -> String {
     "hide".to_string()
 }
@@ -443,5 +449,95 @@ mod tests {
         };
 
         assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_ntp_hosts_with_ports_or_whitespace() {
+        let mut settings = AppSettings::default();
+        settings.ntp_servers = vec![("bad".into(), "pool.ntp.org:9999".into())];
+        assert!(settings.validate().is_err());
+
+        settings.ntp_servers = vec![("bad".into(), " pool.ntp.org".into())];
+        assert!(settings.validate().is_err());
+
+        settings.ntp_servers = vec![("ipv6".into(), "[::1]".into())];
+        assert!(settings.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_non_finite_calibration_values() {
+        let mut settings = AppSettings::default();
+        settings.rtc_calibration.version = sensor_watch_core::rtc_calibration::CALIBRATION_VERSION;
+        settings.rtc_calibration.base_ppm = f32::NAN;
+        assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_invalid_timezone_index_from_json() {
+        let mut settings = AppSettings::default();
+        settings.watch_config.time_zone = 41;
+
+        assert!(settings.validate().is_err());
+        let json = settings.to_json().unwrap();
+        assert!(AppSettings::from_json(&json).is_err());
+    }
+
+    #[test]
+    fn accepts_last_valid_timezone_index_from_json() {
+        let mut settings = AppSettings::default();
+        settings.watch_config.time_zone = 40;
+
+        let json = settings.to_json().unwrap();
+        let imported = AppSettings::from_json(&json).unwrap();
+        assert_eq!(imported.watch_config.time_zone, 40);
+    }
+
+    #[test]
+    fn rejects_out_of_range_packed_watch_config_fields_from_json() {
+        let fields = [
+            ("to_interval", 4),
+            ("le_interval", 8),
+            ("led_duration", 8),
+            ("led_red_color", 16),
+            ("led_green_color", 16),
+            ("buzzer_type", 4),
+        ];
+
+        for (field, value) in fields {
+            let mut settings = AppSettings::default();
+            match field {
+                "to_interval" => settings.watch_config.to_interval = value,
+                "le_interval" => settings.watch_config.le_interval = value,
+                "led_duration" => settings.watch_config.led_duration = value,
+                "led_red_color" => settings.watch_config.led_red_color = value,
+                "led_green_color" => settings.watch_config.led_green_color = value,
+                "buzzer_type" => settings.watch_config.buzzer_type = value,
+                _ => unreachable!(),
+            }
+
+            let json = settings.to_json().unwrap();
+            let error = AppSettings::from_json(&json).unwrap_err();
+            assert!(error.contains(field), "{field}={value}: {error}");
+        }
+    }
+
+    #[test]
+    fn accepts_packed_watch_config_boundaries_from_json() {
+        let mut settings = AppSettings::default();
+        settings.watch_config.to_interval = 3;
+        settings.watch_config.le_interval = 7;
+        settings.watch_config.led_duration = 7;
+        settings.watch_config.led_red_color = 15;
+        settings.watch_config.led_green_color = 15;
+        settings.watch_config.buzzer_type = 3;
+
+        let json = settings.to_json().unwrap();
+        let imported = AppSettings::from_json(&json).unwrap();
+        assert_eq!(imported.watch_config.to_interval, 3);
+        assert_eq!(imported.watch_config.le_interval, 7);
+        assert_eq!(imported.watch_config.led_duration, 7);
+        assert_eq!(imported.watch_config.led_red_color, 15);
+        assert_eq!(imported.watch_config.led_green_color, 15);
+        assert_eq!(imported.watch_config.buzzer_type, 3);
     }
 }

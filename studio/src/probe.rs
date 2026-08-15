@@ -209,11 +209,8 @@ pub fn run(
             match serial.command(command) {
                 Ok(reply) => {
                     report.log(format!("< {reply}"));
-                    report.add(
-                        format!("UART read-only command: {command}"),
-                        TestStatus::Pass,
-                        "reply received; no mutation command sent",
-                    );
+                    let (status, reason) = classify_command_reply(command, &reply);
+                    report.add(format!("UART read-only command: {command}"), status, reason);
                 }
                 Err(error) => {
                     report.log(format!("UART error for {command}: {error}"));
@@ -229,7 +226,17 @@ pub fn run(
     report
 }
 
-fn is_watch_info(info: &str) -> bool {
+fn classify_command_reply(command: &str, reply: &str) -> (TestStatus, &'static str) {
+    if command == "optical" && reply.trim() == "?" {
+        return (
+            TestStatus::NotAvailable,
+            "optical capability is not available on this firmware",
+        );
+    }
+    (TestStatus::Pass, "reply received; no mutation command sent")
+}
+
+pub(crate) fn is_watch_info(info: &str) -> bool {
     let upper = info.to_ascii_uppercase();
     upper.contains("UF2")
         && (upper.contains("SENSOR") || upper.contains("SAML22") || upper.contains("2C29472F"))
@@ -297,11 +304,45 @@ impl fmt::Display for TestStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
+    use std::time::Duration;
+
+    #[test]
+    fn unsupported_optical_response_is_not_available() {
+        let mut response = Cursor::new(b"?\r\n");
+        let reply = crate::transport::read_frame(&mut response, Duration::from_millis(20))
+            .expect("the unsupported response should be a valid frame");
+
+        assert_eq!(
+            classify_command_reply("optical", &reply),
+            (
+                TestStatus::NotAvailable,
+                "optical capability is not available on this firmware"
+            )
+        );
+    }
+
+    #[test]
+    fn unrelated_command_replies_remain_pass() {
+        assert_eq!(
+            classify_command_reply("time", "?"),
+            (TestStatus::Pass, "reply received; no mutation command sent")
+        );
+        assert_eq!(
+            classify_command_reply("optical", "OPTICAL disabled"),
+            (TestStatus::Pass, "reply received; no mutation command sent")
+        );
+    }
+
     #[test]
     fn watch_info_requires_uf2_and_known_identity() {
         assert!(is_watch_info(
             "UF2 Bootloader; Board-ID: Sensor Watch SAML22"
         ));
+        assert!(is_watch_info("UF2 Bootloader; Board-ID: Sensor Watch"));
+        assert!(is_watch_info("UF2 Bootloader; Family ID: 0x2C29472F"));
+        assert!(!is_watch_info("UF2 Bootloader; Board-ID: Generic UF2"));
         assert!(!is_watch_info("UF2 Bootloader; Board-ID: Other"));
+        assert!(!is_watch_info("UF2 Bootloader; Board-ID: Arduino Zero"));
     }
 }

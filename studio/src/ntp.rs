@@ -61,11 +61,20 @@ pub struct NtpResult {
 }
 
 /// Build a 48-byte NTP request packet (version 4, client mode).
-fn build_request_packet() -> [u8; 48] {
+fn build_request_packet(transmit_time: f64) -> [u8; 48] {
     let mut packet = [0u8; 48];
     // LI=0 (2 bits), VN=4 (3 bits), Mode=3 (3 bits) => 0b001_000_11 = 0x23
     packet[0] = 0x23;
+    write_ntp_timestamp(&mut packet[40..48], transmit_time);
     packet
+}
+
+fn write_ntp_timestamp(out: &mut [u8], timestamp: f64) {
+    let seconds = timestamp.floor().max(0.0) as u64;
+    let fraction =
+        ((timestamp.fract().clamp(0.0, 1.0) * (1u64 << 32) as f64) as u64).min(u32::MAX as u64);
+    out[..4].copy_from_slice(&(seconds as u32).to_be_bytes());
+    out[4..].copy_from_slice(&(fraction as u32).to_be_bytes());
 }
 
 /// Parse a 64-bit NTP timestamp (seconds + fraction) at a given byte offset.
@@ -97,12 +106,16 @@ fn ntp_to_unix_fractional(ntp: f64) -> f64 {
 
 fn validate_response_header(packet: &[u8]) -> Result<(), String> {
     // LI=3 means the server is unsynchronized. Stratum 0 is reserved for a
-    // Kiss-o'-Death response, neither of which is a usable time source.
+    // Kiss-o'-Death response, and strata above 15 are invalid.
     if (packet[0] >> 6) == 3 {
         return Err("NTP server is unsynchronized".to_string());
     }
-    if packet[1] == 0 {
-        return Err("NTP server returned a stratum-0 response".to_string());
+    if !(1..=15).contains(&packet[1]) {
+        return Err("NTP server returned an invalid stratum".to_string());
+    }
+    let version = (packet[0] >> 3) & 0x07;
+    if !(3..=4).contains(&version) {
+        return Err("Invalid NTP reply version".to_string());
     }
     if (packet[0] & 0x07) != 4 {
         return Err("Invalid NTP reply mode (expected server mode)".to_string());
@@ -133,7 +146,6 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
         .map_err(|e| e.to_string())?;
 
     let address = format!("{server}:{NTP_PORT}");
-    let request = build_request_packet();
     socket
         .connect(address.as_str())
         .map_err(|e| e.to_string())?;
@@ -142,6 +154,7 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
     // and the ping measurement cover only the actual send/receive exchange.
     let mut buf = [0u8; 1024];
     let t1 = local_to_ntp_seconds();
+    let request = build_request_packet(t1);
     let start = Instant::now();
     socket.send(&request).map_err(|e| e.to_string())?;
     let len = socket.recv(&mut buf).map_err(|e| e.to_string())?;
@@ -152,6 +165,16 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
         return Err(format!("Short NTP response: {len} bytes"));
     }
     validate_response_header(&buf[..48])?;
+    // A response must refer to this request. Without this check, a delayed or
+    // unrelated UDP packet can become the clock reference.
+    let (origin_seconds, origin_fraction) = parse_ntp_timestamp(&buf[..48], 24);
+    let mut expected_origin = [0u8; 8];
+    write_ntp_timestamp(&mut expected_origin, t1);
+    if origin_seconds != u32::from_be_bytes(expected_origin[..4].try_into().unwrap()) as u64
+        || origin_fraction != u32::from_be_bytes(expected_origin[4..].try_into().unwrap())
+    {
+        return Err("NTP response did not match the request".to_string());
+    }
 
     // T2 = receive timestamp (bytes 32..40), T3 = transmit (bytes 40..48).
     let (r1, r2) = parse_ntp_timestamp(&buf[..48], 32);
@@ -184,7 +207,11 @@ pub fn query_ntp(server: &str) -> Result<NtpResult, String> {
     // Offset = ((T2 - T1) + (T3 - T4)) / 2 (all in NTP seconds since 1900).
     let offset_secs = ((t2 - t1) + (t3 - t4)) / 2.0;
 
-    let unix_seconds = ntp_to_unix_fractional(t3) as u64;
+    let unix_time = ntp_to_unix_fractional(t3);
+    if !unix_time.is_finite() || unix_time < 0.0 {
+        return Err("NTP server returned an invalid Unix timestamp".to_string());
+    }
+    let unix_seconds = unix_time.floor() as u64;
     Ok(NtpResult {
         unix_seconds,
         ping_ms,
@@ -227,11 +254,36 @@ mod tests {
     #[test]
     fn rejects_kiss_of_death_stratum_zero_replies() {
         let mut packet = [0u8; 48];
-        packet[0] = 0x24; // LI=0, server mode
+        packet[0] = 0x24; // LI=0, version 4, server mode
 
         assert_eq!(
             validate_response_header(&packet),
-            Err("NTP server returned a stratum-0 response".to_string())
+            Err("NTP server returned an invalid stratum".to_string())
         );
+    }
+
+    #[test]
+    fn rejects_invalid_versions_and_strata() {
+        let mut packet = [0u8; 48];
+        packet[0] = 0x04; // version 0, server mode
+        packet[1] = 1;
+        assert_eq!(
+            validate_response_header(&packet),
+            Err("Invalid NTP reply version".to_string())
+        );
+
+        packet[0] = 0x24; // version 4, server mode
+        packet[1] = 16;
+        assert_eq!(
+            validate_response_header(&packet),
+            Err("NTP server returned an invalid stratum".to_string())
+        );
+    }
+
+    #[test]
+    fn request_carries_a_matching_transmit_timestamp() {
+        let packet = build_request_packet(2_208_988_800.25);
+        assert_eq!(&packet[40..44], &2_208_988_800u32.to_be_bytes());
+        assert_eq!(&packet[44..48], &1_073_741_824u32.to_be_bytes());
     }
 }

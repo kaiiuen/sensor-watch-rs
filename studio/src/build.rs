@@ -9,7 +9,7 @@
 //! publishing a stock artifact that could be mistaken for a configured one.
 
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -127,6 +127,43 @@ pub struct BuildResult {
     pub success: bool,
     pub message: String,
     pub uf2_path: Option<PathBuf>,
+}
+
+/// Metadata produced by the shared local UF2/manifest verification path.
+///
+/// The digest fields prove only that this artifact and its sidecars are locally
+/// consistent. They do not establish cryptographic authenticity or provenance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArtifactInspection {
+    pub path: PathBuf,
+    pub generation: String,
+    pub family_id: String,
+    pub uf2_bytes: String,
+    pub uf2_blocks: String,
+    pub payload_bytes: String,
+    pub sha256: String,
+    pub payload_sha256: String,
+    pub manifest_digest: String,
+}
+
+/// Inspects an explicitly selected UF2 and requires both manifest sidecars.
+/// Passing the manifest path explicitly makes a missing `.uf2.json` fail closed;
+/// the shared verifier then requires the matching `.json.sig` sidecar as well.
+pub fn inspect_artifact(path: &Path) -> Result<ArtifactInspection, String> {
+    let manifest_path = path.with_extension("uf2.json");
+    let manifest = sensor_watch_tools::verify_uf2(path, Some(&manifest_path), None)?;
+    let value = |key: &str| sensor_watch_tools::manifest_value(&manifest, key);
+    Ok(ArtifactInspection {
+        path: path.to_path_buf(),
+        generation: value("generation_id"),
+        family_id: value("family_id"),
+        uf2_bytes: value("uf2_bytes"),
+        uf2_blocks: value("uf2_blocks"),
+        payload_bytes: value("payload_bytes"),
+        sha256: value("sha256"),
+        payload_sha256: value("payload_sha256"),
+        manifest_digest: sensor_watch_tools::manifest_value(&manifest, "manifest_digest"),
+    })
 }
 
 /// The build inputs that must be defined before Studio can publish a configured
@@ -315,179 +352,246 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
         };
     }
 
-    // Stage beside the destination, then replace it only after validation. Keep
-    // a backup while replacing so a failed Windows rename can be rolled back.
-    let tmp = uf2.with_extension("uf2.tmp");
-    for path in [&uf2, &tmp] {
-        if std::fs::symlink_metadata(path)
-            .map(|metadata| metadata.file_type().is_symlink())
-            .unwrap_or(false)
-        {
-            return BuildResult {
-                success: false,
-                message: format!("refusing symlinked build output: {}", path.display()),
-                uf2_path: None,
-            };
-        }
-    }
-    if let Err(e) = std::fs::remove_file(&tmp) {
-        if e.kind() != std::io::ErrorKind::NotFound {
-            return BuildResult {
-                success: false,
-                message: format!("failed to remove stale UF2 temp file: {e}"),
-                uf2_path: None,
-            };
-        }
-    }
-    let write_temp = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&tmp)
-        .and_then(|mut file| {
-            use std::io::Write;
-            file.write_all(&uf2_data)
-        });
-    if let Err(e) = write_temp {
-        return BuildResult {
+    match publish_uf2(output_dir, &uf2, &uf2_data) {
+        Ok(()) => BuildResult {
+            success: true,
+            message: format!(
+                "Built {} bytes of firmware -> {} bytes of UF2",
+                image.len(),
+                uf2_data.len()
+            ),
+            uf2_path: Some(uf2),
+        },
+        Err(message) => BuildResult {
             success: false,
-            message: format!("failed to write UF2 temp file: {e}"),
+            message,
             uf2_path: None,
-        };
+        },
     }
-    let staged = match std::fs::read(&tmp) {
-        Ok(data) => data,
-        Err(e) => {
-            let _ = std::fs::remove_file(&tmp);
-            return BuildResult {
-                success: false,
-                message: format!("failed to read staged UF2: {e}"),
-                uf2_path: None,
-            };
-        }
-    };
+}
+
+fn publish_uf2(output_dir: &Path, uf2: &Path, uf2_data: &[u8]) -> Result<(), String> {
+    publish_uf2_with_manifest_writer(output_dir, uf2, uf2_data, |path, data, generation| {
+        write_manifest(path, data, generation)
+    })
+}
+
+fn publish_uf2_with_manifest_writer<F>(
+    output_dir: &Path,
+    uf2: &Path,
+    uf2_data: &[u8],
+    write_current_manifest: F,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &[u8], &str) -> std::io::Result<()>,
+{
+    publish_uf2_with_cleanup_writer(output_dir, uf2, uf2_data, write_current_manifest, |path| {
+        std::fs::remove_file(path)
+    })
+}
+
+fn publish_uf2_with_cleanup_writer<F, C>(
+    output_dir: &Path,
+    uf2: &Path,
+    uf2_data: &[u8],
+    write_current_manifest: F,
+    remove_recovery_file: C,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &[u8], &str) -> std::io::Result<()>,
+    C: FnMut(&Path) -> std::io::Result<()>,
+{
+    publish_uf2_with_writers(
+        output_dir,
+        uf2,
+        uf2_data,
+        write_current_manifest,
+        remove_recovery_file,
+        |from, to| std::fs::rename(from, to),
+    )
+}
+
+fn publish_uf2_with_writers<F, C, R>(
+    output_dir: &Path,
+    uf2: &Path,
+    uf2_data: &[u8],
+    mut write_current_manifest: F,
+    mut remove_recovery_file: C,
+    mut rename_file: R,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &[u8], &str) -> std::io::Result<()>,
+    C: FnMut(&Path) -> std::io::Result<()>,
+    R: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    let tmp = uf2.with_extension("uf2.tmp");
+    let backup = uf2.with_extension("uf2.previous");
+    let current_manifest = uf2.with_extension("uf2.json");
+    let current_signature = current_manifest.with_extension("json.sig");
+    let backup_manifest = backup.with_extension("previous.json");
+    let backup_signature = backup_manifest.with_extension("json.sig");
+
+    for path in [
+        uf2,
+        tmp.as_path(),
+        backup.as_path(),
+        current_manifest.as_path(),
+        current_signature.as_path(),
+        backup_manifest.as_path(),
+        backup_signature.as_path(),
+    ] {
+        ensure_regular_or_absent(path)?;
+    }
+    // A previous sentinel is durable recovery state, not a replaceable cache.
+    // Refuse before removing or renaming anything when it already exists.
+    if backup.exists() || backup_manifest.exists() || backup_signature.exists() {
+        return Err(format!(
+            "refusing to overwrite existing recovery sentinel: {}",
+            backup.display()
+        ));
+    }
+    let _ = std::fs::remove_file(&tmp);
+    std::fs::write(&tmp, uf2_data).map_err(|e| format!("failed to write UF2 temp file: {e}"))?;
+    let staged = std::fs::read(&tmp).map_err(|e| {
+        let _ = std::fs::remove_file(&tmp);
+        format!("failed to read staged UF2: {e}")
+    })?;
     if staged != uf2_data || sensor_watch_core::uf2::validate(&staged).is_err() {
         let _ = std::fs::remove_file(&tmp);
-        return BuildResult {
-            success: false,
-            message: "staged UF2 failed content validation".into(),
-            uf2_path: None,
-        };
+        return Err("staged UF2 failed content validation".into());
     }
-    let backup = uf2.with_extension("uf2.previous");
-    if let Err(error) =
-        ensure_regular_or_absent(&uf2).and_then(|_| ensure_regular_or_absent(&backup))
-    {
-        let _ = std::fs::remove_file(&tmp);
-        return BuildResult {
-            success: false,
-            message: format!("refusing unsafe UF2 output path: {error}"),
-            uf2_path: None,
-        };
-    }
+
     let had_old = uf2.is_file();
     if had_old {
-        let _ = std::fs::remove_file(&backup);
-        if let Err(e) = std::fs::rename(&uf2, &backup) {
-            let _ = std::fs::remove_file(&tmp);
-            return BuildResult {
-                success: false,
-                message: format!("failed to stage existing UF2: {e}"),
-                uf2_path: None,
-            };
+        let mut moved = Vec::new();
+        for (current, staged) in [
+            (current_manifest.as_path(), backup_manifest.as_path()),
+            (current_signature.as_path(), backup_signature.as_path()),
+            (uf2, backup.as_path()),
+        ] {
+            if current.exists() {
+                if let Err(e) = rename_file(current, staged) {
+                    restore_staged_files(&mut moved);
+                    let _ = std::fs::remove_file(&tmp);
+                    return Err(format!("failed to stage existing UF2: {e}"));
+                }
+                moved.push((current.to_path_buf(), staged.to_path_buf()));
+            }
         }
     }
-    if let Err(e) = std::fs::rename(&tmp, &uf2) {
+    let mut retained_generation: Option<PathBuf> = None;
+    let rollback = |retained_generation: &mut Option<PathBuf>| {
+        if let Some(generation_uf2) = retained_generation.take() {
+            let generation_manifest = generation_uf2.with_extension("uf2.json");
+            let _ = std::fs::remove_file(&generation_uf2);
+            let _ = std::fs::remove_file(&generation_manifest);
+            let _ = std::fs::remove_file(generation_manifest.with_extension("json.sig"));
+        }
+        let _ = std::fs::remove_file(uf2);
+        let _ = std::fs::remove_file(&current_manifest);
+        let _ = std::fs::remove_file(&current_signature);
         if had_old {
-            let _ = std::fs::rename(&backup, &uf2);
+            let _ = std::fs::rename(&backup, uf2);
+            let _ = std::fs::rename(&backup_manifest, &current_manifest);
+            let _ = std::fs::rename(&backup_signature, &current_signature);
         }
+    };
+    if let Err(e) = std::fs::rename(&tmp, uf2) {
+        rollback(&mut retained_generation);
         let _ = std::fs::remove_file(&tmp);
-        return BuildResult {
-            success: false,
-            message: format!("failed to replace UF2: {e}"),
-            uf2_path: None,
-        };
+        return Err(format!("failed to replace UF2: {e}"));
     }
-    let published = match std::fs::read(&uf2) {
+    let published = match std::fs::read(uf2) {
         Ok(data) => data,
         Err(e) => {
-            return BuildResult {
-                success: false,
-                message: format!("UF2 published but could not be re-read: {e}"),
-                uf2_path: Some(uf2),
-            };
+            rollback(&mut retained_generation);
+            return Err(format!("UF2 published but could not be re-read: {e}"));
         }
     };
     if published != uf2_data || sensor_watch_core::uf2::validate(&published).is_err() {
-        return BuildResult {
-            success: false,
-            message: "published UF2 failed content validation".into(),
-            uf2_path: Some(uf2),
-        };
+        rollback(&mut retained_generation);
+        return Err("published UF2 failed content validation".into());
     }
-    // Never discard the previous artifact. Preserve it as a uniquely named,
-    // validated recovery generation before publishing the new output.
+
     if had_old {
         let recovery_dir = output_dir.join("recovery").join("generations");
         if let Err(e) = std::fs::create_dir_all(&recovery_dir) {
-            return BuildResult {
-                success: false,
-                message: format!("built UF2, but could not create recovery directory: {e}"),
-                uf2_path: Some(uf2),
-            };
+            rollback(&mut retained_generation);
+            return Err(format!(
+                "built UF2, but could not create recovery directory: {e}"
+            ));
         }
         let old_data = match std::fs::read(&backup) {
             Ok(data) => data,
             Err(e) => {
-                return BuildResult {
-                    success: false,
-                    message: format!("built UF2, but could not read previous backup: {e}"),
-                    uf2_path: Some(uf2),
-                };
+                rollback(&mut retained_generation);
+                return Err(format!(
+                    "built UF2, but could not read previous backup: {e}"
+                ));
             }
         };
         if let Err(e) = sensor_watch_core::uf2::validate(&old_data) {
-            return BuildResult {
-                success: false,
-                message: format!("refusing to retain invalid previous UF2: {e}"),
-                uf2_path: Some(uf2),
-            };
+            rollback(&mut retained_generation);
+            return Err(format!("refusing to retain invalid previous UF2: {e}"));
         }
         let old_sha = hex_sha256(&old_data);
         let generation = format!("g{}-{}", unix_nanos(), &old_sha[..12]);
         let old_path = recovery_dir.join(format!("{generation}.uf2"));
-        if let Err(e) = std::fs::copy(&backup, &old_path) {
-            return BuildResult {
-                success: false,
-                message: format!("built UF2, but could not preserve previous generation: {e}"),
-                uf2_path: Some(uf2),
-            };
+        if let Err(e) = std::fs::copy(&backup, &old_path)
+            .and_then(|_| write_manifest(&old_path, &old_data, &generation))
+        {
+            let old_manifest = old_path.with_extension("uf2.json");
+            let _ = std::fs::remove_file(&old_path);
+            let _ = std::fs::remove_file(&old_manifest);
+            let _ = std::fs::remove_file(old_manifest.with_extension("json.sig"));
+            rollback(&mut retained_generation);
+            return Err(format!(
+                "built UF2, but could not preserve previous generation: {e}"
+            ));
         }
-        if let Err(e) = write_manifest(&old_path, &old_data, &generation) {
-            return BuildResult {
-                success: false,
-                message: format!("built UF2, but could not write recovery manifest: {e}"),
-                uf2_path: Some(uf2),
-            };
-        }
-        let _ = std::fs::remove_file(&backup);
+        retained_generation = Some(old_path);
     }
-    let generation = format!("g{}-{}", unix_nanos(), &hex_sha256(&uf2_data)[..12]);
-    if let Err(e) = write_manifest(&uf2, &uf2_data, &generation) {
-        return BuildResult {
-            success: false,
-            message: format!("UF2 published, but manifest write failed: {e}"),
-            uf2_path: Some(uf2),
-        };
+    let generation = format!("g{}-{}", unix_nanos(), &hex_sha256(uf2_data)[..12]);
+    if let Err(e) = write_current_manifest(uf2, uf2_data, &generation) {
+        rollback(&mut retained_generation);
+        return Err(format!("UF2 published, but manifest write failed: {e}"));
     }
+    if had_old {
+        cleanup_recovery_files(
+            [&backup, &backup_manifest, &backup_signature],
+            &mut remove_recovery_file,
+        )
+        .map_err(|error| {
+            format!(
+                "UF2 and manifest published, but {error}; newly published artifact was preserved"
+            )
+        })?;
+    }
+    Ok(())
+}
 
-    BuildResult {
-        success: true,
-        message: format!(
-            "Built {} bytes of firmware -> {} bytes of UF2",
-            image.len(),
-            uf2_data.len()
-        ),
-        uf2_path: Some(uf2),
+fn restore_staged_files(moved: &mut Vec<(PathBuf, PathBuf)>) {
+    while let Some((original, staged)) = moved.pop() {
+        let _ = std::fs::rename(staged, original);
+    }
+}
+
+fn cleanup_recovery_files<C>(paths: [&Path; 3], remove_file: &mut C) -> Result<(), String>
+where
+    C: FnMut(&Path) -> std::io::Result<()>,
+{
+    let mut failures = Vec::new();
+    for path in paths {
+        if let Err(error) = remove_file(path) {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                failures.push(format!("{}: {error}", path.display()));
+            }
+        }
+    }
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(format!("recovery cleanup failed: {}", failures.join("; ")))
     }
 }
 
@@ -505,89 +609,22 @@ fn hex_sha256(data: &[u8]) -> String {
         .collect()
 }
 
-/// Writes the same signed, offline-verifiable manifest used by sensor-watch-tools.
+/// Writes the same locally consistent manifest used by sensor-watch-tools.
+/// The resulting digest is not a cryptographic signature or authenticity claim.
 fn write_manifest(uf2: &Path, data: &[u8], generation: &str) -> std::io::Result<()> {
-    let parsed = sensor_watch_core::uf2::validate(data).map_err(std::io::Error::other)?;
-    let mut fields = BTreeMap::new();
-    fields.insert(
-        "application_start",
-        serde_json::json!(format!("0x{:08X}", sensor_watch_core::uf2::APP_START_ADDR)),
-    );
-    fields.insert("artifact", serde_json::json!(uf2.display().to_string()));
-    fields.insert("board", serde_json::json!("ATSAML22J18A"));
-    fields.insert(
-        "crc32_ieee",
-        serde_json::json!(format!(
-            "0x{:08X}",
-            sensor_watch_core::uf2::crc32(&parsed.image)
-        )),
-    );
-    fields.insert(
-        "family_id",
-        serde_json::json!(format!(
-            "0x{:08X}",
-            sensor_watch_core::uf2::SAML22_FAMILY_ID
-        )),
-    );
-    fields.insert(
-        "format",
-        serde_json::json!("sensor-watch-recovery-manifest-v2"),
-    );
-    fields.insert("generation_id", serde_json::json!(generation));
-    fields.insert(
-        "maximum_application_bytes",
-        serde_json::json!(sensor_watch_core::uf2::MAX_APPLICATION_BYTES),
-    );
-    fields.insert("payload_bytes", serde_json::json!(parsed.image.len()));
-    fields.insert(
-        "payload_sha256",
-        serde_json::json!(hex_sha256(&parsed.image)),
-    );
-    fields.insert("sha256", serde_json::json!(hex_sha256(data)));
-    fields.insert("uf2_blocks", serde_json::json!(parsed.block_count));
-    fields.insert("uf2_bytes", serde_json::json!(data.len()));
-    let canonical = serde_json::to_vec(&fields).map_err(std::io::Error::other)?;
-    let signature = format!("sha256:{}", hex_sha256(&canonical));
-    fields.insert("signature", serde_json::json!(signature.clone()));
-    let manifest = serde_json::to_string_pretty(&fields).map_err(std::io::Error::other)? + "\n";
+    sensor_watch_core::uf2::validate(data).map_err(std::io::Error::other)?;
     let manifest_path = uf2.with_extension("uf2.json");
-    write_manifest_file(&manifest_path, manifest.as_bytes())?;
-    write_manifest_file(
-        &manifest_path.with_extension("json.sig"),
-        format!("{signature}\n").as_bytes(),
-    )
-}
-
-fn write_manifest_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
-    if let Ok(metadata) = std::fs::symlink_metadata(path) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!("refusing non-regular manifest path: {}", path.display()),
-            ));
+    let sidecar_path = manifest_path.with_extension("json.sig");
+    for path in [&manifest_path, &sidecar_path] {
+        ensure_regular_or_absent(path).map_err(std::io::Error::other)?;
+        if path.exists() {
+            std::fs::remove_file(path).map_err(std::io::Error::other)?;
         }
     }
-    let temp = path.with_extension("json.tmp");
-    if let Ok(metadata) = std::fs::symlink_metadata(&temp) {
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::AlreadyExists,
-                format!("refusing manifest temp path: {}", temp.display()),
-            ));
-        }
-        std::fs::remove_file(&temp)?;
-    }
-    let mut file = std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(&temp)?;
-    use std::io::Write;
-    file.write_all(contents)?;
-    file.sync_all()?;
-    if path.exists() {
-        std::fs::remove_file(path)?;
-    }
-    std::fs::rename(temp, path)
+    let manifest =
+        sensor_watch_tools::create_manifest(uf2, Some(generation.to_string()), Some(uf2))
+            .map_err(std::io::Error::other)?;
+    sensor_watch_tools::write_manifest(&manifest_path, &manifest).map_err(std::io::Error::other)
 }
 
 /// Locates `rust-objcopy` under the Rust toolchain.
@@ -703,6 +740,325 @@ mod tests {
         assert!(result.uf2_path.is_none());
         assert!(!output.exists());
     }
+
+    #[test]
+    fn successful_publication_retains_verified_prior_generation_and_cleans_sentinels() {
+        let root = temp_root("successful-publication");
+        let recovery_dir = root.join("recovery/generations");
+        std::fs::create_dir_all(&root).unwrap();
+        let uf2 = root.join("sensor-watch.uf2");
+        let prior_data = sensor_watch_core::uf2::convert_to_uf2(&[10; 1024]);
+        let replacement_data = sensor_watch_core::uf2::convert_to_uf2(&[11; 1024]);
+        std::fs::write(&uf2, &prior_data).unwrap();
+        write_manifest(&uf2, &prior_data, "prior-generation").unwrap();
+
+        publish_uf2_with_cleanup_writer(
+            &root,
+            &uf2,
+            &replacement_data,
+            |path, data, generation| write_manifest(path, data, generation),
+            |path| std::fs::remove_file(path),
+        )
+        .unwrap();
+
+        let generations: Vec<PathBuf> = std::fs::read_dir(&recovery_dir)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .filter(|path| {
+                path.extension()
+                    .map(|extension| extension == "uf2")
+                    .unwrap_or(false)
+            })
+            .collect();
+        assert_eq!(generations.len(), 1);
+        let prior_path = &generations[0];
+        let prior_manifest = prior_path.with_extension("uf2.json");
+        let prior_signature = prior_manifest.with_extension("json.sig");
+        let current_manifest = uf2.with_extension("uf2.json");
+        let current_signature = current_manifest.with_extension("json.sig");
+
+        for path in [
+            prior_path.as_path(),
+            prior_manifest.as_path(),
+            prior_signature.as_path(),
+        ] {
+            assert!(
+                path.is_file(),
+                "missing retained artifact: {}",
+                path.display()
+            );
+        }
+        for path in [
+            uf2.as_path(),
+            current_manifest.as_path(),
+            current_signature.as_path(),
+        ] {
+            assert!(
+                path.is_file(),
+                "missing current artifact: {}",
+                path.display()
+            );
+        }
+        for path in [
+            uf2.with_extension("uf2.previous"),
+            uf2.with_extension("uf2.previous.json"),
+            uf2.with_extension("uf2.previous.json.sig"),
+        ] {
+            assert!(
+                !path.exists(),
+                "recovery sentinel remained: {}",
+                path.display()
+            );
+        }
+
+        let prior = inspect_artifact(prior_path).unwrap();
+        let current = inspect_artifact(&uf2).unwrap();
+        assert!(prior.generation.starts_with('g'));
+        assert!(current.generation.starts_with('g'));
+        assert_ne!(prior.generation, current.generation);
+        assert_ne!(prior.sha256, current.sha256);
+        assert_ne!(prior.manifest_digest, current.manifest_digest);
+        assert_eq!(std::fs::read(prior_path).unwrap(), prior_data);
+        assert_eq!(std::fs::read(&uf2).unwrap(), replacement_data);
+
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn existing_previous_sentinel_is_never_deleted_or_overwritten() {
+        let root = temp_root("previous-sentinel");
+        std::fs::create_dir_all(&root).unwrap();
+        let uf2 = root.join("sensor-watch.uf2");
+        let previous = root.join("sensor-watch.uf2.previous");
+        let current = sensor_watch_core::uf2::convert_to_uf2(&[1; 1024]);
+        let sentinel = b"known-good-sentinel";
+        std::fs::write(&uf2, &current).unwrap();
+        std::fs::write(&previous, sentinel).unwrap();
+
+        let error = publish_uf2(&root, &uf2, &current).unwrap_err();
+
+        assert!(error.contains("recovery sentinel"));
+        assert_eq!(std::fs::read(&previous).unwrap(), sentinel);
+        assert_eq!(std::fs::read(&uf2).unwrap(), current);
+        assert!(!root.join("sensor-watch.uf2.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    fn assert_staging_failure_restores_current_files(label: &str, failed_step: usize) {
+        let root = temp_root(label);
+        std::fs::create_dir_all(&root).unwrap();
+        let uf2 = root.join("sensor-watch.uf2");
+        let manifest = uf2.with_extension("uf2.json");
+        let signature = manifest.with_extension("json.sig");
+        let old_data = sensor_watch_core::uf2::convert_to_uf2(&[8; 1024]);
+        let new_data = sensor_watch_core::uf2::convert_to_uf2(&[9; 1024]);
+        std::fs::write(&uf2, &old_data).unwrap();
+        write_manifest(&uf2, &old_data, "old").unwrap();
+        let old_manifest = std::fs::read(&manifest).unwrap();
+        let old_signature = std::fs::read(&signature).unwrap();
+        let backup_paths = [
+            uf2.with_extension("uf2.previous"),
+            uf2.with_extension("uf2.previous.json"),
+            uf2.with_extension("uf2.previous.json.sig"),
+        ];
+        let failed_destination = backup_paths[failed_step].clone();
+
+        let error = publish_uf2_with_writers(
+            &root,
+            &uf2,
+            &new_data,
+            |path, data, generation| write_manifest(path, data, generation),
+            |path| std::fs::remove_file(path),
+            move |from, to| {
+                if to == failed_destination.as_path() {
+                    Err(std::io::Error::other("deterministic staging failure"))
+                } else {
+                    std::fs::rename(from, to)
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("failed to stage existing UF2"));
+        assert_eq!(std::fs::read(&uf2).unwrap(), old_data);
+        assert_eq!(std::fs::read(&manifest).unwrap(), old_manifest);
+        assert_eq!(std::fs::read(&signature).unwrap(), old_signature);
+        for path in backup_paths {
+            assert!(
+                !path.exists(),
+                "staging artifact remained: {}",
+                path.display()
+            );
+        }
+        assert!(!uf2.with_extension("uf2.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_uf2_staging_restores_current_files_and_cleans_sentinels() {
+        assert_staging_failure_restores_current_files("stage-uf2-failure", 0);
+    }
+
+    #[test]
+    fn failed_manifest_staging_restores_current_files_and_cleans_sentinels() {
+        assert_staging_failure_restores_current_files("stage-manifest-failure", 1);
+    }
+
+    #[test]
+    fn failed_signature_staging_restores_current_files_and_cleans_sentinels() {
+        assert_staging_failure_restores_current_files("stage-signature-failure", 2);
+    }
+
+    #[test]
+    fn failed_recovery_staging_removes_new_artifact_and_restores_current_sidecars() {
+        let root = temp_root("recovery-failure");
+        std::fs::create_dir_all(root.join("recovery")).unwrap();
+        std::fs::write(root.join("recovery/generations"), b"not a directory").unwrap();
+        let uf2 = root.join("sensor-watch.uf2");
+        let old_data = sensor_watch_core::uf2::convert_to_uf2(&[2; 1024]);
+        let new_data = sensor_watch_core::uf2::convert_to_uf2(&[3; 1024]);
+        std::fs::write(&uf2, &old_data).unwrap();
+        let manifest =
+            sensor_watch_tools::create_manifest(&uf2, Some("old".into()), Some(&uf2)).unwrap();
+        sensor_watch_tools::write_manifest(&uf2.with_extension("uf2.json"), &manifest).unwrap();
+        let old_manifest = std::fs::read(uf2.with_extension("uf2.json")).unwrap();
+        let old_signature =
+            std::fs::read(uf2.with_extension("uf2.json").with_extension("json.sig")).unwrap();
+
+        let error = publish_uf2(&root, &uf2, &new_data).unwrap_err();
+
+        assert!(error.contains("recovery directory"));
+        assert_eq!(std::fs::read(&uf2).unwrap(), old_data);
+        assert_eq!(
+            std::fs::read(uf2.with_extension("uf2.json")).unwrap(),
+            old_manifest
+        );
+        assert_eq!(
+            std::fs::read(uf2.with_extension("uf2.json").with_extension("json.sig")).unwrap(),
+            old_signature
+        );
+        assert!(!root.join("sensor-watch.uf2.previous").exists());
+        assert!(!root.join("sensor-watch.uf2.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_current_manifest_cleanup_removes_new_generation_and_restores_transaction() {
+        let root = temp_root("current-manifest-failure");
+        let recovery_dir = root.join("recovery/generations");
+        std::fs::create_dir_all(&recovery_dir).unwrap();
+        let uf2 = root.join("sensor-watch.uf2");
+        let old_data = sensor_watch_core::uf2::convert_to_uf2(&[4; 1024]);
+        let new_data = sensor_watch_core::uf2::convert_to_uf2(&[5; 1024]);
+        std::fs::write(&uf2, &old_data).unwrap();
+        let manifest =
+            sensor_watch_tools::create_manifest(&uf2, Some("old".into()), Some(&uf2)).unwrap();
+        sensor_watch_tools::write_manifest(&uf2.with_extension("uf2.json"), &manifest).unwrap();
+        let old_manifest = std::fs::read(uf2.with_extension("uf2.json")).unwrap();
+        let old_signature =
+            std::fs::read(uf2.with_extension("uf2.json").with_extension("json.sig")).unwrap();
+
+        let error = publish_uf2_with_manifest_writer(
+            &root,
+            &uf2,
+            &new_data,
+            |_path, _data, _generation| {
+                Err(std::io::Error::new(
+                    std::io::ErrorKind::Other,
+                    "deterministic manifest failure",
+                ))
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("manifest write failed"));
+        assert_eq!(std::fs::read(&uf2).unwrap(), old_data);
+        assert_eq!(
+            std::fs::read(uf2.with_extension("uf2.json")).unwrap(),
+            old_manifest
+        );
+        assert_eq!(
+            std::fs::read(uf2.with_extension("uf2.json").with_extension("json.sig")).unwrap(),
+            old_signature
+        );
+        assert!(std::fs::read_dir(&recovery_dir).unwrap().next().is_none());
+        assert!(!root.join("sensor-watch.uf2.previous").exists());
+        assert!(!root.join("sensor-watch.uf2.previous.json").exists());
+        assert!(!root.join("sensor-watch.uf2.previous.json.sig").exists());
+        assert!(!root.join("sensor-watch.uf2.tmp").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn recovery_cleanup_failures_are_reported_without_rollback() {
+        let root = temp_root("recovery-cleanup-failure");
+        std::fs::create_dir_all(root.join("recovery/generations")).unwrap();
+        let uf2 = root.join("sensor-watch.uf2");
+        let old_data = sensor_watch_core::uf2::convert_to_uf2(&[6; 1024]);
+        let new_data = sensor_watch_core::uf2::convert_to_uf2(&[7; 1024]);
+        std::fs::write(&uf2, &old_data).unwrap();
+        write_manifest(&uf2, &old_data, "old").unwrap();
+        let backup_manifest = uf2.with_extension("uf2.previous.json");
+        let backup_signature = backup_manifest.with_extension("json.sig");
+        let attempted = std::cell::RefCell::new(Vec::new());
+
+        let error = publish_uf2_with_cleanup_writer(
+            &root,
+            &uf2,
+            &new_data,
+            |path, data, generation| write_manifest(path, data, generation),
+            |path| {
+                attempted.borrow_mut().push(path.to_path_buf());
+                if path == backup_manifest || path == backup_signature {
+                    Err(std::io::Error::other("injected cleanup failure"))
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.contains("recovery cleanup failed"));
+        assert!(error.contains("sensor-watch.uf2.previous.json"));
+        assert!(error.contains("sensor-watch.uf2.previous.json.sig"));
+        assert!(error.contains("newly published artifact was preserved"));
+        assert_eq!(attempted.borrow().len(), 3);
+        assert_eq!(std::fs::read(&uf2).unwrap(), new_data);
+        assert!(uf2.with_extension("uf2.json").is_file());
+        assert!(backup_manifest.is_file());
+        assert!(backup_signature.is_file());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn valid_explicit_artifact_is_inspected_with_sidecars() {
+        let root = temp_root("artifact-valid");
+        std::fs::create_dir_all(&root).unwrap();
+        let uf2 = root.join("recovery.uf2");
+        let data = sensor_watch_core::uf2::convert_to_uf2(&[0; 1024]);
+        std::fs::write(&uf2, &data).unwrap();
+        let manifest =
+            sensor_watch_tools::create_manifest(&uf2, Some("g-test".into()), Some(&uf2)).unwrap();
+        sensor_watch_tools::write_manifest(&uf2.with_extension("uf2.json"), &manifest).unwrap();
+
+        let inspection = inspect_artifact(&uf2).unwrap();
+        assert_eq!(inspection.generation, "g-test");
+        assert_eq!(inspection.family_id, "0x2C29472F");
+        assert_eq!(inspection.path, uf2);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn invalid_explicit_artifact_is_rejected() {
+        let root = temp_root("artifact-invalid");
+        std::fs::create_dir_all(&root).unwrap();
+        let uf2 = root.join("tampered.uf2");
+        std::fs::write(&uf2, [0u8; 512]).unwrap();
+
+        let error = inspect_artifact(&uf2).unwrap_err();
+        assert!(error.contains("UF2") || error.contains("manifest"));
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
 
 fn find_objcopy() -> Option<PathBuf> {
@@ -726,7 +1082,9 @@ fn find_objcopy() -> Option<PathBuf> {
 }
 
 /// Returns the path to the last-built `.uf2` file in the given output dir, if it
-/// exists.
+/// exists. This is retained for explicit inspection/recovery, not startup
+/// flash authorization.
+#[allow(dead_code)]
 pub fn last_uf2(output_dir: &Path) -> Option<PathBuf> {
     let p = output_dir.join("sensor-watch.uf2");
     if p.exists() {
