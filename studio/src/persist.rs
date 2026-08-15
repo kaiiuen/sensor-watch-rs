@@ -10,51 +10,24 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::settings::AppSettings;
+use super::test_runtime;
 
-/// The settings file name, stored in the per-user config directory.
-const SETTINGS_FILE: &str = "studio-settings.json";
 const MAX_SETTINGS_BYTES: u64 = 512 * 1024;
 
-/// Returns the per-user config directory, preferring platform conventions.
-///
-/// - Unix: `$XDG_CONFIG_HOME` if set, else `$HOME/.config`
-/// - Windows: `%APPDATA%`
-/// - Falls back to the executable's directory if none of the above exist.
-fn config_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    {
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            return PathBuf::from(appdata).join("FirmwareStudio");
-        }
-    }
-
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("firmware-studio");
-        }
-    }
-
-    if let Some(home) = std::env::var_os("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home).join(".config").join("firmware-studio");
-        }
-    }
-
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
-/// Returns the path to the settings file (per-user config directory).
+/// Returns the active settings file path. Settings and restore points use the
+/// same profile selected by `test_runtime`.
 pub fn settings_path() -> PathBuf {
-    config_dir().join(SETTINGS_FILE)
+    test_runtime::active().settings
 }
 
-/// Loads settings from the per-user config directory, if present.
+/// Loads settings from the active profile, if present.
 pub fn load() -> Option<AppSettings> {
-    let path = settings_path();
-    let json = read_bounded(&path, MAX_SETTINGS_BYTES).ok()?;
+    load_at(&settings_path())
+}
+
+/// Loads settings from an explicitly selected path during profile bootstrap.
+pub fn load_at(path: &Path) -> Option<AppSettings> {
+    let json = read_bounded(path, MAX_SETTINGS_BYTES).ok()?;
     AppSettings::from_json(&json).ok()
 }
 
@@ -65,7 +38,11 @@ pub fn load() -> Option<AppSettings> {
 /// fsync and directory sync are best-effort: if they fail the rename still
 /// proceeds.
 pub fn save(settings: &AppSettings) -> Result<(), String> {
-    let path = settings_path();
+    save_at(settings, &settings_path())
+}
+
+/// Saves a settings document to an explicit profile path.
+pub fn save_at(settings: &AppSettings, path: &Path) -> Result<(), String> {
     let json = settings.to_json()?;
 
     if let Some(dir) = path.parent() {
@@ -100,6 +77,16 @@ pub fn save(settings: &AppSettings) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+/// Updates the launch-time profile toggle in the normal settings namespace.
+/// This keeps the toggle effective even while the current debug binary is
+/// using an isolated profile.
+pub fn save_toggle_preference(enabled: bool) -> Result<(), String> {
+    let path = test_runtime::normal_config_dir().join("studio-settings.json");
+    let mut settings = load_at(&path).unwrap_or_default();
+    settings.fresh_test_executable_profile = enabled;
+    save_at(&settings, &path)
 }
 
 /// Replaces a file on platforms where rename cannot overwrite an existing file.

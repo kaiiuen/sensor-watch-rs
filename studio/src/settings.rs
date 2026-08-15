@@ -134,6 +134,9 @@ pub struct AppSettings {
     /// Whether a valid build starts with a fresh transient test session.
     #[serde(default = "default_true")]
     pub reset_test_session_on_compile: bool,
+    /// Whether debug/test executables use an isolated profile per executable.
+    #[serde(default = "default_true")]
+    pub fresh_test_executable_profile: bool,
     /// The last measured crystal drift (parts-per-million), persisted between
     /// sessions so the user can recall the calibration without re-measuring.
     #[serde(default)]
@@ -195,6 +198,7 @@ impl AppSettings {
         tab_overflow: TabOverflowBehavior,
         persist_user_changes: bool,
         reset_test_session_on_compile: bool,
+        fresh_test_executable_profile: bool,
     ) -> Self {
         AppSettings {
             schema_version: 1,
@@ -213,6 +217,7 @@ impl AppSettings {
             first_run,
             persist_user_changes,
             reset_test_session_on_compile,
+            fresh_test_executable_profile,
             drift_ppm,
             rtc_calibration: rtc_calibration.clone(),
             line_limit,
@@ -376,6 +381,7 @@ impl Default for AppSettings {
             first_run: false,
             persist_user_changes: true,
             reset_test_session_on_compile: true,
+            fresh_test_executable_profile: true,
             drift_ppm: 0.0,
             rtc_calibration: RtcCalibrationSettings::default(),
             line_limit: default_line_limit(),
@@ -469,9 +475,14 @@ mod tests {
             .as_object_mut()
             .unwrap()
             .remove("reset_test_session_on_compile");
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("fresh_test_executable_profile");
         let loaded = AppSettings::from_json(&value.to_string()).unwrap();
         assert!(loaded.persist_user_changes);
         assert!(loaded.reset_test_session_on_compile);
+        assert!(loaded.fresh_test_executable_profile);
     }
 
     #[test]
@@ -516,9 +527,11 @@ mod tests {
             super::TabOverflowBehavior::default(),
             false,
             true,
+            false,
         );
         assert!(!settings.persist_user_changes);
         assert!(settings.reset_test_session_on_compile);
+        assert!(!settings.fresh_test_executable_profile);
     }
 
     #[test]

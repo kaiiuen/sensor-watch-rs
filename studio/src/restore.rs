@@ -6,9 +6,10 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use super::settings::AppSettings;
+use super::test_runtime;
 
 pub const MAX_RESTORE_POINTS: usize = 12;
-const FILE_NAME: &str = "studio-restore-points.json";
+
 const MAX_RESTORE_JSON_BYTES: u64 = 1024 * 1024;
 const MAX_RESTORE_TEXT_BYTES: usize = 16 * 1024;
 
@@ -26,29 +27,8 @@ pub struct RestoreStore {
     pub points: Vec<RestorePoint>,
 }
 
-fn config_dir() -> PathBuf {
-    #[cfg(target_os = "windows")]
-    if let Some(appdata) = std::env::var_os("APPDATA") {
-        return PathBuf::from(appdata).join("FirmwareStudio");
-    }
-    if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
-        if !xdg.is_empty() {
-            return PathBuf::from(xdg).join("firmware-studio");
-        }
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        if !home.is_empty() {
-            return PathBuf::from(home).join(".config").join("firmware-studio");
-        }
-    }
-    std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(PathBuf::from))
-        .unwrap_or_else(|| PathBuf::from("."))
-}
-
 pub fn path() -> PathBuf {
-    config_dir().join(FILE_NAME)
+    test_runtime::active().restore
 }
 
 fn replace_existing(tmp: &std::path::Path, target: &std::path::Path) -> Result<(), String> {

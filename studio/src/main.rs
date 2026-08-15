@@ -34,6 +34,7 @@ mod real_face;
 mod restore;
 mod settings;
 mod sysstats;
+mod test_runtime;
 mod theme;
 mod transport;
 mod watch_config;
@@ -347,6 +348,8 @@ struct StudioApp {
     persist_user_changes: bool,
     /// Whether a valid build starts with a fresh transient test session.
     reset_test_session_on_compile: bool,
+    /// Whether debug/test executables use an isolated profile per executable.
+    fresh_test_executable_profile: bool,
     /// Whether settings have been persisted on exit (guards against repeats).
     saved_on_exit: bool,
     /// The built-in reference wiki.
@@ -1022,6 +1025,7 @@ impl Default for StudioApp {
             first_run: true,
             persist_user_changes: true,
             reset_test_session_on_compile: true,
+            fresh_test_executable_profile: true,
             saved_on_exit: false,
             wiki: wiki::Wiki::new(),
             line_limit: settings::default_line_limit(),
@@ -7070,6 +7074,20 @@ impl StudioApp {
                 }
                 ui.end_row();
 
+                ui.label("Fresh debug executable profile")
+                    .on_hover_text("Beginner-safe isolation: each debug/test Studio executable gets its own settings and restore points. The same binary reuses its profile; a newly compiled binary starts clean. Release Studio paths are unchanged.");
+                let profile_response = ui.checkbox(
+                    &mut self.fresh_test_executable_profile,
+                    "Isolate settings for each debug build",
+                );
+                if profile_response.changed() {
+                    self.save_settings_unconditionally();
+                    if let Err(error) = persist::save_toggle_preference(self.fresh_test_executable_profile) {
+                        self.log_error(&format!("Failed to save profile preference: {error}"));
+                    }
+                }
+                ui.end_row();
+
                 // Text size.
                 ui.label("Text size");
                 ui.horizontal(|ui| {
@@ -7715,6 +7733,7 @@ impl StudioApp {
             self.tab_overflow,
             self.persist_user_changes,
             self.reset_test_session_on_compile,
+            self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7766,6 +7785,7 @@ impl StudioApp {
             self.tab_overflow,
             self.persist_user_changes,
             self.reset_test_session_on_compile,
+            self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7833,6 +7853,7 @@ impl StudioApp {
             self.tab_overflow,
             self.persist_user_changes,
             self.reset_test_session_on_compile,
+            self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7874,6 +7895,7 @@ impl StudioApp {
             self.tab_overflow,
             self.persist_user_changes,
             self.reset_test_session_on_compile,
+            self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
         .with_advanced_mode(self.advanced_mode);
@@ -7959,6 +7981,7 @@ impl StudioApp {
         self.first_run = s.first_run;
         self.persist_user_changes = s.persist_user_changes;
         self.reset_test_session_on_compile = s.reset_test_session_on_compile;
+        self.fresh_test_executable_profile = s.fresh_test_executable_profile;
         self.advanced_mode = s.advanced_mode;
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
@@ -8476,6 +8499,19 @@ fn ensure_cli_console() {
 fn ensure_cli_console() {}
 
 fn main() -> eframe::Result<()> {
+    // Read only the normal settings file to discover the profile toggle. The
+    // selected profile is then shared by settings and restore persistence.
+    let bootstrap =
+        persist::load_at(&test_runtime::normal_config_dir().join("studio-settings.json"));
+    let fresh = bootstrap
+        .as_ref()
+        .map(|settings| settings.fresh_test_executable_profile)
+        .unwrap_or(true);
+    let profile = test_runtime::initialize(fresh);
+    if let Some(warning) = profile.warning.as_deref() {
+        eprintln!("{warning}: {}", profile.root.display());
+    }
+
     let mut args = std::env::args();
     let _executable = args.next();
     if args.next().is_some() {
