@@ -25,6 +25,8 @@ const FIGURES: [&str; 16] = [
     "VI", "Hd", "PA", "GF", "PR", "AQ", "CA", "TR", "Td", "CO", "AM", "AL", "LF", "RU", "LA", "PO",
 ];
 
+const THROW_ANIMATION_FREQUENCY: u8 = 16;
+
 /// The geomancy face state.
 pub struct GeomancyFace {
     mode: u8,
@@ -140,6 +142,21 @@ impl GeomancyFace {
         }
     }
 
+    fn set_throw_animation(&mut self, animate: bool) {
+        self.animate = animate;
+        self.animation = 0;
+    }
+
+    fn start_throw_animation(&mut self) {
+        self.set_throw_animation(true);
+        movement::request_tick_frequency(THROW_ANIMATION_FREQUENCY);
+    }
+
+    fn finish_throw_animation(&mut self) {
+        self.set_throw_animation(false);
+        movement::request_tick_frequency(1);
+    }
+
     fn throw_animation(&mut self) {
         match self.animation {
             0 => slcd::set_pixel(0, 22),
@@ -227,10 +244,7 @@ impl GeomancyFace {
                 slcd::clear_pixel(2, 5);
                 slcd::clear_pixel(1, 6);
             }
-            _ => {
-                self.animate = false;
-                self.animation = 0;
-            }
+            _ => self.finish_throw_animation(),
         }
     }
 
@@ -272,16 +286,14 @@ impl WatchFace for GeomancyFace {
     fn setup(&mut self, _settings: &Settings, _watch_face_index: usize) {}
 
     fn activate(&mut self, _settings: &Settings) {
-        self.animate = false;
-        self.animation = 0;
+        self.finish_throw_animation();
         slcd::display_string("    IChing", 0);
     }
 
     fn loop_(&mut self, event: Event, _settings: &mut Settings) {
         match event {
             Event::Activate => {
-                self.animate = false;
-                self.animation = 0;
+                self.finish_throw_animation();
                 slcd::display_string("    IChing", 0);
             }
             Event::Tick => {
@@ -309,20 +321,20 @@ impl WatchFace for GeomancyFace {
                 match self.mode {
                     0 => {
                         self.mode += 1;
-                        self.animate = true;
+                        self.start_throw_animation();
                         self.i_ching_hexagram = self.iching_form_hexagram();
                     }
                     1 => {
-                        self.animate = true;
+                        self.start_throw_animation();
                         self.i_ching_hexagram = self.iching_form_hexagram();
                     }
                     2 => {
                         self.mode += 1;
-                        self.animate = true;
+                        self.start_throw_animation();
                         self.geomantic_figure = self.geomancy_pick_figure();
                     }
                     _ => {
-                        self.animate = true;
+                        self.start_throw_animation();
                         self.geomantic_figure = self.geomancy_pick_figure();
                     }
                 }
@@ -340,5 +352,28 @@ impl WatchFace for GeomancyFace {
         }
     }
 
-    fn resign(&mut self, _settings: &mut Settings) {}
+    fn resign(&mut self, _settings: &mut Settings) {
+        self.finish_throw_animation();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::GeomancyFace;
+
+    #[test]
+    fn throw_animation_state_resets_at_completion() {
+        let mut face = GeomancyFace::new_static();
+
+        // The host movement seam intentionally exposes only the 1 Hz versus
+        // non-1 Hz distinction and cannot observe the requested 16 Hz value.
+        face.set_throw_animation(true);
+        assert!(face.animate);
+        assert_eq!(face.animation, 0);
+
+        face.animation = 11;
+        face.set_throw_animation(false);
+        assert!(!face.animate);
+        assert_eq!(face.animation, 0);
+    }
 }

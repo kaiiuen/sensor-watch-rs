@@ -50,10 +50,53 @@ pub mod simple_clock {
     pub use real::SimpleClockFace;
 }
 
+/// The REAL baby kicks face, pulled in unchanged through the host seam.
+pub mod baby_kicks {
+    #[path = "../../../movement/baby_kicks.rs"]
+    pub mod real;
+    pub use real::BabyKicksFace;
+}
+
+/// The REAL `blackjack` face, pulled in unchanged through the host seam.
+pub mod blackjack {
+    #[path = "../../../movement/blackjack.rs"]
+    pub mod real;
+    pub use real::BlackjackFace;
+}
+
+/// The REAL alarm thermometer face. The host implementation intentionally uses
+/// the unchanged face's fixed 25°C sensor model; tests document that behavior.
+pub mod alarm_thermometer {
+    #[path = "../../../movement/alarm_thermometer.rs"]
+    pub mod real;
+    pub use real::AlarmThermometerFace;
+}
+
+/// The REAL accelerometer interrupt count face.
+pub mod accel_interrupt_count {
+    #[path = "../../../movement/accel_interrupt_count.rs"]
+    pub mod real;
+    pub use real::AccelInterruptCountFace;
+}
+
 // ---- The rest of the host-compilable subset. ------------------------------
 // Each real face is pulled in verbatim via `#[path]` (never edited) and its
 // face *type* is re-exported. The `#[path]` inside an inline `mod` resolves
 // relative to `src/host/movement/<name>/`, hence the `../../../movement/...`.
+
+/// The REAL `couch_to_5k` face.
+pub mod couch_to_5k {
+    #[path = "../../../movement/couch_to_5k.rs"]
+    pub mod real;
+    pub use real::CouchTo5kFace;
+}
+
+/// The REAL `activity` face.
+pub mod activity {
+    #[path = "../../../movement/activity.rs"]
+    pub mod real;
+    pub use real::ActivityFace;
+}
 
 /// The REAL `alarm` face. Calls `movement::illuminate_led`,
 /// `movement::play_alarm_beeps`, and `watch::led::set_led_off`.
@@ -251,6 +294,27 @@ pub mod frequency_correction {
     #[path = "../../../movement/frequency_correction.rs"]
     pub mod real;
     pub use real::FrequencyCorrectionFace;
+}
+
+/// The REAL `geomancy` face.
+pub mod geomancy {
+    #[path = "../../../movement/geomancy.rs"]
+    pub mod real;
+    pub use real::GeomancyFace;
+}
+
+/// The REAL higher/lower card game face.
+pub mod butterfly_game {
+    #[path = "../../../movement/butterfly_game.rs"]
+    pub mod real;
+    pub use real::ButterflyGameFace;
+}
+
+/// The REAL `higher_lower_game` face.
+pub mod higher_lower_game {
+    #[path = "../../../movement/higher_lower_game.rs"]
+    pub mod real;
+    pub use real::HigherLowerGameFace;
 }
 
 /// The REAL `finetune` face. Uses RTC/LCD/LED/utility shims plus the host
@@ -952,8 +1016,26 @@ pub fn disable_tap_detection_if_available() -> bool {
 }
 
 #[cfg(test)]
+mod face_tests_accel_interrupt_count;
+#[cfg(test)]
+mod face_tests_alarm_thermometer;
+#[cfg(test)]
+mod face_tests_baby_kicks;
+#[cfg(test)]
+mod face_tests_blackjack;
+#[cfg(test)]
 mod face_tests_stock_stopwatch;
 
+#[cfg(test)]
+mod face_tests_activity;
+#[cfg(test)]
+mod face_tests_butterfly_game;
+#[cfg(test)]
+mod face_tests_couch_to_5k;
+#[cfg(test)]
+mod face_tests_geomancy;
+#[cfg(test)]
+mod face_tests_higher_lower_game;
 #[cfg(test)]
 // Host tests for the I-P face subset (driven via the `Hw` seam, parallel to the
 // shared `tests` module so concurrent face owners can each add their own tests
@@ -1557,6 +1639,35 @@ mod tests {
         });
         // Save writes backup data (slot 0 now holds the RTC) and shows "Saved ".
         assert_eq!(mock.text(), "SL 0Saved");
+    }
+
+    #[test]
+    fn real_save_load_restores_saved_rtc() {
+        let mut mock = steady_state();
+        let original = dt(2024, 2, 29, 6, 7, 8);
+        let changed = dt(2025, 3, 1, 9, 10, 11);
+        mock.set_time(original);
+        let mut settings = h24_settings();
+        let mut face = save_load::SaveLoadFace::new();
+
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || {
+            face.loop_(
+                types::Event::Button(types::Button::Light, types::ButtonEvent::LongPress),
+                &mut settings,
+            )
+        });
+        mock.set_time(changed);
+        seam::with_hw(&mut mock, || {
+            face.loop_(
+                types::Event::Button(types::Button::Alarm, types::ButtonEvent::LongPress),
+                &mut settings,
+            )
+        });
+
+        let restored = seam::with_hw(&mut mock, || crate::watch::rtc::get_date_time());
+        assert_eq!(restored, original);
+        assert_eq!(mock.text(), "    Loaded");
     }
 
     #[test]

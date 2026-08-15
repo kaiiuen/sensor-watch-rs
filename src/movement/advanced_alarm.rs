@@ -269,6 +269,26 @@ impl AdvancedAlarmFace {
         }
     }
 
+    fn select_playing_alarm(&mut self, now: rtc::DateTime) -> bool {
+        let weekday_idx = Self::get_weekday_idx(now);
+        let mut wants = false;
+        for i in 0..ALARM_ALARMS {
+            let alarm = self.alarm[i];
+            let day_matches = alarm.day == ALARM_DAY_EACH_DAY
+                || alarm.day == ALARM_DAY_ONE_TIME
+                || alarm.day == weekday_idx
+                || (alarm.day == ALARM_DAY_WORKDAY && weekday_idx < 5)
+                || (alarm.day == ALARM_DAY_WEEKEND && weekday_idx >= 5);
+            if alarm.enabled && alarm.minute == now.minute && alarm.hour == now.hour && day_matches
+            {
+                // Keep the last alarm when multiple alarms genuinely match.
+                self.alarm_playing_idx = i as u8;
+                wants = true;
+            }
+        }
+        wants
+    }
+
     fn abort_quick_ticks(&mut self) {
         if self.alarm_quick_ticks {
             self.alarm[self.alarm_idx as usize].enabled = true;
@@ -449,30 +469,7 @@ impl WatchFace for AdvancedAlarmFace {
             return;
         }
         self.alarm_handled_minute = now.minute as i8;
-        let weekday_idx = Self::get_weekday_idx(now);
-        let mut wants = false;
-        for i in 0..ALARM_ALARMS {
-            if self.alarm[i].enabled
-                && self.alarm[i].minute == now.minute
-                && self.alarm[i].hour == now.hour
-            {
-                self.alarm_playing_idx = i as u8;
-                let day = self.alarm[i].day;
-                if day == ALARM_DAY_EACH_DAY || day == ALARM_DAY_ONE_TIME {
-                    wants = true;
-                }
-                if day == weekday_idx {
-                    wants = true;
-                }
-                if day == ALARM_DAY_WORKDAY && weekday_idx < 5 {
-                    wants = true;
-                }
-                if day == ALARM_DAY_WEEKEND && weekday_idx >= 5 {
-                    wants = true;
-                }
-            }
-        }
-        if wants {
+        if self.select_playing_alarm(now) {
             return;
         }
         self.alarm_handled_minute = -1;
@@ -506,5 +503,45 @@ impl WatchFace for AdvancedAlarmFace {
             }
         }
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrong_weekday_does_not_replace_matching_alarm_slot() {
+        let mut face = AdvancedAlarmFace::new();
+        let now = rtc::DateTime {
+            second: 0,
+            minute: 30,
+            hour: 7,
+            day: 6,
+            month: 1,
+            year: 3,
+        };
+
+        // Friday, 2023-01-06: the first alarm matches the weekday.
+        face.alarm[0] = AlarmSetting {
+            day: 4,
+            hour: 7,
+            minute: 30,
+            beeps: 1,
+            pitch: 0,
+            enabled: true,
+        };
+        // Monday is deliberately configured differently but has the same time.
+        face.alarm[1] = AlarmSetting {
+            day: 0,
+            hour: 7,
+            minute: 30,
+            beeps: 10,
+            pitch: 2,
+            enabled: true,
+        };
+
+        assert!(face.select_playing_alarm(now));
+        assert_eq!(face.alarm_playing_idx, 0);
     }
 }

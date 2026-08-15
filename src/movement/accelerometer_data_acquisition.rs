@@ -78,15 +78,10 @@ impl AccelerometerDataAcquisitionFace {
         buf[3] = b'0' + ticks % 10;
         buf[4] = b'r';
         buf[5] = b'e';
-        buf[6] = b'0' + (((8192 - self.next_available_page) / 82) / 10) as u8;
-        buf[7] = b'0' + (((8192 - self.next_available_page) / 82) % 10) as u8;
-        buf[8] = b'#';
-        buf[9] = b'o';
+        buf[6..10].copy_from_slice(&storage_display_suffix(self.next_available_page));
         watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
         watch::slcd::set_colon();
-        if self.next_available_page < 0 {
-            watch::slcd::display_string(" FUL", 6);
-        } else if self.next_available_page > 8110 {
+        if self.next_available_page > 8110 {
             watch::slcd::display_string("<1", 6);
         }
         if self.beep_with_countdown {
@@ -224,6 +219,23 @@ impl AccelerometerDataAcquisitionFace {
     }
 }
 
+/// Render the storage counter without allowing a full-storage sentinel to enter
+/// the digit arithmetic. The suffix occupies the two record digits and `#o`.
+fn storage_display_suffix(pointer: i16) -> [u8; 4] {
+    if pointer < 0 {
+        return *b" FUL";
+    }
+
+    let record_count = (8192i32 - pointer as i32) / 82;
+    let record_count = record_count.clamp(0, 99) as u8;
+    [
+        b'0' + record_count / 10,
+        b'0' + record_count % 10,
+        b'#',
+        b'o',
+    ]
+}
+
 /// Move a sample pointer back to the last offset where a 6-byte write fits in
 /// the current 64-byte NVM page. The storage driver deliberately rejects page
 /// crossing writes, so leaving the pointer at (for example) offset 62 would
@@ -238,7 +250,17 @@ fn normalize_storage_pointer(pointer: i16) -> Option<i16> {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_storage_pointer;
+    use super::{normalize_storage_pointer, storage_display_suffix};
+
+    #[test]
+    fn displays_the_final_valid_storage_slot() {
+        assert_eq!(storage_display_suffix(0), *b"99#o");
+    }
+
+    #[test]
+    fn displays_full_storage_without_digit_arithmetic() {
+        assert_eq!(storage_display_suffix(-6), *b" FUL");
+    }
 
     #[test]
     fn fresh_storage_starts_at_a_writable_sample_offset() {

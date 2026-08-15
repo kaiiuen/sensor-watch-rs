@@ -6,6 +6,7 @@
 //! simulated RTC.
 
 pub use sensor_watch_core::datetime::{DateTime, WATCH_RTC_REFERENCE_YEAR};
+use sensor_watch_core::safety::valid_datetime;
 
 use super::seam;
 
@@ -16,8 +17,19 @@ pub fn get_date_time() -> DateTime {
 
 /// Host: sets the RTC date/time by forwarding to the `Hw::set_date_time` hook
 /// (the mock records it as `now`).
-pub fn set_date_time(date_time: DateTime) {
+pub fn set_date_time(date_time: DateTime) -> Result<(), ()> {
+    if !valid_datetime(
+        date_time.year,
+        date_time.month,
+        date_time.day,
+        date_time.hour,
+        date_time.minute,
+        date_time.second,
+    ) {
+        return Err(());
+    }
     seam::with_current_hw(|hw| hw.set_date_time(date_time));
+    Ok(())
 }
 
 /// Host: writes the frequency-correction register via the `Hw` seam (no-op).

@@ -212,7 +212,7 @@ impl ActivityFace {
 
     fn finish_logging(&mut self) {
         if self.curr_total_sec >= ACTIVITY_MIN_LENGTH_SEC
-            && self.log_count as usize + 1 < ACTIVITY_LOG_SZ
+            && (self.log_count as usize) < ACTIVITY_LOG_SZ
         {
             let itm = &mut self.log[self.log_count as usize];
             itm.start_time = self.start_time;
@@ -428,4 +428,59 @@ impl WatchFace for ActivityFace {
     }
 
     fn resign(&mut self, _settings: &mut Settings) {}
+}
+
+#[cfg(all(test, feature = "hostmock", not(target_arch = "arm")))]
+mod tests {
+    use super::*;
+    use crate::watch::seam;
+    use sensor_watch_core::mock_hw::MockHw;
+
+    #[test]
+    fn finish_logging_writes_slot_98_and_reaches_full() {
+        let mut face = ActivityFace::new();
+        face.log_count = 98;
+        face.curr_total_sec = ACTIVITY_MIN_LENGTH_SEC;
+        face.curr_pause_sec = 7;
+        face.type_ix = 3;
+
+        let mut mock = MockHw::new();
+        seam::with_hw(&mut mock, || face.finish_logging());
+
+        assert_eq!(face.log_count, 99);
+        assert_eq!(face.log[98].total_sec, ACTIVITY_MIN_LENGTH_SEC);
+        assert_eq!(face.log[98].pause_sec, 7);
+        assert_eq!(face.log[98].activity_type, 3);
+
+        seam::with_hw(&mut mock, || face.display_choice());
+        assert!(mock.text().contains("FULL"));
+    }
+
+    #[test]
+    fn finish_logging_does_not_write_when_already_full() {
+        let mut face = ActivityFace::new();
+        face.log_count = ACTIVITY_LOG_SZ as u8;
+        face.curr_total_sec = ACTIVITY_MIN_LENGTH_SEC;
+        face.log[98].total_sec = 123;
+
+        let mut mock = MockHw::new();
+        seam::with_hw(&mut mock, || face.finish_logging());
+
+        assert_eq!(face.log_count, ACTIVITY_LOG_SZ as u8);
+        assert_eq!(face.log[98].total_sec, 123);
+    }
+
+    #[test]
+    fn finish_logging_rejects_activity_shorter_than_minimum() {
+        let mut face = ActivityFace::new();
+        face.log_count = 98;
+        face.curr_total_sec = ACTIVITY_MIN_LENGTH_SEC - 1;
+        face.log[98].total_sec = 123;
+
+        let mut mock = MockHw::new();
+        seam::with_hw(&mut mock, || face.finish_logging());
+
+        assert_eq!(face.log_count, 98);
+        assert_eq!(face.log[98].total_sec, 123);
+    }
 }

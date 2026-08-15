@@ -131,6 +131,30 @@ fn real_lis2dw_logging_shows_no_data_when_empty() {
 }
 
 #[test]
+fn real_lis2dw_logging_keeps_full_ring_after_counter_wrap() {
+    let mut mock = steady_state();
+    let mut settings = h24_settings();
+    let mut face = lis2dw_logging::Lis2dwLoggingFace::new();
+    seam::with_hw(&mut mock, || face.activate(&settings));
+
+    // More than 255 background samples exercise the counter-wrap boundary while
+    // retaining samples in the 96-entry ring.
+    seam::with_hw(&mut mock, || {
+        for _ in 0..=u8::MAX {
+            face.loop_(Event::BackgroundTask, &mut settings);
+        }
+    });
+    seam::with_hw(&mut mock, || {
+        face.loop_(
+            Event::Button(Button::Light, ButtonEvent::Down),
+            &mut settings,
+        );
+    });
+
+    assert!(mock.text().starts_with("XA"), "actual: {}", mock.text());
+}
+
+#[test]
 fn real_mars_time_activate_shows_mtc() {
     let mut mock = steady_state();
     let mut settings = h24_settings();

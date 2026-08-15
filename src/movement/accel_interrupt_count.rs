@@ -53,6 +53,10 @@ impl AccelInterruptCountFace {
 
 /// Writes a number right-aligned into the buffer at the given offset.
 fn write_num(buf: &mut [u8; 11], value: u32, offset: usize, width: usize) {
+    if width == 0 {
+        return;
+    }
+
     let Some(end) = offset.checked_add(width).and_then(|end| end.checked_sub(1)) else {
         return;
     };
@@ -68,7 +72,7 @@ fn write_num(buf: &mut [u8; 11], value: u32, offset: usize, width: usize) {
         };
         *slot = b'0' + (v % 10) as u8;
         v /= 10;
-        if i == offset || v == 0 {
+        if i == offset {
             break;
         }
         i -= 1;
@@ -170,6 +174,20 @@ mod tests {
         let mut buf = [b' '; 11];
         write_num(&mut buf, 42, 4, 0);
         write_num(&mut buf, 42, 9, 4);
+        assert_eq!(buf, [b' '; 11]);
+    }
+
+    #[test]
+    fn zero_pads_zero_to_the_left_boundary() {
+        let mut buf = [b' '; 11];
+        write_num(&mut buf, 0, 4, 4);
+        assert_eq!(&buf[4..8], b"0000");
+    }
+
+    #[test]
+    fn width_zero_never_writes() {
+        let mut buf = [b' '; 11];
+        write_num(&mut buf, 42, 4, 0);
         assert_eq!(buf, [b' '; 11]);
     }
 }

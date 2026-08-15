@@ -73,6 +73,9 @@ pub fn is_leap(y: u16) -> bool {
 /// Returns the number of days elapsed since January 1st of the same year.
 pub fn days_since_new_year(year: u16, month: u8, day: u8) -> u16 {
     const DAYS_SO_FAR: [u16; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    if !(1..=12).contains(&month) {
+        return 0;
+    }
     (if is_leap(year) && month > 2 { 1 } else { 0 })
         + DAYS_SO_FAR[(month - 1) as usize]
         + day as u16
@@ -309,6 +312,9 @@ pub fn convert_to_12_hour(date_time: &mut DateTime) -> bool {
 /// Returns the number of days in a month, handling leap years for February.
 pub fn days_in_month(month: u8, year: u16) -> u8 {
     const DAYS_IN_MONTH: [u8; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+    if !(1..=12).contains(&month) {
+        return 0;
+    }
     let mut days = DAYS_IN_MONTH[(month - 1) as usize];
     if month == 2 && is_leap(year) {
         days += 1;
@@ -416,10 +422,21 @@ mod tests {
     }
 
     #[test]
-    fn days_in_month_leap() {
+    fn days_in_month_handles_invalid_and_leap_months() {
+        assert_eq!(days_in_month(0, 2024), 0);
+        assert_eq!(days_in_month(13, 2024), 0);
         assert_eq!(days_in_month(2, 2023), 28);
         assert_eq!(days_in_month(2, 2024), 29);
         assert_eq!(days_in_month(4, 2024), 30);
-        assert_eq!(days_in_month(1, 2024), 31);
+    }
+
+    #[test]
+    fn days_since_new_year_handles_invalid_and_boundary_months() {
+        assert_eq!(days_since_new_year(2024, 0, 15), 0);
+        assert_eq!(days_since_new_year(2024, 13, 15), 0);
+        assert_eq!(days_since_new_year(2023, 1, 1), 1);
+        assert_eq!(days_since_new_year(2023, 12, 31), 365);
+        assert_eq!(days_since_new_year(2024, 2, 29), 60);
+        assert_eq!(days_since_new_year(2024, 12, 31), 366);
     }
 }

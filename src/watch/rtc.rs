@@ -298,11 +298,38 @@ static mut COMP_CALLBACKS: [CompCallback; N_COMP_CB] = [const {
     }
 }; N_COMP_CB];
 
+/// The number of seconds in the 2020..2083 RTC year cycle.
+const RTC_YEAR_CYCLE_SECONDS: u32 = (64 * 365 + 16) * 24 * 60 * 60;
+
+/// Whether a compare target is due or in the current RTC cycle's future.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TargetTiming {
+    Due,
+    Future(u32),
+}
+
+/// Classifies a target using calendar ordering, including the RTC year wrap.
+///
+/// Only a target in year 0 while `now` is in year 63 is treated as a future
+/// target. Other targets earlier in the same 64-year cycle remain due.
+fn target_timing(now: DateTime, target: DateTime) -> TargetTiming {
+    let now_timestamp = crate::watch::utility::date_time_to_unix_time(now, 0);
+    let target_timestamp = crate::watch::utility::date_time_to_unix_time(target, 0);
+    if target_timestamp <= now_timestamp {
+        if now.year == 63 && target.year == 0 {
+            TargetTiming::Future(target_timestamp + RTC_YEAR_CYCLE_SECONDS)
+        } else {
+            TargetTiming::Due
+        }
+    } else {
+        TargetTiming::Future(target_timestamp)
+    }
+}
+
 /// Arms the earliest pending compare callback via the one-shot alarm.
 fn schedule_next_compare() {
     unsafe {
         let now = get_date_time();
-        let now_timestamp = crate::watch::utility::date_time_to_unix_time(now, 0);
         let mut earliest: Option<(u32, u32)> = None;
         for slot in COMP_CALLBACKS.iter() {
             if !slot.enabled {
@@ -312,8 +339,7 @@ fn schedule_next_compare() {
             if !target.is_valid() {
                 continue;
             }
-            let target_timestamp = crate::watch::utility::date_time_to_unix_time(target, 0);
-            if target_timestamp >= now_timestamp
+            if let TargetTiming::Future(target_timestamp) = target_timing(now, target)
                 && (earliest.is_none() || target_timestamp < earliest.unwrap().0)
             {
                 earliest = Some((target_timestamp, slot.target));
@@ -330,12 +356,27 @@ pub fn register_comp_callback(callback: Callback, target: u32, index: usize) {
     if index >= N_COMP_CB || !DateTime::from_reg(target).is_valid() {
         return;
     }
+    let now = get_date_time();
+    register_comp_callback_at(callback, target, index, now);
+    schedule_next_compare();
+}
+
+fn register_comp_callback_at(callback: Callback, target: u32, index: usize, now: DateTime) {
+    if index >= N_COMP_CB || !DateTime::from_reg(target).is_valid() {
+        return;
+    }
     unsafe {
         COMP_CALLBACKS[index].target = target;
         COMP_CALLBACKS[index].callback = Some(callback);
         COMP_CALLBACKS[index].enabled = true;
     }
-    schedule_next_compare();
+
+    if matches!(
+        target_timing(now, DateTime::from_reg(target)),
+        TargetTiming::Due
+    ) {
+        dispatch_due_callbacks(now);
+    }
 }
 
 /// Registers a compare callback without re-arming the alarm.
@@ -371,30 +412,110 @@ pub fn disable_comp_callback_no_schedule(index: usize) {
     }
 }
 
+/// Collects due callbacks and disables their slots before any callback runs.
+///
+/// Keeping callback invocation outside the table mutation is important: a
+/// callback may register, disable, or replace another compare callback.
+fn collect_due_callbacks(
+    now: DateTime,
+    due_callbacks: &mut [Option<Callback>; N_COMP_CB],
+) -> usize {
+    let mut due_count = 0;
+    unsafe {
+        for slot in COMP_CALLBACKS.iter_mut() {
+            let target = DateTime::from_reg(slot.target);
+            if slot.enabled
+                && target.is_valid()
+                && matches!(target_timing(now, target), TargetTiming::Due)
+            {
+                slot.enabled = false;
+                if let Some(callback) = slot.callback {
+                    due_callbacks[due_count] = Some(callback);
+                    due_count += 1;
+                }
+            }
+        }
+    }
+    due_count
+}
+
+/// Maximum number of immediate callback batches handled by one dispatch.
+///
+/// A callback is allowed to re-register an already-due target, but a callback
+/// that continually does so must not keep the interrupt handler running
+/// forever. The bound is also large enough to drain a complete pass over the
+/// fixed-size compare table deterministically.
+const MAX_IMMEDIATE_DISPATCHES: usize = N_COMP_CB;
+
+// Registration can happen from a callback. This state makes nested dispatch
+// share the same finite budget instead of allowing each registration to start
+// an unbounded new dispatch loop.
+static mut COMPARE_DISPATCH_ACTIVE: bool = false;
+static mut COMPARE_DISPATCH_REMAINING: usize = 0;
+
+/// Disables due callbacks without invoking them.
+fn discard_due_callbacks(now: DateTime) {
+    let mut discarded = [None; N_COMP_CB];
+    let _ = collect_due_callbacks(now, &mut discarded);
+}
+
+/// Fires any compare callbacks whose target time has been reached.
+///
+/// Called from the one-shot alarm that armed the earliest slot. Each batch is
+/// collected before invocation, preserving reentrancy semantics. Registrations
+/// made by callbacks for a target at or before the dispatch time are collected
+/// in a later batch, up to a bounded limit.
+fn dispatch_due_callbacks(now: DateTime) {
+    let outermost = critical_section::with(|_| unsafe {
+        if COMPARE_DISPATCH_ACTIVE {
+            false
+        } else {
+            COMPARE_DISPATCH_ACTIVE = true;
+            COMPARE_DISPATCH_REMAINING = MAX_IMMEDIATE_DISPATCHES;
+            true
+        }
+    });
+
+    while critical_section::with(|_| unsafe { COMPARE_DISPATCH_REMAINING != 0 }) {
+        let mut due_callbacks = [None; N_COMP_CB];
+        let due_count = collect_due_callbacks(now, &mut due_callbacks);
+        if due_count == 0 {
+            break;
+        }
+        critical_section::with(|_| unsafe {
+            COMPARE_DISPATCH_REMAINING -= 1;
+        });
+
+        // The callback table is no longer mutably borrowed. Callbacks can
+        // safely mutate the compare queue, including replacing entries in this
+        // dispatch.
+        for callback in due_callbacks[..due_count].iter().flatten() {
+            callback();
+        }
+    }
+
+    if outermost {
+        // Do not leave an already-due callback armed for a later alarm attempt,
+        // which would otherwise be ignored by schedule_next_compare.
+        let exhausted = critical_section::with(|_| unsafe { COMPARE_DISPATCH_REMAINING == 0 });
+        if exhausted {
+            discard_due_callbacks(now);
+        }
+        critical_section::with(|_| unsafe {
+            COMPARE_DISPATCH_ACTIVE = false;
+        });
+    }
+}
+
 /// Fires any compare callbacks whose target time has been reached.
 ///
 /// Called from the one-shot alarm that armed the earliest slot.
 fn compare_tick() {
-    unsafe {
-        let now = get_date_time();
-        let now_timestamp = crate::watch::utility::date_time_to_unix_time(now, 0);
-        for slot in COMP_CALLBACKS.iter_mut() {
-            let target = DateTime::from_reg(slot.target);
-            let target_timestamp = if target.is_valid() {
-                crate::watch::utility::date_time_to_unix_time(target, 0)
-            } else {
-                u32::MAX
-            };
-            if slot.enabled && target_timestamp <= now_timestamp {
-                slot.enabled = false;
-                if let Some(cb) = slot.callback {
-                    cb();
-                }
-            }
-        }
-        // Re-arm the next pending slot.
-        schedule_next_compare();
-    }
+    let now = get_date_time();
+    dispatch_due_callbacks(now);
+
+    // Re-arm the next pending slot after all callbacks have run.
+    schedule_next_compare();
 }
 
 /// Schedules a one-shot wakeup at the given time.
@@ -534,4 +655,207 @@ pub fn freqcorr_read() -> i16 {
     let data = rtc().freqcorr().read().bits() as i16;
     let value = data & 0x7F;
     if data & 0x80 != 0 { -value } else { value }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+
+    static DISPATCH_ORDER: AtomicU16 = AtomicU16::new(0);
+    static IMMEDIATE_DISPATCH_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    fn first_callback() {
+        DISPATCH_ORDER
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |order| {
+                Some(order * 10 + 1)
+            })
+            .unwrap();
+        // These mutations must not affect the already-collected due snapshot.
+        register_comp_callback_no_schedule(third_callback, future_target().to_reg(), 2);
+        disable_comp_callback_no_schedule(3);
+        register_comp_callback_no_schedule(second_callback, future_target().to_reg(), 4);
+    }
+
+    fn second_callback() {
+        DISPATCH_ORDER
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |order| {
+                Some(order * 10 + 2)
+            })
+            .unwrap();
+    }
+
+    fn third_callback() {
+        DISPATCH_ORDER
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |order| {
+                Some(order * 10 + 3)
+            })
+            .unwrap();
+    }
+
+    fn due_target() -> DateTime {
+        DateTime {
+            year: 0,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        }
+    }
+
+    fn future_target() -> DateTime {
+        DateTime {
+            year: 0,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 1,
+        }
+    }
+
+    fn immediate_callback() {
+        IMMEDIATE_DISPATCH_COUNT.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn date_time(year: u8, month: u8, day: u8, hour: u8, minute: u8, second: u8) -> DateTime {
+        DateTime {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            second,
+        }
+    }
+
+    #[test]
+    fn wrapped_successor_is_selected_as_next_cycle_future() {
+        let now = date_time(63, 12, 31, 23, 59, 0);
+        let target = date_time(0, 1, 1, 0, 0, 0);
+
+        assert!(matches!(
+            target_timing(now, target),
+            TargetTiming::Future(_)
+        ));
+    }
+
+    #[test]
+    fn same_cycle_past_target_is_due() {
+        let now = date_time(63, 12, 31, 23, 59, 0);
+        let target = date_time(63, 12, 31, 23, 58, 59);
+
+        assert_eq!(target_timing(now, target), TargetTiming::Due);
+    }
+
+    #[test]
+    fn ordinary_future_target_remains_future() {
+        let now = date_time(10, 6, 15, 12, 0, 0);
+        let target = date_time(10, 6, 15, 12, 0, 1);
+
+        assert!(matches!(
+            target_timing(now, target),
+            TargetTiming::Future(_)
+        ));
+    }
+
+    fn self_rescheduling_callback() {
+        IMMEDIATE_DISPATCH_COUNT.fetch_add(1, Ordering::SeqCst);
+        let target = due_target().to_reg();
+        register_comp_callback_at(self_rescheduling_callback, target, 0, due_target());
+    }
+
+    #[test]
+    fn registration_at_or_before_dispatch_time_runs_immediately() {
+        let now_target = future_target();
+        let now = now_target;
+        let past = due_target();
+        unsafe {
+            COMP_CALLBACKS.fill(CompCallback {
+                target: 0,
+                callback: None,
+                enabled: false,
+            });
+        }
+        IMMEDIATE_DISPATCH_COUNT.store(0, Ordering::SeqCst);
+        register_comp_callback_at(immediate_callback, past.to_reg(), 0, now);
+        assert_eq!(IMMEDIATE_DISPATCH_COUNT.load(Ordering::SeqCst), 1);
+        unsafe { assert!(!COMP_CALLBACKS[0].enabled) };
+
+        register_comp_callback_at(immediate_callback, due_target().to_reg(), 1, now);
+        assert_eq!(IMMEDIATE_DISPATCH_COUNT.load(Ordering::SeqCst), 2);
+        unsafe { assert!(!COMP_CALLBACKS[1].enabled) };
+    }
+
+    #[test]
+    fn self_rescheduling_due_callback_is_bounded() {
+        let target = due_target().to_reg();
+        let now = due_target();
+        unsafe {
+            COMP_CALLBACKS.fill(CompCallback {
+                target: 0,
+                callback: None,
+                enabled: false,
+            });
+        }
+        IMMEDIATE_DISPATCH_COUNT.store(0, Ordering::SeqCst);
+        register_comp_callback_at(self_rescheduling_callback, target, 0, now);
+        assert_eq!(
+            IMMEDIATE_DISPATCH_COUNT.load(Ordering::SeqCst),
+            MAX_IMMEDIATE_DISPATCHES
+        );
+        unsafe { assert!(!COMP_CALLBACKS[0].enabled) };
+    }
+
+    #[test]
+    fn due_callbacks_are_collected_before_reentrant_dispatch() {
+        DISPATCH_ORDER.store(0, Ordering::SeqCst);
+        let target = due_target().to_reg();
+        unsafe {
+            COMP_CALLBACKS.fill(CompCallback {
+                target: 0,
+                callback: None,
+                enabled: false,
+            });
+            COMP_CALLBACKS[0] = CompCallback {
+                target,
+                callback: Some(first_callback),
+                enabled: true,
+            };
+            COMP_CALLBACKS[1] = CompCallback {
+                target,
+                callback: Some(second_callback),
+                enabled: true,
+            };
+            COMP_CALLBACKS[3] = CompCallback {
+                target,
+                callback: Some(third_callback),
+                enabled: true,
+            };
+        }
+
+        let now = due_target();
+        let mut due_callbacks = [None; N_COMP_CB];
+        let due_count = collect_due_callbacks(now, &mut due_callbacks);
+        assert_eq!(due_count, 3);
+        unsafe {
+            assert!(!COMP_CALLBACKS[0].enabled);
+            assert!(!COMP_CALLBACKS[1].enabled);
+            assert!(!COMP_CALLBACKS[3].enabled);
+        }
+
+        for callback in due_callbacks[..due_count].iter().flatten() {
+            callback();
+        }
+
+        assert_eq!(DISPATCH_ORDER.load(Ordering::SeqCst), 123);
+        unsafe {
+            assert_eq!(COMP_CALLBACKS[2].callback, Some(third_callback));
+            assert_eq!(COMP_CALLBACKS[4].callback, Some(second_callback));
+            assert!(!COMP_CALLBACKS[3].enabled);
+            assert!(COMP_CALLBACKS[2].enabled);
+            assert!(COMP_CALLBACKS[4].enabled);
+        }
+    }
 }

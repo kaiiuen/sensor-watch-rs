@@ -80,26 +80,26 @@ impl BabyKicksFace {
         BabyKicksFace::new_static()
     }
 
-    fn play_failure_sound_if_beep_is_on() {
-        if movement::button_should_sound() {
+    fn play_failure_sound_if_beep_is_on(settings: &Settings) {
+        if settings.button_should_sound() {
             movement::play_note(Note::E7, 0);
         }
     }
 
-    fn play_successful_increment_sound_if_beep_is_on() {
-        if movement::button_should_sound() {
+    fn play_successful_increment_sound_if_beep_is_on(settings: &Settings) {
+        if settings.button_should_sound() {
             movement::play_note(Note::E6, 0);
         }
     }
 
-    fn play_successful_decrement_sound_if_beep_is_on() {
-        if movement::button_should_sound() {
+    fn play_successful_decrement_sound_if_beep_is_on(settings: &Settings) {
+        if settings.button_should_sound() {
             movement::play_note(Note::D6, 0);
         }
     }
 
-    fn play_button_sound_if_beep_is_on() {
-        if movement::button_should_sound() {
+    fn play_button_sound_if_beep_is_on(settings: &Settings) {
+        if settings.button_should_sound() {
             movement::play_note(Note::C7, 0);
         }
     }
@@ -301,7 +301,7 @@ impl WatchFace for BabyKicksFace {
         // Sleep animation handling is not ported; nothing to do here.
     }
 
-    fn loop_(&mut self, event: Event, _settings: &mut Settings) {
+    fn loop_(&mut self, event: Event, settings: &mut Settings) {
         match event {
             Event::Activate => {
                 self.currently_displayed = true;
@@ -317,15 +317,15 @@ impl WatchFace for BabyKicksFace {
                         self.start();
                         self.update_display_mode();
                         self.update_display();
-                        Self::play_button_sound_if_beep_is_on();
+                        Self::play_button_sound_if_beep_is_on(settings);
                     }
                     BabyKicksMode::Active => {
                         self.increment_counts();
                         self.update_display();
-                        Self::play_successful_increment_sound_if_beep_is_on();
+                        Self::play_successful_increment_sound_if_beep_is_on(settings);
                     }
                     BabyKicksMode::TimedOut => {
-                        Self::play_failure_sound_if_beep_is_on();
+                        Self::play_failure_sound_if_beep_is_on(settings);
                     }
                     BabyKicksMode::LeMode => {}
                 }
@@ -335,14 +335,14 @@ impl WatchFace for BabyKicksFace {
                 match self.mode {
                     BabyKicksMode::Active => {
                         if !self.successfully_undo() {
-                            Self::play_failure_sound_if_beep_is_on();
+                            Self::play_failure_sound_if_beep_is_on(settings);
                         } else {
                             self.update_display();
-                            Self::play_successful_decrement_sound_if_beep_is_on();
+                            Self::play_successful_decrement_sound_if_beep_is_on(settings);
                         }
                     }
                     BabyKicksMode::Splash | BabyKicksMode::TimedOut => {
-                        Self::play_failure_sound_if_beep_is_on();
+                        Self::play_failure_sound_if_beep_is_on(settings);
                     }
                     BabyKicksMode::LeMode => {}
                 }
@@ -355,10 +355,10 @@ impl WatchFace for BabyKicksFace {
                         // This shows the splash screen because `reset` sets
                         // `mode` to `Splash`.
                         self.update_display();
-                        Self::play_button_sound_if_beep_is_on();
+                        Self::play_button_sound_if_beep_is_on(settings);
                     }
                     BabyKicksMode::Splash => {
-                        Self::play_failure_sound_if_beep_is_on();
+                        Self::play_failure_sound_if_beep_is_on(settings);
                     }
                     BabyKicksMode::LeMode => {}
                 }
@@ -374,7 +374,7 @@ impl WatchFace for BabyKicksFace {
                     BabyKicksMode::LeMode | BabyKicksMode::Splash => {}
                 }
             }
-            _ => movement::default_loop_handler(event, _settings),
+            _ => movement::default_loop_handler(event, settings),
         }
 
         self.clear_now();

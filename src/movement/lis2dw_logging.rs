@@ -42,7 +42,7 @@ impl DataPoint {
 /// The LIS2DW logging face state.
 pub struct Lis2dwLoggingFace {
     data: [DataPoint; LIS2DW_LOGGING_NUM_DATA_POINTS as usize],
-    data_points: u8,
+    data_points: u16,
     display_index: u8,
     log_ticks: u8,
     axis_index: u8,
@@ -168,7 +168,7 @@ impl Lis2dwLoggingFace {
         self.data[pos].x_interrupts = self.x_interrupts_this_hour;
         self.data[pos].y_interrupts = self.y_interrupts_this_hour;
         self.data[pos].z_interrupts = self.z_interrupts_this_hour;
-        self.data_points += 1;
+        self.data_points = self.data_points.saturating_add(1);
         self.x_interrupts_this_hour = 0;
         self.y_interrupts_this_hour = 0;
         self.z_interrupts_this_hour = 0;

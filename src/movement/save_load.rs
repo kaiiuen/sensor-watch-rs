@@ -88,7 +88,7 @@ impl SaveLoadFace {
         self.slot[self.index as usize] = savefile;
     }
 
-    fn load(&mut self, settings: &mut Settings) {
+    fn load(&mut self, settings: &mut Settings) -> Result<(), ()> {
         let s = self.slot[self.index as usize];
         deepsleep::store_backup_data(s.b0, 0);
         settings.reg = s.b0;
@@ -99,6 +99,7 @@ impl SaveLoadFace {
         deepsleep::store_backup_data(s.b5, 5);
         deepsleep::store_backup_data(s.b6, 6);
         deepsleep::store_backup_data(s.b7, 7);
+        rtc::set_date_time(s.rtc)
     }
 
     fn update_display(&self) {
@@ -157,8 +158,12 @@ impl WatchFace for SaveLoadFace {
             }
             Event::Button(Button::Alarm, ButtonEvent::LongPress) => {
                 if self.slot[self.index as usize].version != 0 {
-                    self.load(settings);
-                    slcd::display_string("Loaded", 4);
+                    let message = if self.load(settings).is_ok() {
+                        "Loaded"
+                    } else {
+                        "Error "
+                    };
+                    slcd::display_string(message, 4);
                     self.update_timeout = 3;
                 }
             }
@@ -167,4 +172,63 @@ impl WatchFace for SaveLoadFace {
     }
 
     fn resign(&mut self, _settings: &mut Settings) {}
+}
+
+#[cfg(all(test, feature = "hostmock", not(target_arch = "arm")))]
+mod tests {
+    use super::*;
+    use crate::movement::types::WatchFace;
+    use crate::watch::seam;
+    use sensor_watch_core::mock_hw::MockHw;
+
+    #[test]
+    fn malformed_saved_rtc_reports_error_after_restoring_state() {
+        let mut mock = MockHw::new();
+        let mut settings = Settings::default();
+        let mut face = SaveLoadFace::new();
+        let registers = [
+            0x1234_5678,
+            0x0102_0304,
+            0x1111_2222,
+            0x3333_4444,
+            0x5555_6666,
+            0x7777_8888,
+            0x9999_AAAA,
+            0xBBBB_CCCC,
+        ];
+        face.slot[0] = Savefile {
+            version: 1,
+            b0: registers[0],
+            b1: registers[1],
+            b2: registers[2],
+            b3: registers[3],
+            b4: registers[4],
+            b5: registers[5],
+            b6: registers[6],
+            b7: registers[7],
+            rtc: rtc::DateTime {
+                second: 0,
+                minute: 0,
+                hour: 0,
+                day: 0,
+                month: 0,
+                year: 0,
+            },
+        };
+
+        face.activate(&settings);
+        seam::with_hw(&mut mock, || face.loop_(Event::Activate, &mut settings));
+        seam::with_hw(&mut mock, || {
+            face.loop_(
+                Event::Button(Button::Alarm, ButtonEvent::LongPress),
+                &mut settings,
+            )
+        });
+
+        assert_eq!(mock.text(), "SL 0Error");
+        assert_eq!(settings.reg, registers[0]);
+        for (reg, expected) in registers.iter().enumerate() {
+            assert_eq!(mock.backup(reg as u8), *expected);
+        }
+    }
 }

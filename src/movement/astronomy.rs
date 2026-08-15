@@ -23,6 +23,14 @@ const ASTRONOMY_MODE_DISPLAYING_RA: u8 = 4;
 const ASTRONOMY_MODE_DISPLAYING_DEC: u8 = 5;
 const ASTRONOMY_MODE_DISPLAYING_DIST: u8 = 6;
 
+fn coordinate_label(mode: u8) -> &'static str {
+    match mode {
+        ASTRONOMY_MODE_DISPLAYING_ALT => "aL",
+        ASTRONOMY_MODE_DISPLAYING_AZI => "aZ",
+        _ => "",
+    }
+}
+
 /// A right ascension value.
 struct Ra {
     hours: u8,
@@ -160,8 +168,9 @@ impl AstronomyFace {
                 let name = BODY_NAMES[self.active_body_index as usize].as_bytes();
                 buf[0] = name[0];
                 buf[1] = name[1];
-                buf[2] = b'a';
-                buf[3] = b'Z';
+                let label = coordinate_label(self.mode).as_bytes();
+                buf[2] = label[0];
+                buf[3] = label[1];
                 let v = libm::round(self.altitude * 100.0) as i32;
                 write_num(&mut buf, v.unsigned_abs(), 4, 6);
                 slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
@@ -170,8 +179,9 @@ impl AstronomyFace {
                 let name = BODY_NAMES[self.active_body_index as usize].as_bytes();
                 buf[0] = name[0];
                 buf[1] = name[1];
-                buf[2] = b'a';
-                buf[3] = b'Z';
+                let label = coordinate_label(self.mode).as_bytes();
+                buf[2] = label[0];
+                buf[3] = label[1];
                 let v = libm::round(self.azimuth * 100.0) as i32;
                 write_num(&mut buf, v.unsigned_abs(), 4, 6);
                 slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
@@ -237,6 +247,17 @@ fn write_num(buf: &mut [u8; 11], value: u32, offset: usize, width: usize) {
             break;
         }
         i -= 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn coordinate_labels_match_altitude_and_azimuth_screens() {
+        assert_eq!(coordinate_label(ASTRONOMY_MODE_DISPLAYING_ALT), "aL");
+        assert_eq!(coordinate_label(ASTRONOMY_MODE_DISPLAYING_AZI), "aZ");
     }
 }
 

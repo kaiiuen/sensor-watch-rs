@@ -47,6 +47,10 @@ impl Duration {
     }
 }
 
+fn elapsed_ticks(stop: u32, start: u32) -> u32 {
+    stop.wrapping_sub(start)
+}
+
 fn ticks_to_duration(mut ticks: u32) -> Duration {
     let mut hours = 0u8;
     let mut days = 0u16;
@@ -108,7 +112,10 @@ impl DualTimerFace {
 
     fn stop_timer(&mut self, timer: usize) {
         self.stop_ticks[timer] = unsafe { TICKS };
-        self.duration[timer] = ticks_to_duration(self.stop_ticks[timer] - self.start_ticks[timer]);
+        self.duration[timer] = ticks_to_duration(elapsed_ticks(
+            self.stop_ticks[timer],
+            self.start_ticks[timer],
+        ));
         self.running[timer] = false;
         if !self.running[1 - timer] {
             unsafe { IS_RUNNING = false };
@@ -119,15 +126,17 @@ impl DualTimerFace {
     fn display(&mut self) {
         let mut buf = [0u8; 11];
         let timer = if self.running[self.show as usize] {
-            ticks_to_duration(
-                self.stop_ticks[self.show as usize] - self.start_ticks[self.show as usize],
-            )
+            ticks_to_duration(elapsed_ticks(
+                self.stop_ticks[self.show as usize],
+                self.start_ticks[self.show as usize],
+            ))
         } else {
             self.duration[self.show as usize]
         };
-        let other = ticks_to_duration(
-            self.stop_ticks[!self.show as usize] - self.start_ticks[!self.show as usize],
-        );
+        let other = ticks_to_duration(elapsed_ticks(
+            self.stop_ticks[!self.show as usize],
+            self.start_ticks[!self.show as usize],
+        ));
         if timer.days > 0 {
             let days = timer.days.min(99);
             buf[0] = b'0' + (days / 10) as u8;
@@ -172,7 +181,11 @@ impl DualTimerFace {
         } else {
             other.centiseconds as u16
         };
-        if self.stop_ticks[!self.show as usize] - self.start_ticks[!self.show as usize] > 0 {
+        if elapsed_ticks(
+            self.stop_ticks[!self.show as usize],
+            self.start_ticks[!self.show as usize],
+        ) > 0
+        {
             let mut ob = [0u8; 3];
             ob[0] = b'0' + (oi / 10) as u8;
             ob[1] = b'0' + (oi % 10) as u8;
@@ -190,9 +203,14 @@ impl DualTimerFace {
 
 #[cfg(test)]
 mod tests {
-    use super::ticks_to_duration;
+    use super::{elapsed_ticks, ticks_to_duration};
 
     const SECONDS_PER_DAY: u32 = 24 * 60 * 60;
+
+    #[test]
+    fn elapsed_ticks_is_safe_across_counter_wrap() {
+        assert_eq!(elapsed_ticks(5, u32::MAX - 5), 11);
+    }
 
     #[test]
     fn duration_keeps_counting_past_u8_day_limit() {
@@ -251,7 +269,7 @@ impl WatchFace for DualTimerFace {
             }
             Event::Tick => {
                 if unsafe { IS_RUNNING } {
-                    unsafe { TICKS += 1 };
+                    unsafe { TICKS = TICKS.wrapping_add(1) };
                     if self.running[0] {
                         self.stop_ticks[0] = unsafe { TICKS };
                     }

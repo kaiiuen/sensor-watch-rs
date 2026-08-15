@@ -843,12 +843,32 @@ fn handle_background_tasks() {
     }
 }
 
+/// The number of seconds in the 2020..2083 RTC year cycle.
+const RTC_YEAR_CYCLE_SECONDS: u32 = (64 * 365 + 16) * 24 * 60 * 60;
+
+/// Returns true when `target` is in the current RTC cycle's future.
+///
+/// The RTC year field is six bits wide. Consequently, year 0 is the next
+/// cycle when the current year is 63, rather than a stale same-cycle target.
+fn background_task_is_future(now: DateTime, target: DateTime) -> bool {
+    let now_timestamp = utility::date_time_to_unix_time(now, 0);
+    let mut target_timestamp = utility::date_time_to_unix_time(target, 0);
+    if target_timestamp <= now_timestamp {
+        if now.year == 63 && target.year == 0 {
+            target_timestamp += RTC_YEAR_CYCLE_SECONDS;
+        } else {
+            return false;
+        }
+    }
+    target_timestamp > now_timestamp
+}
+
 /// Handles scheduled background tasks.
 fn handle_scheduled_tasks() {
     unsafe {
         let date_time = rtc::get_date_time();
         for (i, task) in SCHEDULED_TASKS.iter_mut().enumerate() {
-            if *task != 0 && *task <= date_time.to_reg() {
+            if *task != 0 && !background_task_is_future(date_time, DateTime::from_reg(*task)) {
                 *task = 0;
                 if let Some(face) = WATCH_FACES[i].as_deref_mut() {
                     face.loop_(Event::BackgroundTask, &mut MOVEMENT_STATE.settings);
@@ -925,6 +945,9 @@ pub fn save_settings() {
 
 /// Moves to the given watch face.
 pub fn move_to_face(watch_face_index: usize) {
+    if watch_face_index >= MOVEMENT_NUM_FACES {
+        return;
+    }
     unsafe {
         MOVEMENT_STATE.watch_face_changed = true;
         MOVEMENT_STATE.next_face_idx = watch_face_index;
@@ -964,9 +987,12 @@ pub fn cancel_background_task() {
 
 /// Schedules a background task for a specific face.
 pub fn schedule_background_task_for_face(watch_face_index: usize, date_time: DateTime) {
+    if watch_face_index >= MOVEMENT_NUM_FACES || !date_time.is_valid() {
+        return;
+    }
     unsafe {
         let now = rtc::get_date_time();
-        if date_time.to_reg() > now.to_reg() {
+        if background_task_is_future(now, date_time) {
             SCHEDULED_TASKS[watch_face_index] = date_time.to_reg();
         }
     }
@@ -974,6 +1000,9 @@ pub fn schedule_background_task_for_face(watch_face_index: usize, date_time: Dat
 
 /// Cancels the background task for a specific face.
 pub fn cancel_background_task_for_face(watch_face_index: usize) {
+    if watch_face_index >= MOVEMENT_NUM_FACES {
+        return;
+    }
     unsafe {
         SCHEDULED_TASKS[watch_face_index] = 0;
     }
@@ -1579,12 +1608,40 @@ pub fn set_tick_rate(show_seconds: bool) {
 /// The compare-callback slot reserved for the minute-wake timer.
 const MINUTE_WAKE_INDEX: usize = 7;
 
+/// Returns the top of the minute after `now`.
+fn next_minute_target(mut target: DateTime) -> DateTime {
+    target.second = 0;
+    if target.minute == 59 {
+        target.minute = 0;
+        if target.hour == 23 {
+            target.hour = 0;
+            let days_in_month = utility::days_in_month(
+                target.month,
+                target.year as u16 + rtc::WATCH_RTC_REFERENCE_YEAR,
+            );
+            if target.day == days_in_month {
+                target.day = 1;
+                if target.month == 12 {
+                    target.month = 1;
+                    target.year = (target.year + 1) % 64;
+                } else {
+                    target.month += 1;
+                }
+            } else {
+                target.day += 1;
+            }
+        } else {
+            target.hour += 1;
+        }
+    } else {
+        target.minute += 1;
+    }
+    target
+}
+
 /// Arms a one-shot wake at the top of the next minute via the compare queue.
 fn arm_minute_wake() {
-    let now = rtc::get_date_time();
-    let mut target = now;
-    target.second = 0;
-    target.minute = (target.minute + 1) % 60;
+    let target = next_minute_target(rtc::get_date_time());
     rtc::register_comp_callback(cb_minute_tick, target.to_reg(), MINUTE_WAKE_INDEX);
 }
 
@@ -2014,4 +2071,171 @@ fn is_press(ev: &Event) -> bool {
             | Event::Button(Button::Mode, ButtonEvent::Down)
             | Event::Button(Button::Alarm, ButtonEvent::Down)
     )
+}
+
+#[cfg(test)]
+mod minute_wake_tests {
+    use super::*;
+
+    #[test]
+    fn background_task_year_wrap_is_future() {
+        let now = DateTime {
+            year: 63,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 59,
+        };
+        let target = DateTime {
+            year: 0,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+
+        assert!(background_task_is_future(now, target));
+    }
+
+    #[test]
+    fn background_task_year_wrap_becomes_due() {
+        let now = DateTime {
+            year: 0,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        let target = DateTime {
+            year: 0,
+            month: 1,
+            day: 1,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+
+        assert!(!background_task_is_future(now, target));
+    }
+
+    #[test]
+    fn background_task_same_cycle_stale_target_is_due() {
+        let now = DateTime {
+            year: 12,
+            month: 6,
+            day: 10,
+            hour: 8,
+            minute: 30,
+            second: 0,
+        };
+        let target = DateTime {
+            year: 12,
+            month: 6,
+            day: 10,
+            hour: 8,
+            minute: 29,
+            second: 59,
+        };
+
+        assert!(!background_task_is_future(now, target));
+    }
+
+    #[test]
+    fn background_task_ordinary_dates_preserve_ordering() {
+        let now = DateTime {
+            year: 12,
+            month: 6,
+            day: 10,
+            hour: 8,
+            minute: 30,
+            second: 0,
+        };
+        let future = DateTime {
+            year: 12,
+            month: 6,
+            day: 10,
+            hour: 8,
+            minute: 30,
+            second: 1,
+        };
+        let stale = DateTime {
+            year: 12,
+            month: 6,
+            day: 10,
+            hour: 8,
+            minute: 29,
+            second: 59,
+        };
+
+        assert!(background_task_is_future(now, future));
+        assert!(!background_task_is_future(now, stale));
+    }
+
+    #[test]
+    fn minute_wake_rolls_from_end_of_day_to_next_day() {
+        let target = next_minute_target(DateTime {
+            year: 4,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 42,
+        });
+
+        assert_eq!(
+            target,
+            DateTime {
+                year: 5,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn minute_wake_wraps_from_last_supported_year() {
+        let target = next_minute_target(DateTime {
+            year: 63,
+            month: 12,
+            day: 31,
+            hour: 23,
+            minute: 59,
+            second: 42,
+        });
+
+        assert_eq!(
+            target,
+            DateTime {
+                year: 0,
+                month: 1,
+                day: 1,
+                hour: 0,
+                minute: 0,
+                second: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn minute_wake_rolls_through_leap_day() {
+        let target = next_minute_target(DateTime {
+            year: 4,
+            month: 2,
+            day: 29,
+            hour: 23,
+            minute: 59,
+            second: 1,
+        });
+
+        assert_eq!(target.day, 1);
+        assert_eq!(target.month, 3);
+        assert_eq!(target.minute, 0);
+        assert_eq!(target.second, 0);
+    }
 }

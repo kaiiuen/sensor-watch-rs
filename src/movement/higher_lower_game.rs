@@ -163,6 +163,9 @@ impl HigherLowerGameFace {
             12 => {
                 slcd::display_character(b'Q', display_position);
             }
+            11 => {
+                slcd::display_character(b'-', display_position);
+            }
             _ => {
                 slcd::display_character((card.value - MIN_CARD_VALUE) + b'0', display_position);
             }
@@ -273,6 +276,39 @@ impl HigherLowerGameFace {
                 slcd::display_string("GA", STATUS_DISPLAY_START);
                 self.game_state = GameState::TitleScreen;
             }
+        }
+    }
+}
+
+#[cfg(all(test, feature = "hostmock", not(target_arch = "arm")))]
+mod tests {
+    use super::{Card, GAME_BOARD_SIZE, HigherLowerGameFace};
+    use crate::watch::seam;
+    use sensor_watch_core::mock_hw::MockHw;
+
+    #[test]
+    fn render_board_position_preserves_rank_display_mapping() {
+        let mut mock = MockHw::new();
+        let mut face = HigherLowerGameFace::new();
+
+        for (value, expected) in [
+            (2, '0'),
+            (10, '8'),
+            (11, '-'),
+            (12, 'Q'),
+            (13, 'K'),
+            (14, 'A'),
+        ] {
+            face.game_board = [Card {
+                value: 0,
+                revealed: false,
+            }; GAME_BOARD_SIZE];
+            face.game_board[0] = Card {
+                value,
+                revealed: true,
+            };
+            seam::with_hw(&mut mock, || face.render_board_position(0));
+            assert_eq!(mock.chars[9], expected, "card value {value}");
         }
     }
 }

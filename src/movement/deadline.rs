@@ -94,8 +94,19 @@ impl DeadlineFace {
         self.deadlines[self.current_index] = ts;
     }
 
+    fn increment_day(date_time: &mut rtc::DateTime) {
+        let days_in_month = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+        date_time.day += 1;
+        let mut days = days_in_month[(date_time.month - 1) as usize];
+        if date_time.month == 2 && Self::is_leap(date_time.year as i16) {
+            days += 1;
+        }
+        if date_time.day > days {
+            date_time.day = 1;
+        }
+    }
+
     fn increment_date(&mut self, settings: &Settings, mut date_time: rtc::DateTime) {
-        let days_in_month = [31, 28, 31, 30, 31, 30, 30, 31, 30, 31, 30, 31];
         match self.current_page {
             0 => {
                 date_time.year = (date_time.year % 10) + 1;
@@ -103,16 +114,7 @@ impl DeadlineFace {
             1 => {
                 date_time.month = (date_time.month % 12) + 1;
             }
-            2 => {
-                date_time.day = date_time.day + 1;
-                let mut days = days_in_month[(date_time.month - 1) as usize];
-                if date_time.month == 2 && Self::is_leap(date_time.year as i16) {
-                    days += 1;
-                }
-                if date_time.day > days {
-                    date_time.day = 1;
-                }
-            }
+            2 => Self::increment_day(&mut date_time),
             3 => {
                 date_time.hour = (date_time.hour + 1) % 24;
             }
@@ -284,6 +286,50 @@ impl DeadlineFace {
             }
         }
         watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn increment_day(mut date_time: rtc::DateTime) -> rtc::DateTime {
+        DeadlineFace::increment_day(&mut date_time);
+        date_time
+    }
+
+    #[test]
+    fn increment_date_handles_month_lengths() {
+        let july_30 = rtc::DateTime {
+            second: 0,
+            minute: 0,
+            hour: 0,
+            day: 30,
+            month: 7,
+            year: 4,
+        };
+        assert_eq!(increment_day(july_30).day, 31);
+
+        let june_30 = rtc::DateTime {
+            month: 6,
+            ..july_30
+        };
+        assert_eq!(increment_day(june_30).day, 1);
+
+        let august_31 = rtc::DateTime {
+            day: 31,
+            month: 8,
+            ..july_30
+        };
+        assert_eq!(increment_day(august_31).day, 1);
+
+        let february_28 = rtc::DateTime {
+            day: 28,
+            month: 2,
+            year: 3,
+            ..july_30
+        };
+        assert_eq!(increment_day(february_28).day, 1);
     }
 }
 

@@ -59,6 +59,10 @@ fn is_valid_address(addr: u32, size: u32) -> bool {
     addr >= RWWEE_ADDR_START && addr <= RWWEE_ADDR_END && size <= RWWEE_ADDR_END - addr
 }
 
+fn valid_row_range(offset: u32, size: u32) -> bool {
+    offset.checked_add(size).is_some_and(|end| end <= ROW_SIZE)
+}
+
 fn address_for(row: u32, offset: u32, size: u32) -> Option<u32> {
     let row_offset = row.checked_mul(ROW_SIZE)?;
     let address = RWWEE_ADDR_START
@@ -83,6 +87,9 @@ pub fn read(row: u32, offset: u32, buffer: &mut [u8]) -> bool {
         Ok(size) => size,
         Err(_) => return false,
     };
+    if !valid_row_range(offset, size) {
+        return false;
+    }
     let address = match address_for(row, offset, size) {
         Some(address) => address,
         None => return false,
@@ -131,6 +138,9 @@ pub fn write(row: u32, offset: u32, buffer: &[u8]) -> bool {
         Ok(size) => size,
         Err(_) => return false,
     };
+    if !valid_row_range(offset, size) {
+        return false;
+    }
     let address = match address_for(row, offset, size) {
         Some(address) => address,
         None => return false,
@@ -572,5 +582,19 @@ mod tests {
     fn wear_entry_rejects_offset_and_length_overflow() {
         assert!(!valid_wear_entry(u32::MAX, 1, LEGACY_WEAR_HEADER_SIZE));
         assert!(!valid_wear_entry(0, usize::MAX, LEGACY_WEAR_HEADER_SIZE));
+    }
+
+    #[test]
+    fn read_and_write_reject_ranges_crossing_row_boundary() {
+        assert!(!valid_row_range(ROW_SIZE - 1, 2));
+        assert!(!valid_row_range(ROW_SIZE, 1));
+        assert!(!valid_row_range(u32::MAX, 1));
+    }
+
+    #[test]
+    fn read_and_write_allow_ranges_ending_at_row_boundary() {
+        assert!(valid_row_range(0, ROW_SIZE));
+        assert!(valid_row_range(ROW_SIZE - 1, 1));
+        assert!(valid_row_range(ROW_SIZE, 0));
     }
 }

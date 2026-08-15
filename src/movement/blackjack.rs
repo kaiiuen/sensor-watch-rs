@@ -509,6 +509,7 @@ impl WatchFace for BlackjackFace {
         if self.tap_control_on {
             movement::disable_tap_detection_if_available();
         }
+        slcd::clear_indicator(Indicator::Signal);
         self.tap_control_on = false;
     }
 }
