@@ -97,7 +97,7 @@ being covered by the passing test counts:
   30 = 365`; the separate Studio no-default-features run reports 121 tests.
   The command-scoped firmware runs report 1 test for `usb-cdc` only and 122
   tests for `hostmock,std,optical,shell-auth,usb-cdc`.
-- The current Studio mapping uses 97 real firmware faces and 14 `face_sim`
+- The current Studio mapping uses 107 real firmware faces and 4 `face_sim`
   fallback faces out of 111.
 - `PROJECT_LOG.md` contains historical snapshots that are intentionally not
   part of the public validation baseline. Those entries are retained as dated

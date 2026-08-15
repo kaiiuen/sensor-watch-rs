@@ -41,9 +41,9 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   firmware's real 7-segment character set. Shows both the sim's face counter
   and the engine's actual loaded face for catching face-switching bugs. These
   diagnostics are simulated unless a UART jig is connected. With Studio's
-  default `real-faces` feature, the simulator runs **97 real firmware faces**
+  default `real-faces` feature, the simulator runs **107 real firmware faces**
   through the `real_face.rs` host seam (see below) instead of the hand-written
-  engine, the remaining **14 faces** use `face_sim`. Host seam coverage does not
+  engine, the remaining **4 faces** use `face_sim`. Host seam coverage does not
   constitute physical hardware testing.
 - **Build & Flash** - combined panel: review the target board and component
   profile, then request a firmware build. The build preflight is explicitly
