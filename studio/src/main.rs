@@ -500,6 +500,10 @@ fn first_run_start_panel() -> Panel {
     Panel::Editor
 }
 
+fn contextual_help_allowed(welcome_active: bool) -> bool {
+    !welcome_active
+}
+
 /// Returns a usable preset name, rejecting empty and whitespace-only input.
 fn preset_name(value: &str) -> Option<&str> {
     let trimmed = value.trim();
@@ -1469,7 +1473,9 @@ impl eframe::App for StudioApp {
                     .button(label)
                     .on_hover_text("Open the beginner walkthrough for this panel");
                 self.register_anchor(self.current_panel, AnchorId::PanelHelp, &response);
-                if response.clicked() {
+                if response.clicked() && contextual_help_allowed(self.first_run) {
+                    // Welcome owns the first-run surface; never open a second
+                    // contextual overlay beneath it.
                     self.open_help_for(self.current_panel, false);
                 }
             });
@@ -2093,6 +2099,21 @@ impl StudioApp {
             viewport,
             16.0,
         );
+        let card_id = egui::Id::new(("help-card", self.help_card_generation));
+        // A moved card has an existing area rect; on its first frame use the
+        // calculated placement. Both are screen-space rectangles, matching the
+        // painter and shield geometry below.
+        let initial_card_rect = egui::Rect::from_min_size(
+            screen.min + egui::vec2(card.min.0, card.min.1),
+            egui::vec2(card.size.0, card.size.1),
+        );
+        let card_rect = ctx
+            .memory(|memory| memory.area_rect(card_id))
+            .unwrap_or(initial_card_rect);
+        let card_exclusion = AnchorRect {
+            min: (card_rect.min.x, card_rect.min.y),
+            max: (card_rect.max.x, card_rect.max.y),
+        };
 
         let tint = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150);
         let lower_layer = egui::LayerId::new(
@@ -2100,9 +2121,12 @@ impl StudioApp {
             egui::Id::new("help-dim-and-shield"),
         );
         let painter = ctx.layer_painter(lower_layer);
-        for region in
-            help::absolute_dim_regions((screen.min.x, screen.min.y), viewport, spotlight_target)
-        {
+        for region in help::absolute_dim_regions_excluding(
+            (screen.min.x, screen.min.y),
+            viewport,
+            spotlight_target,
+            card_exclusion,
+        ) {
             painter.rect_filled(
                 egui::Rect::from_min_max(
                     egui::pos2(region.min.0, region.min.1),
@@ -2131,10 +2155,11 @@ impl StudioApp {
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
-                for region in help::absolute_dim_regions(
+                for region in help::absolute_dim_regions_excluding(
                     (screen.min.x, screen.min.y),
                     viewport,
                     spotlight_target,
+                    card_exclusion,
                 ) {
                     let rect = egui::Rect::from_min_max(
                         egui::pos2(region.min.0, region.min.1),
@@ -2145,7 +2170,7 @@ impl StudioApp {
             });
         // Keep the card in the interactive foreground and create it after the
         // shield so its controls are above the shield in the same order.
-        egui::Area::new(egui::Id::new(("help-card", self.help_card_generation)))
+        egui::Area::new(card_id)
             .order(egui::Order::Foreground)
             .default_pos(screen.min + egui::vec2(card.min.0, card.min.1))
             .movable(true)
@@ -2219,13 +2244,16 @@ impl StudioApp {
     }
 
     fn register_anchor(&mut self, panel: Panel, key: AnchorId, response: &egui::Response) {
-        let r = response.rect;
+        self.register_anchor_rect(panel, key, response.rect);
+    }
+
+    fn register_anchor_rect(&mut self, panel: Panel, key: AnchorId, rect: egui::Rect) {
         self.help_anchors.register(
             panel.help_id(),
             key.key(),
             AnchorRect {
-                min: (r.min.x, r.min.y),
-                max: (r.max.x, r.max.y),
+                min: (rect.min.x, rect.min.y),
+                max: (rect.max.x, rect.max.y),
             },
         );
     }
@@ -3975,6 +4003,11 @@ impl StudioApp {
             self.editor_actions(ui);
             ui.add_space(8.0);
             self.block_editor.show_blocks(ui, &mut self.editor_source);
+            let blocks_rect = ui.min_rect();
+            self.register_anchor_rect(Panel::Editor, AnchorId::BlocksGenerate, blocks_rect);
+            if !self.block_editor.generated_source.is_empty() {
+                self.register_anchor_rect(Panel::Editor, AnchorId::LoadIntoRust, blocks_rect);
+            }
             return;
         }
         ui.separator();
@@ -9502,13 +9535,14 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 mod tests {
     use super::Board;
     use super::{
-        approve_artifact_state, clamp_sim_weekday, configuration_fingerprint, credit_matches,
-        first_run_start_panel, flashable_uf2_after_build, initial_flashable_uf2,
-        invalidate_stale_artifact_state, preset_name, set_failed_artifact_state,
-        set_verified_artifact_state, sim_weekday_name, verified_artifact_after_build,
-        verify_artifact_manifest, ApprovedArtifact, CreditEntry, Panel, WatchDriveSelection,
-        ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS, ARTIFACT_VERIFICATION_FAILED_STATUS,
-        ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS, FIRST_RUN_STEPS,
+        approve_artifact_state, clamp_sim_weekday, configuration_fingerprint,
+        contextual_help_allowed, credit_matches, first_run_start_panel, flashable_uf2_after_build,
+        initial_flashable_uf2, invalidate_stale_artifact_state, preset_name,
+        set_failed_artifact_state, set_verified_artifact_state, sim_weekday_name,
+        verified_artifact_after_build, verify_artifact_manifest, ApprovedArtifact, CreditEntry,
+        Panel, WatchDriveSelection, ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS,
+        ARTIFACT_VERIFICATION_FAILED_STATUS, ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS,
+        FIRST_RUN_STEPS,
     };
     use super::{
         classify_http_status, classify_transport, commits_match, parse_latest_commit,
@@ -10348,7 +10382,41 @@ mod tests {
 
     #[test]
     fn first_run_starts_in_the_blocks_editor() {
+        let app = super::StudioApp::default();
         assert_eq!(first_run_start_panel(), Panel::Editor);
+        assert!(app.first_run);
+        assert!(app.block_editor.is_blocks_mode());
+    }
+
+    #[test]
+    fn first_run_editor_route_has_an_anchor_for_each_step() {
+        let mut registry = super::AnchorRegistry::default();
+        registry.begin_frame(1);
+        for anchor in [
+            super::AnchorId::EditorName,
+            super::AnchorId::BlocksGenerate,
+            super::AnchorId::LoadIntoRust,
+            super::AnchorId::EditorSave,
+        ] {
+            registry.register(
+                super::HelpId::Editor,
+                anchor.key(),
+                super::AnchorRect {
+                    min: (0.0, 0.0),
+                    max: (10.0, 10.0),
+                },
+            );
+        }
+        for index in 0..super::help::tutorial(super::HelpId::Editor).steps.len() {
+            let anchor = super::help::anchor_for_step(super::HelpId::Editor, index).unwrap();
+            assert!(registry.get(super::HelpId::Editor, anchor.key()).is_some());
+        }
+    }
+
+    #[test]
+    fn contextual_help_is_ignored_while_welcome_is_active() {
+        assert!(!contextual_help_allowed(true));
+        assert!(contextual_help_allowed(false));
     }
 
     #[test]

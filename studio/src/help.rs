@@ -17,6 +17,8 @@ pub enum AnchorId {
     EditorMode,
     EditorTemplate,
     EditorName,
+    BlocksGenerate,
+    LoadIntoRust,
     EditorGenerate,
     EditorSave,
     FacesSearch,
@@ -214,6 +216,57 @@ pub fn absolute_dim_regions(
         .collect()
 }
 
+/// Remove an overlay card from rectangular dim/shield regions. Keeping this
+/// geometry operation shared by painting and input routing prevents a popup
+/// from becoming dimmed or accidentally unclickable when it overlaps a region.
+pub fn exclude_rect(regions: Vec<AnchorRect>, excluded: AnchorRect) -> Vec<AnchorRect> {
+    let mut result = Vec::new();
+    for region in regions {
+        let min_x = region.min.0.max(excluded.min.0);
+        let min_y = region.min.1.max(excluded.min.1);
+        let max_x = region.max.0.min(excluded.max.0);
+        let max_y = region.max.1.min(excluded.max.1);
+        if min_x >= max_x || min_y >= max_y {
+            result.push(region);
+            continue;
+        }
+        if region.min.1 < min_y {
+            result.push(AnchorRect {
+                min: region.min,
+                max: (region.max.0, min_y),
+            });
+        }
+        if max_y < region.max.1 {
+            result.push(AnchorRect {
+                min: (region.min.0, max_y),
+                max: region.max,
+            });
+        }
+        if region.min.0 < min_x && min_y < max_y {
+            result.push(AnchorRect {
+                min: (region.min.0, min_y),
+                max: (min_x, max_y),
+            });
+        }
+        if max_x < region.max.0 && min_y < max_y {
+            result.push(AnchorRect {
+                min: (max_x, min_y),
+                max: (region.max.0, max_y),
+            });
+        }
+    }
+    result
+}
+
+pub fn absolute_dim_regions_excluding(
+    screen_min: (f32, f32),
+    viewport: (f32, f32),
+    target: Option<AnchorRect>,
+    excluded: AnchorRect,
+) -> Vec<AnchorRect> {
+    exclude_rect(absolute_dim_regions(screen_min, viewport, target), excluded)
+}
+
 pub fn overlay_allows_click(anchor: Option<AnchorId>, in_target: bool) -> bool {
     in_target && anchor.is_some_and(forced_action_allowed)
 }
@@ -223,6 +276,9 @@ pub fn forced_action_allowed(anchor: AnchorId) -> bool {
         anchor,
         AnchorId::EditorTemplate
             | AnchorId::EditorName
+            | AnchorId::BlocksGenerate
+            | AnchorId::LoadIntoRust
+            | AnchorId::EditorSave
             | AnchorId::FacesPreset
             | AnchorId::SimulatorWatch
             | AnchorId::SimulatorDate
@@ -295,9 +351,9 @@ pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
     Some(match id {
         HelpId::Dashboard => [DashboardBoard, DashboardNtpFetch, PanelHelp][index.min(2)],
         HelpId::WatchFaces => [FacesSearch, FacesPreset, FacesAdd][index.min(2)],
-        // Blocks mode has no Rust template selector. The face-name field is
-        // visible in both modes and is the first-run starting control.
-        HelpId::Editor => [EditorName, EditorName, EditorGenerate, EditorSave][index.min(3)],
+        // Start enters Blocks mode. The final step is Save after Load into Rust
+        // has explicitly switched the editor to Rust mode.
+        HelpId::Editor => [EditorName, BlocksGenerate, LoadIntoRust, EditorSave][index.min(3)],
         HelpId::Simulator => [SimulatorWatch, SimulatorDate, SimulatorApply][index.min(2)],
         HelpId::BuildFlash => [
             BuildUnavailable,
@@ -390,8 +446,10 @@ const TUTORIALS: &[Tutorial] = &[
         title: "Editor tutorial",
         steps: steps!
         ("What you can edit" => "The Editor provides the face name, description, templates, source editor, and beginner Blocks mode. Generate source when you are ready to inspect it; the generated Rust appears in the source editor.",
-         "Beginner workflow" => "1. Name the face. 2. Start with a template or Blocks. 3. Generate source, then review or edit it in the source editor. 4. Save the face. 5. Select it in Watch Faces and run Simulator. Expected result: a saved local face renders in simulation.",
-         "Safety and limits" => "Saving changes local project data; it does not flash a watch. Generated code may still need review and may not compile. The simulator is an approximation and does not prove timing, power, display, or sensor behavior on hardware."),
+         "Name the face" => "Give the face a snake_case name. Blocks mode is the beginner starting point and does not require choosing a Rust template.",
+         "Generate and load" => "Arrange starter blocks, generate Rust/source, then explicitly choose Load into Rust editor. This is the mode transition where the generated source becomes editable Rust.",
+         "Save in Rust mode" => "Review the generated source and click Save face. Then select the saved face in Watch Faces and run Simulator. Saving changes local project data; it does not flash a watch.",
+         "Safety and limits" => "Generated code may still need review and may not compile. The simulator is an approximation and does not prove timing, power, display, or sensor behavior on hardware."),
     },
     Tutorial {
         id: HelpId::Simulator,
@@ -781,12 +839,52 @@ mod tests {
     }
 
     #[test]
-    fn first_run_editor_step_targets_a_blocks_control() {
-        assert_eq!(
-            anchor_for_step(HelpId::Editor, 0),
-            Some(AnchorId::EditorName)
+    fn first_run_editor_steps_have_explicit_safe_blocks_route() {
+        let expected = [
+            AnchorId::EditorName,
+            AnchorId::BlocksGenerate,
+            AnchorId::LoadIntoRust,
+            AnchorId::EditorSave,
+        ];
+        for (index, anchor) in expected.into_iter().enumerate() {
+            assert_eq!(anchor_for_step(HelpId::Editor, index), Some(anchor));
+            assert!(forced_action_allowed(anchor));
+        }
+    }
+
+    fn intersects(a: AnchorRect, b: AnchorRect) -> bool {
+        a.min.0 < b.max.0 && b.min.0 < a.max.0 && a.min.1 < b.max.1 && b.min.1 < a.max.1
+    }
+
+    #[test]
+    fn card_over_dim_has_no_dim_or_shield_intersection() {
+        let card = AnchorRect {
+            min: (5.0, 5.0),
+            max: (75.0, 45.0),
+        };
+        let dim = absolute_dim_regions_excluding(
+            (100.0, 50.0),
+            (100.0, 80.0),
+            Some(AnchorRect {
+                min: (70.0, 50.0),
+                max: (90.0, 70.0),
+            }),
+            card,
         );
-        assert!(forced_action_allowed(AnchorId::EditorName));
+        assert!(dim.iter().all(|region| !intersects(*region, card)));
+        // The same function is intentionally used for the painter and shield.
+        assert_eq!(
+            dim,
+            absolute_dim_regions_excluding(
+                (100.0, 50.0),
+                (100.0, 80.0),
+                Some(AnchorRect {
+                    min: (70.0, 50.0),
+                    max: (90.0, 70.0)
+                }),
+                card,
+            )
+        );
     }
 
     #[test]
