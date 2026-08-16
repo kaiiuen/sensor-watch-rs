@@ -196,6 +196,24 @@ pub fn dim_regions(viewport: (f32, f32), target: Option<AnchorRect>) -> Vec<Anch
     regions
 }
 
+/// Translate viewport-local dim regions into screen coordinates.
+///
+/// The interaction shield is fixed at the screen origin, so its allocated
+/// rectangles must use the same absolute coordinate space as egui responses.
+pub fn absolute_dim_regions(
+    screen_min: (f32, f32),
+    viewport: (f32, f32),
+    target: Option<AnchorRect>,
+) -> Vec<AnchorRect> {
+    dim_regions(viewport, target)
+        .into_iter()
+        .map(|region| AnchorRect {
+            min: (region.min.0 + screen_min.0, region.min.1 + screen_min.1),
+            max: (region.max.0 + screen_min.0, region.max.1 + screen_min.1),
+        })
+        .collect()
+}
+
 pub fn overlay_allows_click(anchor: Option<AnchorId>, in_target: bool) -> bool {
     in_target && anchor.is_some_and(forced_action_allowed)
 }
@@ -277,7 +295,9 @@ pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
     Some(match id {
         HelpId::Dashboard => [DashboardBoard, DashboardNtpFetch, PanelHelp][index.min(2)],
         HelpId::WatchFaces => [FacesSearch, FacesPreset, FacesAdd][index.min(2)],
-        HelpId::Editor => [EditorTemplate, EditorName, EditorGenerate, EditorSave][index.min(3)],
+        // Blocks mode has no Rust template selector. The face-name field is
+        // visible in both modes and is the first-run starting control.
+        HelpId::Editor => [EditorName, EditorName, EditorGenerate, EditorSave][index.min(3)],
         HelpId::Simulator => [SimulatorWatch, SimulatorDate, SimulatorApply][index.min(2)],
         HelpId::BuildFlash => [
             BuildUnavailable,
@@ -694,6 +714,22 @@ mod tests {
     }
 
     #[test]
+    fn nonzero_screen_origin_translates_shield_regions_without_offset_errors() {
+        let regions = absolute_dim_regions(
+            (120.0, 45.0),
+            (100.0, 80.0),
+            Some(AnchorRect {
+                min: (30.0, 20.0),
+                max: (70.0, 60.0),
+            }),
+        );
+        assert_eq!(regions[0].min, (120.0, 45.0));
+        assert_eq!(regions[0].max, (220.0, 65.0));
+        assert_eq!(regions[2].min, (120.0, 65.0));
+        assert_eq!(regions[2].max, (150.0, 105.0));
+    }
+
+    #[test]
     fn card_placement_stays_inside_viewport_and_moves_with_target() {
         let first = place_card(
             Some(AnchorRect {
@@ -734,6 +770,23 @@ mod tests {
         assert!(card.min.0 + card.size.0 <= 784.0 && card.min.1 + card.size.1 <= 584.0);
         let centered = place_card(None, (300.0, 180.0), (800.0, 600.0), 16.0);
         assert!(centered.min.0 >= 16.0);
+    }
+
+    #[test]
+    fn card_next_advances_to_the_following_step() {
+        let id = HelpId::Editor;
+        let current = step_index(id, 0);
+        assert_eq!(next_index(id, current), 1);
+        assert_ne!(next_index(id, current), current);
+    }
+
+    #[test]
+    fn first_run_editor_step_targets_a_blocks_control() {
+        assert_eq!(
+            anchor_for_step(HelpId::Editor, 0),
+            Some(AnchorId::EditorName)
+        );
+        assert!(forced_action_allowed(AnchorId::EditorName));
     }
 
     #[test]

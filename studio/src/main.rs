@@ -2093,11 +2093,13 @@ impl StudioApp {
             egui::Id::new("help-dim-and-shield"),
         );
         let painter = ctx.layer_painter(lower_layer);
-        for region in help::dim_regions(viewport, spotlight_target) {
+        for region in
+            help::absolute_dim_regions((screen.min.x, screen.min.y), viewport, spotlight_target)
+        {
             painter.rect_filled(
                 egui::Rect::from_min_max(
-                    screen.min + egui::vec2(region.min.0, region.min.1),
-                    screen.min + egui::vec2(region.max.0, region.max.1),
+                    egui::pos2(region.min.0, region.min.1),
+                    egui::pos2(region.max.0, region.max.1),
                 ),
                 0.0,
                 tint,
@@ -2122,7 +2124,11 @@ impl StudioApp {
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
-                for region in help::dim_regions(viewport, spotlight_target) {
+                for region in help::absolute_dim_regions(
+                    (screen.min.x, screen.min.y),
+                    viewport,
+                    spotlight_target,
+                ) {
                     let rect = egui::Rect::from_min_max(
                         egui::pos2(region.min.0, region.min.1),
                         egui::pos2(region.max.0, region.max.1),
@@ -2130,8 +2136,10 @@ impl StudioApp {
                     ui.allocate_rect(rect, egui::Sense::click());
                 }
             });
+        // Keep the card in the interactive foreground and create it after the
+        // shield so its controls are above the shield in the same order.
         egui::Area::new(egui::Id::new(("help-card", self.help_card_generation)))
-            .order(egui::Order::Tooltip)
+            .order(egui::Order::Foreground)
             .default_pos(screen.min + egui::vec2(card.min.0, card.min.1))
             .movable(true)
             .constrain(true)
@@ -4022,7 +4030,8 @@ impl StudioApp {
     fn editor_identity(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("Face name (snake_case):");
-            ui.text_edit_singleline(&mut self.editor_name);
+            let name_response = ui.text_edit_singleline(&mut self.editor_name);
+            self.register_anchor(Panel::Editor, AnchorId::EditorName, &name_response);
         });
         ui.horizontal(|ui| {
             ui.label("Description (shown in catalog):");
