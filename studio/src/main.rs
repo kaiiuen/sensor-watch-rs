@@ -198,6 +198,9 @@ struct StudioApp {
     help_pending_panel: Option<Panel>,
     /// Whether the current walkthrough is minimized rather than closed.
     help_minimized: bool,
+    /// Blocks a held pointer from becoming a fresh simulator press after a
+    /// guided-help ownership transition. Cleared only after pointer release.
+    simulator_wait_for_pointer_release: bool,
     /// Changes when a tour step/panel/tour changes, giving the movable card a
     /// fresh default without resetting it on ordinary repaint frames.
     help_card_generation: u64,
@@ -961,6 +964,7 @@ impl Default for StudioApp {
             help_step: 0,
             help_pending_panel: None,
             help_minimized: false,
+            simulator_wait_for_pointer_release: false,
             help_card_generation: 0,
             help_auto_opened: false,
             tour_claims: TourClaims::default(),
@@ -1153,6 +1157,16 @@ impl eframe::App for StudioApp {
             self.last_window_size = window_size;
             self.catalog_width = 0.0;
             self.preset_height = 0.0;
+        }
+
+        // A pointer held through a help transition is never a new simulator
+        // press. Observe the global release before allowing simulator routing.
+        let primary_down = ctx.input(|i| i.pointer.primary_down());
+        if help::simulator_wait_for_pointer_release(
+            &mut self.simulator_wait_for_pointer_release,
+            primary_down,
+        ) {
+            self.cancel_simulator_buttons();
         }
 
         // Escape pauses help first, so normal shortcuts cannot consume it.
@@ -1970,6 +1984,14 @@ impl StudioApp {
         self.watch.set_casio(false);
     }
 
+    /// Arm the pointer barrier before changing guided-help ownership. This is
+    /// deliberately not a synthetic release: simulator latches are cleared,
+    /// and the physical pointer must still reach `up` before a new press works.
+    fn wait_for_simulator_pointer_release(&mut self) {
+        self.simulator_wait_for_pointer_release = true;
+        self.cancel_simulator_buttons();
+    }
+
     fn export_text_file(
         &self,
         filename: &str,
@@ -1989,7 +2011,7 @@ impl StudioApp {
     }
 
     fn open_help_for(&mut self, panel: Panel, auto: bool) {
-        self.cancel_simulator_buttons();
+        self.wait_for_simulator_pointer_release();
         self.help_open = Some(panel.help_id());
         self.help_step = 0;
         self.help_pending_panel = None;
@@ -2012,7 +2034,7 @@ impl StudioApp {
     fn minimize_help(&mut self) {
         if self.help_open.is_some() && !self.help_minimized {
             self.help_minimized = true;
-            self.cancel_simulator_buttons();
+            self.wait_for_simulator_pointer_release();
         }
     }
 
@@ -2022,7 +2044,7 @@ impl StudioApp {
                 self.tour_claims.claim(id);
             }
         }
-        self.cancel_simulator_buttons();
+        self.wait_for_simulator_pointer_release();
         self.help_open = None;
         self.help_step = 0;
         self.help_pending_panel = None;
@@ -2064,6 +2086,7 @@ impl StudioApp {
                     });
                 });
             if resume {
+                self.wait_for_simulator_pointer_release();
                 self.help_minimized = false;
                 if self.current_panel != target_panel {
                     self.help_pending_panel = Some(target_panel);
@@ -2084,9 +2107,8 @@ impl StudioApp {
         let index = help::step_index(id, self.help_step);
         self.help_step = index;
         let step = tutorial.steps[index];
-        let target = step
-            .anchor(id, index)
-            .and_then(|key| self.help_anchors.get(id, key.key()));
+        let target = help::step_target(&self.help_anchors, self.current_panel.help_id(), id, index);
+        let target_available = target.is_some();
         let screen = ctx.screen_rect();
         let viewport = (screen.width(), screen.height());
         let target_local = target.map(|rect| AnchorRect {
@@ -2119,59 +2141,61 @@ impl StudioApp {
             max: (card_rect.max.x, card_rect.max.y),
         };
 
-        let tint = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150);
-        let lower_layer = egui::LayerId::new(
-            egui::Order::Foreground,
-            egui::Id::new("help-dim-and-shield"),
-        );
-        let painter = ctx.layer_painter(lower_layer);
-        for region in help::absolute_dim_regions_excluding(
-            (screen.min.x, screen.min.y),
-            viewport,
-            spotlight_target,
-            card_exclusion,
-        ) {
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(region.min.0, region.min.1),
-                    egui::pos2(region.max.0, region.max.1),
-                ),
-                0.0,
-                tint,
-            );
-        }
-        if let Some(rect) = spotlight_target {
-            let r = egui::Rect::from_min_max(
-                screen.min + egui::vec2(rect.min.0, rect.min.1),
-                screen.min + egui::vec2(rect.max.0, rect.max.1),
-            );
-            painter.rect_stroke(
-                r,
-                5.0,
-                egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 210, 80)),
-            );
-        }
         let mut action: Option<&'static str> = None;
-        // Shield only the dimmed regions. This keeps the highlighted control
-        // readable and lets its existing guided_action_allowed gate route a
-        // safe action, while the card remains the higher interactive layer.
-        egui::Area::new(egui::Id::new("help-interaction-shield"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(screen.min)
-            .show(ctx, |ui| {
-                for region in help::absolute_dim_regions_excluding(
-                    (screen.min.x, screen.min.y),
-                    viewport,
-                    spotlight_target,
-                    card_exclusion,
-                ) {
-                    let rect = egui::Rect::from_min_max(
+        if target_available {
+            let tint = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150);
+            let lower_layer = egui::LayerId::new(
+                egui::Order::Foreground,
+                egui::Id::new("help-dim-and-shield"),
+            );
+            let painter = ctx.layer_painter(lower_layer);
+            for region in help::absolute_dim_regions_excluding(
+                (screen.min.x, screen.min.y),
+                viewport,
+                spotlight_target,
+                card_exclusion,
+            ) {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
                         egui::pos2(region.min.0, region.min.1),
                         egui::pos2(region.max.0, region.max.1),
-                    );
-                    ui.allocate_rect(rect, egui::Sense::click());
-                }
-            });
+                    ),
+                    0.0,
+                    tint,
+                );
+            }
+            if let Some(rect) = spotlight_target {
+                let r = egui::Rect::from_min_max(
+                    screen.min + egui::vec2(rect.min.0, rect.min.1),
+                    screen.min + egui::vec2(rect.max.0, rect.max.1),
+                );
+                painter.rect_stroke(
+                    r,
+                    5.0,
+                    egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 210, 80)),
+                );
+            }
+            // Shield only the dimmed regions. This keeps the highlighted
+            // control readable and lets its existing action gate route a safe
+            // action, while the card remains the higher interactive layer.
+            egui::Area::new(egui::Id::new("help-interaction-shield"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(screen.min)
+                .show(ctx, |ui| {
+                    for region in help::absolute_dim_regions_excluding(
+                        (screen.min.x, screen.min.y),
+                        viewport,
+                        spotlight_target,
+                        card_exclusion,
+                    ) {
+                        let rect = egui::Rect::from_min_max(
+                            egui::pos2(region.min.0, region.min.1),
+                            egui::pos2(region.max.0, region.max.1),
+                        );
+                        ui.allocate_rect(rect, egui::Sense::click());
+                    }
+                });
+        }
         // Keep the card in the interactive foreground and create it after the
         // shield so its controls are above the shield in the same order.
         egui::Area::new(card_id)
@@ -2189,7 +2213,11 @@ impl StudioApp {
                             ui.heading(tutorial.title);
                             ui.strong(step.title);
                             ui.label(step.body);
-                            ui.weak(step.instruction(id, index));
+                            if target_available {
+                                ui.weak(step.instruction(id, index));
+                            } else {
+                                ui.weak("This target is unavailable in the current state. No action is required; continue when ready.");
+                            }
                         });
                     ui.label(format!("Step {} of {}", index + 1, tutorial.steps.len()));
 
@@ -2216,7 +2244,7 @@ impl StudioApp {
             });
         match action {
             Some("next") => {
-                self.cancel_simulator_buttons();
+                self.wait_for_simulator_pointer_release();
                 self.help_step = help::next_index(id, index);
                 self.reset_help_card_position();
                 let wanted = help::route(id, self.help_step);
@@ -2224,7 +2252,7 @@ impl StudioApp {
                     help::pending_navigation(id, wanted).and_then(panel_for_help_id)
                 {
                     self.help_pending_panel = Some(panel);
-                    self.cancel_simulator_buttons();
+                    self.wait_for_simulator_pointer_release();
                     self.help_anchors
                         .begin_frame(self.help_frame.wrapping_add(1));
                     self.current_panel = panel;
@@ -2238,8 +2266,21 @@ impl StudioApp {
         }
     }
 
+    fn help_step_target_available(&self) -> bool {
+        // A pending panel transition remains protected until the destination
+        // has rendered its first frame of anchors.
+        if self.help_pending_panel.is_some() {
+            return true;
+        }
+        let Some(id) = self.help_open else {
+            return false;
+        };
+        let index = help::step_index(id, self.help_step);
+        help::step_target(&self.help_anchors, self.current_panel.help_id(), id, index).is_some()
+    }
+
     fn guided_action_allowed(&self, action: AnchorId) -> bool {
-        if !self.help_owns_input() {
+        if !self.help_owns_input() || !self.help_step_target_available() {
             return true;
         }
         let active_step = self
@@ -2249,7 +2290,7 @@ impl StudioApp {
     }
 
     fn unsafe_action_allowed(&self) -> bool {
-        !self.help_owns_input()
+        !self.help_owns_input() || !self.help_step_target_available()
     }
 
     fn register_anchor(&mut self, panel: Panel, key: AnchorId, response: &egui::Response) {
@@ -2407,6 +2448,10 @@ impl StudioApp {
             // Manual panel switching pauses the active tour. Its HelpId and
             // step remain intact; returning renders fresh anchors before resume.
             if self.help_open.is_some() {
+                // A paused tour can still have a simulator hold in progress;
+                // switching panels is an ownership transition even when it is
+                // already minimized.
+                self.wait_for_simulator_pointer_release();
                 self.minimize_help();
                 self.help_anchors.begin_frame(self.help_frame);
             }
@@ -6747,8 +6792,10 @@ impl StudioApp {
         // global pointer query turn a card click or shield click into L/C/A
         // input, light, CASIO mode, face cycling, or real-face events.
         let tour_owns_input = self.help_owns_input();
-        let pointer_down = !tour_owns_input && ui.input(|i| i.pointer.primary_down());
-        let pointer_pos = (!tour_owns_input)
+        let pointer_blocked = self.simulator_wait_for_pointer_release;
+        let pointer_down =
+            !tour_owns_input && !pointer_blocked && ui.input(|i| i.pointer.primary_down());
+        let pointer_pos = (!tour_owns_input && !pointer_blocked)
             .then(|| ui.input(|i| i.pointer.interact_pos()))
             .flatten();
 
@@ -9743,7 +9790,17 @@ mod tests {
     #[test]
     fn active_tour_owns_input_and_protects_unsafe_actions() {
         let mut app = super::StudioApp::default();
+        app.current_panel = super::Panel::Simulator;
         app.help_open = Some(crate::help::HelpId::Simulator);
+        app.help_anchors.begin_frame(1);
+        app.help_anchors.register(
+            crate::help::HelpId::Simulator,
+            crate::help::AnchorId::SimulatorWatch.key(),
+            crate::help::AnchorRect {
+                min: (10.0, 10.0),
+                max: (100.0, 80.0),
+            },
+        );
         assert!(app.help_owns_input());
         assert!(!app.unsafe_action_allowed());
     }
@@ -9751,7 +9808,17 @@ mod tests {
     #[test]
     fn paused_tour_does_not_own_input_or_gate_normal_actions() {
         let mut app = super::StudioApp::default();
+        app.current_panel = super::Panel::Simulator;
         app.help_open = Some(crate::help::HelpId::Simulator);
+        app.help_anchors.begin_frame(1);
+        app.help_anchors.register(
+            crate::help::HelpId::Simulator,
+            crate::help::AnchorId::SimulatorWatch.key(),
+            crate::help::AnchorRect {
+                min: (10.0, 10.0),
+                max: (100.0, 80.0),
+            },
+        );
         app.help_step = 1;
         app.minimize_help();
         assert!(!app.help_owns_input());
@@ -9793,7 +9860,17 @@ mod tests {
     #[test]
     fn resuming_restores_tour_input_ownership() {
         let mut app = super::StudioApp::default();
+        app.current_panel = super::Panel::Simulator;
         app.help_open = Some(crate::help::HelpId::Simulator);
+        app.help_anchors.begin_frame(1);
+        app.help_anchors.register(
+            crate::help::HelpId::Simulator,
+            crate::help::AnchorId::SimulatorWatch.key(),
+            crate::help::AnchorRect {
+                min: (10.0, 10.0),
+                max: (100.0, 80.0),
+            },
+        );
         app.minimize_help();
         app.help_minimized = false;
         assert!(app.help_owns_input());
@@ -9826,7 +9903,17 @@ mod tests {
     #[test]
     fn visible_tour_cancels_all_simulator_input_and_unsafe_actions_stay_closed() {
         let mut app = super::StudioApp::default();
+        app.current_panel = super::Panel::Simulator;
         app.help_open = Some(crate::help::HelpId::Simulator);
+        app.help_anchors.begin_frame(1);
+        app.help_anchors.register(
+            crate::help::HelpId::Simulator,
+            crate::help::AnchorId::SimulatorWatch.key(),
+            crate::help::AnchorRect {
+                min: (10.0, 10.0),
+                max: (100.0, 80.0),
+            },
+        );
         app.btn_l_down = true;
         app.btn_c_down = true;
         app.btn_a_down = true;

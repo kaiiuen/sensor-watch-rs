@@ -81,6 +81,17 @@ pub struct AnchorRect {
 }
 
 impl AnchorRect {
+    /// Anchor rectangles come from conditional widgets, so reject geometry that
+    /// cannot safely describe a visible target.
+    pub fn is_valid(self) -> bool {
+        self.min.0.is_finite()
+            && self.min.1.is_finite()
+            && self.max.0.is_finite()
+            && self.max.1.is_finite()
+            && self.max.0 > self.min.0
+            && self.max.1 > self.min.1
+    }
+
     pub fn expand(self, padding: f32) -> Self {
         Self {
             min: (self.min.0 - padding, self.min.1 - padding),
@@ -103,12 +114,18 @@ impl AnchorRegistry {
         self.anchors.clear();
     }
     pub fn register(&mut self, panel: HelpId, key: AnchorKey, rect: AnchorRect) {
-        self.anchors.insert(key, (panel, rect));
+        if rect.is_valid() {
+            self.anchors.insert(key, (panel, rect));
+        } else {
+            // Do not let a conditional widget's invalid registration hide a
+            // later recovery or leave a previous target addressable.
+            self.anchors.remove(&key);
+        }
     }
     pub fn get(&self, panel: HelpId, key: AnchorKey) -> Option<AnchorRect> {
         self.anchors
             .get(&key)
-            .and_then(|(owner, rect)| (*owner == panel).then_some(*rect))
+            .and_then(|(owner, rect)| (*owner == panel && rect.is_valid()).then_some(*rect))
     }
     pub fn frame(&self) -> u64 {
         self.frame
@@ -161,10 +178,9 @@ pub fn place_card(
 pub fn dim_regions(viewport: (f32, f32), target: Option<AnchorRect>) -> Vec<AnchorRect> {
     let (width, height) = viewport;
     let Some(target) = target else {
-        return vec![AnchorRect {
-            min: (0.0, 0.0),
-            max: (width, height),
-        }];
+        // No target means informational help. Never turn an unavailable or
+        // conditional step into a full-screen interaction barrier.
+        return Vec::new();
     };
     let min_x = target.min.0.clamp(0.0, width);
     let min_y = target.min.1.clamp(0.0, height);
@@ -271,6 +287,20 @@ pub fn overlay_allows_click(anchor: Option<AnchorId>, in_target: bool) -> bool {
     in_target && anchor.is_some_and(forced_action_allowed)
 }
 
+/// A missing target is an informational step, not an instruction to block the
+/// application. This also covers conditional controls and cross-panel frames.
+pub fn step_target(
+    registry: &AnchorRegistry,
+    panel: HelpId,
+    tutorial: HelpId,
+    index: usize,
+) -> Option<AnchorRect> {
+    (panel == tutorial)
+        .then(|| anchor_for_step(tutorial, index))
+        .flatten()
+        .and_then(|anchor| registry.get(panel, anchor.key()))
+}
+
 pub fn forced_action_allowed(anchor: AnchorId) -> bool {
     matches!(
         anchor,
@@ -300,6 +330,17 @@ pub fn forced_action_allowed(anchor: AnchorId) -> bool {
 /// only when they are the currently highlighted control.
 pub fn action_allowed(active_step: Option<AnchorId>, action: AnchorId) -> bool {
     active_step.is_none() || (active_step == Some(action) && forced_action_allowed(action))
+}
+
+/// Keeps a pointer held across a help ownership transition from becoming a new
+/// simulator press. The caller arms `waiting` when ownership changes, then
+/// supplies the global pointer state once per frame. No release event is made;
+/// the barrier only ends after the physical pointer is up.
+pub fn simulator_wait_for_pointer_release(waiting: &mut bool, primary_down: bool) -> bool {
+    if *waiting && !primary_down {
+        *waiting = false;
+    }
+    *waiting
 }
 
 /// Stable identifier for a contextual panel tutorial.
@@ -696,6 +737,130 @@ mod tests {
     }
 
     #[test]
+    fn held_pointer_stays_blocked_through_pause_and_resume() {
+        let mut waiting = false;
+        assert!(!simulator_wait_for_pointer_release(&mut waiting, false));
+        waiting = true;
+        assert!(simulator_wait_for_pointer_release(&mut waiting, true));
+        assert!(simulator_wait_for_pointer_release(&mut waiting, true));
+        assert!(waiting);
+    }
+
+    #[test]
+    fn card_or_tinted_click_then_resume_requires_release() {
+        let mut waiting = true;
+        assert!(simulator_wait_for_pointer_release(&mut waiting, true));
+        assert!(simulator_wait_for_pointer_release(&mut waiting, true));
+        assert!(waiting);
+    }
+
+    #[test]
+    fn panel_switch_while_held_stays_blocked() {
+        let mut waiting = true;
+        assert!(simulator_wait_for_pointer_release(&mut waiting, true));
+    }
+
+    #[test]
+    fn pointer_release_clears_barrier() {
+        let mut waiting = true;
+        assert!(!simulator_wait_for_pointer_release(&mut waiting, false));
+        assert!(!waiting);
+    }
+
+    #[test]
+    fn fresh_press_works_after_barrier_clears() {
+        let mut waiting = true;
+        assert!(!simulator_wait_for_pointer_release(&mut waiting, false));
+        assert!(!simulator_wait_for_pointer_release(&mut waiting, true));
+    }
+
+    #[test]
+    fn unavailable_target_is_informational_and_unblocked() {
+        let mut registry = AnchorRegistry::default();
+        registry.begin_frame(1);
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
+        assert!(action_allowed(None, AnchorId::BuildApprove));
+        assert!(!overlay_allows_click(Some(AnchorId::BuildApprove), false));
+        // The renderer must pass None through the no-overlay path rather than
+        // installing a full-screen dim/shield for an unavailable target.
+        assert!(dim_regions((800.0, 600.0), None).is_empty());
+    }
+
+    #[test]
+    fn conditional_target_is_unavailable_until_registered() {
+        let mut registry = AnchorRegistry::default();
+        registry.begin_frame(1);
+        assert!(step_target(&registry, HelpId::WatchFaces, HelpId::WatchFaces, 2).is_none());
+
+        registry.register(
+            HelpId::WatchFaces,
+            AnchorId::FacesAdd.key(),
+            AnchorRect {
+                min: (10.0, 20.0),
+                max: (80.0, 50.0),
+            },
+        );
+        assert!(step_target(&registry, HelpId::WatchFaces, HelpId::WatchFaces, 2).is_some());
+    }
+
+    #[test]
+    fn invalid_or_wrong_panel_target_is_unavailable() {
+        let mut registry = AnchorRegistry::default();
+        registry.begin_frame(1);
+        registry.register(
+            HelpId::BuildFlash,
+            AnchorId::BuildApprove.key(),
+            AnchorRect {
+                min: (20.0, 20.0),
+                max: (20.0, 40.0),
+            },
+        );
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
+        registry.register(
+            HelpId::BuildFlash,
+            AnchorId::BuildApprove.key(),
+            AnchorRect {
+                min: (20.0, 20.0),
+                max: (120.0, 60.0),
+            },
+        );
+        assert!(step_target(&registry, HelpId::Settings, HelpId::BuildFlash, 2).is_none());
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_some());
+    }
+
+    #[test]
+    fn valid_target_remains_gated_and_progression_recovers() {
+        let mut registry = AnchorRegistry::default();
+        registry.begin_frame(1);
+        registry.register(
+            HelpId::BuildFlash,
+            AnchorId::BuildApprove.key(),
+            AnchorRect {
+                min: (20.0, 20.0),
+                max: (120.0, 60.0),
+            },
+        );
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_some());
+        assert!(!action_allowed(
+            Some(AnchorId::BuildApprove),
+            AnchorId::BuildCopy
+        ));
+        assert!(!action_allowed(
+            Some(AnchorId::BuildApprove),
+            AnchorId::BuildApprove
+        ));
+        assert_eq!(next_index(HelpId::BuildFlash, 2), 2);
+        assert_eq!(previous_index(HelpId::BuildFlash, 2), 1);
+
+        // A later frame can remove the conditional target without retaining a
+        // stale rectangle, and the step becomes recoverable/informational.
+        registry.begin_frame(2);
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
+        assert!(action_allowed(None, AnchorId::BuildCopy));
+        assert_eq!(next_index(HelpId::BuildFlash, 2), 2);
+    }
+
+    #[test]
     fn stable_ids_and_persistent_claims() {
         let id = HelpId::BuildFlash;
         assert_eq!(id.stable_key(), "build-flash");
@@ -768,7 +933,7 @@ mod tests {
         assert!(regions
             .iter()
             .all(|region| { region.max.0 > region.min.0 && region.max.1 > region.min.1 }));
-        assert_eq!(dim_regions((100.0, 80.0), None).len(), 1);
+        assert!(dim_regions((100.0, 80.0), None).is_empty());
     }
 
     #[test]
