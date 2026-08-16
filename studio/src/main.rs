@@ -1655,10 +1655,7 @@ impl eframe::App for StudioApp {
         if !self.first_run && self.help_open.is_none() {
             self.maybe_open_help_for(self.current_panel);
         }
-        if self.help_open.is_some() {
-            // A tour owns pointer input, including a paused tour's stale holds.
-            // Clearing every frame is idempotent and prevents a press from
-            // surviving a step, panel, or tour transition.
+        if self.help_owns_input() {
             self.cancel_simulator_buttons();
         }
 
@@ -1992,6 +1989,7 @@ impl StudioApp {
     }
 
     fn open_help_for(&mut self, panel: Panel, auto: bool) {
+        self.cancel_simulator_buttons();
         self.help_open = Some(panel.help_id());
         self.help_step = 0;
         self.help_pending_panel = None;
@@ -2007,9 +2005,14 @@ impl StudioApp {
         }
     }
 
+    fn help_owns_input(&self) -> bool {
+        self.help_open.is_some() && (!self.help_minimized || self.help_pending_panel.is_some())
+    }
+
     fn minimize_help(&mut self) {
-        if self.help_open.is_some() {
+        if self.help_open.is_some() && !self.help_minimized {
             self.help_minimized = true;
+            self.cancel_simulator_buttons();
         }
     }
 
@@ -2019,6 +2022,7 @@ impl StudioApp {
                 self.tour_claims.claim(id);
             }
         }
+        self.cancel_simulator_buttons();
         self.help_open = None;
         self.help_step = 0;
         self.help_pending_panel = None;
@@ -2033,7 +2037,7 @@ impl StudioApp {
     fn help_spotlight(&mut self, ctx: &egui::Context) {
         let Some(id) = self.help_open else { return };
         let target_panel = panel_for_help_id(id).unwrap_or(self.current_panel);
-        if self.help_minimized || self.current_panel != target_panel {
+        if !self.help_owns_input() || self.current_panel != target_panel {
             let label = if self.help_minimized {
                 format!("Tour paused — {}", help::tutorial(id).title)
             } else {
@@ -2212,6 +2216,7 @@ impl StudioApp {
             });
         match action {
             Some("next") => {
+                self.cancel_simulator_buttons();
                 self.help_step = help::next_index(id, index);
                 self.reset_help_card_position();
                 let wanted = help::route(id, self.help_step);
@@ -2219,6 +2224,7 @@ impl StudioApp {
                     help::pending_navigation(id, wanted).and_then(panel_for_help_id)
                 {
                     self.help_pending_panel = Some(panel);
+                    self.cancel_simulator_buttons();
                     self.help_anchors
                         .begin_frame(self.help_frame.wrapping_add(1));
                     self.current_panel = panel;
@@ -2233,6 +2239,9 @@ impl StudioApp {
     }
 
     fn guided_action_allowed(&self, action: AnchorId) -> bool {
+        if !self.help_owns_input() {
+            return true;
+        }
         let active_step = self
             .help_open
             .and_then(|id| help::anchor_for_step(id, help::step_index(id, self.help_step)));
@@ -2240,7 +2249,7 @@ impl StudioApp {
     }
 
     fn unsafe_action_allowed(&self) -> bool {
-        self.help_open.is_none()
+        !self.help_owns_input()
     }
 
     fn register_anchor(&mut self, panel: Panel, key: AnchorId, response: &egui::Response) {
@@ -2398,7 +2407,7 @@ impl StudioApp {
             // Manual panel switching pauses the active tour. Its HelpId and
             // step remain intact; returning renders fresh anchors before resume.
             if self.help_open.is_some() {
-                self.help_minimized = true;
+                self.minimize_help();
                 self.help_anchors.begin_frame(self.help_frame);
             }
         }
@@ -6737,7 +6746,7 @@ impl StudioApp {
         // The guided tour owns pointer routing. In particular, do not let a
         // global pointer query turn a card click or shield click into L/C/A
         // input, light, CASIO mode, face cycling, or real-face events.
-        let tour_owns_input = self.help_open.is_some();
+        let tour_owns_input = self.help_owns_input();
         let pointer_down = !tour_owns_input && ui.input(|i| i.pointer.primary_down());
         let pointer_pos = (!tour_owns_input)
             .then(|| ui.input(|i| i.pointer.interact_pos()))
@@ -9729,6 +9738,89 @@ mod tests {
                 .map(|event| event.operation_id),
             Some(44)
         );
+    }
+
+    #[test]
+    fn active_tour_owns_input_and_protects_unsafe_actions() {
+        let mut app = super::StudioApp::default();
+        app.help_open = Some(crate::help::HelpId::Simulator);
+        assert!(app.help_owns_input());
+        assert!(!app.unsafe_action_allowed());
+    }
+
+    #[test]
+    fn paused_tour_does_not_own_input_or_gate_normal_actions() {
+        let mut app = super::StudioApp::default();
+        app.help_open = Some(crate::help::HelpId::Simulator);
+        app.help_step = 1;
+        app.minimize_help();
+        assert!(!app.help_owns_input());
+        assert!(app.unsafe_action_allowed());
+        assert_eq!(app.help_open, Some(crate::help::HelpId::Simulator));
+        assert_eq!(app.help_step, 1);
+    }
+
+    #[test]
+    fn pausing_clears_simulator_latches_once() {
+        let mut app = super::StudioApp::default();
+        app.help_open = Some(crate::help::HelpId::Simulator);
+        app.btn_l_down = true;
+        app.btn_l_hold = 2.0;
+        app.held_button = Some(ButtonId::L);
+        app.minimize_help();
+        assert!(!app.btn_l_down && app.btn_l_hold == 0.0 && app.held_button.is_none());
+
+        // A paused tour must not keep clearing state, or simulator testing is impossible.
+        app.btn_l_down = true;
+        app.btn_l_hold = 1.0;
+        app.held_button = Some(ButtonId::L);
+        app.minimize_help();
+        assert!(app.btn_l_down && app.btn_l_hold == 1.0 && app.held_button == Some(ButtonId::L));
+    }
+
+    #[test]
+    fn paused_simulator_state_can_be_used_normally() {
+        let mut app = super::StudioApp::default();
+        app.help_open = Some(crate::help::HelpId::Simulator);
+        app.minimize_help();
+        app.held_button = Some(ButtonId::C);
+        app.btn_c_down = true;
+        assert!(!app.help_owns_input());
+        assert_eq!(app.held_button, Some(ButtonId::C));
+        assert!(app.btn_c_down);
+    }
+
+    #[test]
+    fn resuming_restores_tour_input_ownership() {
+        let mut app = super::StudioApp::default();
+        app.help_open = Some(crate::help::HelpId::Simulator);
+        app.minimize_help();
+        app.help_minimized = false;
+        assert!(app.help_owns_input());
+        assert!(!app.unsafe_action_allowed());
+    }
+
+    #[test]
+    fn closing_tour_clears_simulator_state_and_claims_tour() {
+        let mut app = super::StudioApp::default();
+        app.first_run = true;
+        app.help_open = Some(crate::help::HelpId::Simulator);
+        app.btn_a_down = true;
+        app.btn_a_hold = 2.0;
+        app.held_button = Some(ButtonId::A);
+        app.close_help(true);
+        assert!(app.help_open.is_none());
+        assert!(!app.btn_a_down && app.btn_a_hold == 0.0 && app.held_button.is_none());
+        assert!(app.tour_claims.contains(crate::help::HelpId::Simulator));
+    }
+
+    #[test]
+    fn pending_tour_transition_remains_protected() {
+        let mut app = super::StudioApp::default();
+        app.help_open = Some(crate::help::HelpId::Editor);
+        app.help_pending_panel = Some(super::Panel::Simulator);
+        assert!(app.help_owns_input());
+        assert!(!app.unsafe_action_allowed());
     }
 
     #[test]
