@@ -46,6 +46,7 @@ use eframe::egui;
 use help::{AnchorId, AnchorRect, AnchorRegistry, HelpId, TourClaims};
 use i18n::{tr, Key, Language};
 use presets::PresetManager;
+use std::error::Error as _;
 
 use flash::{FlashRequest, FlashResult, FlashStatus, WatchDriveSelection};
 use progress::{ProgressEvent, ProgressReceiver};
@@ -287,14 +288,16 @@ struct StudioApp {
     uart: Option<transport::SerialTransport>,
     /// Most recent explicit UART connection failure, if any.
     last_uart_error: Option<String>,
-    /// The latest commit message from GitHub (for update notifications).
+    /// The latest commit message from GitHub, if the check succeeded.
     latest_commit: Option<String>,
-    /// The timestamp (unix seconds) when the update notification was received.
+    /// The SHA of the latest GitHub commit, if the check succeeded.
+    latest_sha: Option<String>,
+    /// The timestamp (unix seconds) when the update check succeeded.
     update_time: Option<u64>,
     /// Whether the update check is in flight.
     update_checking: bool,
     /// The handle to the background update check.
-    pending_update: Option<std::thread::JoinHandle<Result<String, String>>>,
+    pending_update: Option<std::thread::JoinHandle<Result<RemoteCommit, UpdateCheckError>>>,
     /// Whether the beep-on-minute helper is armed.
     beep_armed: bool,
     /// The target minute boundary timestamp for the beep.
@@ -1027,6 +1030,7 @@ impl Default for StudioApp {
             uart: None,
             last_uart_error: None,
             latest_commit: None,
+            latest_sha: None,
             update_time: None,
             update_checking: false,
             pending_update: None,
@@ -1384,27 +1388,7 @@ impl eframe::App for StudioApp {
         // If an update check finished, collect its result.
         if let Some(handle) = self.pending_update.take() {
             if handle.is_finished() {
-                self.update_checking = false;
-                match handle.join() {
-                    Ok(Ok(msg)) => {
-                        self.latest_commit = Some(msg.clone());
-                        self.update_time = Some(
-                            std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .map(|d| d.as_secs())
-                                .unwrap_or(0),
-                        );
-                        self.log.log(format!("Latest commit: {msg}"));
-                    }
-                    Ok(Err(error)) => {
-                        self.status = format!("Update check failed: {error}");
-                        self.log_error(&format!("Update check failed: {error}"));
-                    }
-                    Err(_) => {
-                        self.status = "Update check thread panicked".to_string();
-                        self.log_error("Update check thread panicked");
-                    }
-                }
+                self.finish_update_check(handle.join());
             } else {
                 self.pending_update = Some(handle);
             }
@@ -1435,24 +1419,46 @@ impl eframe::App for StudioApp {
                     }
                     ui.separator();
                 }
-                // Update notification stays in the control row, never beside
-                // or inside the scrollable tab strip.
-                if let Some(commit) = &self.latest_commit {
-                    let ts = self.update_time.map(|t| {
-                        let secs = (t as i64).rem_euclid(86400);
-                        let h = (secs / 3600) % 24;
-                        let m = (secs / 60) % 60;
-                        format!("{h:02}:{m:02}")
-                    });
-                    let label = match &ts {
-                        Some(t) => format!("New update ({t}): {commit}"),
-                        None => format!("New update: {commit}"),
-                    };
-                    ui.colored_label(egui::Color32::from_rgb(120, 180, 240), label)
-                        .on_hover_text(
-                            "A new commit was pushed to the repo. Click the title to\n\
-                             open GitHub and download the latest release.",
-                        );
+                // Update status and retry control stay in the control row, never
+                // beside or inside the scrollable tab strip.
+                if self.update_checking {
+                    ui.spinner();
+                    ui.label("Checking for updates…");
+                } else if let Some(commit) = &self.latest_commit {
+                    match (
+                        commits_match(
+                            local_commit_sha(),
+                            self.latest_sha.as_deref().unwrap_or_default(),
+                        ),
+                        self.latest_sha.as_deref(),
+                    ) {
+                        (Some(true), Some(remote)) => {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(120, 190, 140),
+                                format!("Up to date ({})", short_sha(remote)),
+                            );
+                        }
+                        (Some(false), Some(remote)) => {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(120, 180, 240),
+                                format!("Update available ({}): {commit}", short_sha(remote)),
+                            );
+                        }
+                        _ => {
+                            ui.label(format!("Latest commit: {commit}"));
+                        }
+                    }
+                }
+                if ui
+                    .small_button(if self.update_checking {
+                        "Checking…"
+                    } else {
+                        "Check for updates"
+                    })
+                    .on_hover_text("Check GitHub without blocking Studio")
+                    .clicked()
+                {
+                    self.check_for_updates();
                 }
             });
             ui.separator();
@@ -2087,6 +2093,7 @@ impl StudioApp {
             viewport,
             16.0,
         );
+
         let tint = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150);
         let lower_layer = egui::LayerId::new(
             egui::Order::Foreground,
@@ -2912,7 +2919,7 @@ impl StudioApp {
         self.pending_checksum = Some(handle);
     }
 
-    /// Fetches the latest commit message from GitHub for update notifications.
+    /// Starts a nonblocking update check unless one is already in flight.
     fn check_for_updates(&mut self) {
         if self.update_checking {
             return;
@@ -2920,6 +2927,47 @@ impl StudioApp {
         self.update_checking = true;
         let handle = std::thread::spawn(fetch_latest_commit);
         self.pending_update = Some(handle);
+    }
+
+    /// Applies every worker outcome, including join failures, so the spinner
+    /// and cached notification cannot become stale.
+    fn finish_update_check(
+        &mut self,
+        result: std::thread::Result<Result<RemoteCommit, UpdateCheckError>>,
+    ) {
+        self.update_checking = false;
+        self.latest_commit = None;
+        self.latest_sha = None;
+        self.update_time = None;
+
+        match result {
+            Ok(Ok(remote)) => {
+                let status = match commits_match(local_commit_sha(), &remote.sha) {
+                    Some(true) => "Up to date",
+                    Some(false) => "Update available",
+                    None => "Latest commit checked (local SHA unavailable)",
+                };
+                self.latest_commit = Some(remote.message.clone());
+                self.latest_sha = Some(remote.sha.clone());
+                self.update_time = Some(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs())
+                        .unwrap_or(0),
+                );
+                self.status = status.to_string();
+                self.log
+                    .log(format!("Latest commit {}: {}", remote.sha, remote.message));
+            }
+            Ok(Err(error)) => {
+                self.status = format!("Update check failed: {error}");
+                self.log_error(&format!("Update check failed: {error}"));
+            }
+            Err(_) => {
+                self.status = "Update check thread panicked".to_string();
+                self.log_error("Update check thread panicked");
+            }
+        }
     }
 
     /// The watch-faces panel: catalog (left) and active preset (right), both
@@ -8936,23 +8984,118 @@ fn fetch_release_sha256() -> Result<String, String> {
     }
 }
 
-/// Fetches the latest commit message from the GitHub API for update notifications.
-fn fetch_latest_commit() -> Result<String, String> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RemoteCommit {
+    sha: String,
+    message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum UpdateCheckError {
+    RateLimited,
+    NotFound,
+    Timeout,
+    Network(String),
+    Http(u16),
+    MalformedJson(String),
+}
+
+impl std::fmt::Display for UpdateCheckError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RateLimited => write!(formatter, "GitHub rate limit reached (HTTP 403)"),
+            Self::NotFound => write!(
+                formatter,
+                "GitHub branch or repository not found (HTTP 404)"
+            ),
+            Self::Timeout => write!(formatter, "GitHub request timed out"),
+            Self::Network(message) => write!(formatter, "network error: {message}"),
+            Self::Http(status) => write!(formatter, "GitHub returned HTTP {status}"),
+            Self::MalformedJson(message) => write!(formatter, "malformed GitHub JSON: {message}"),
+        }
+    }
+}
+
+#[derive(serde::Deserialize)]
+struct GithubCommitResponse {
+    sha: String,
+    commit: GithubCommitDetails,
+}
+
+#[derive(serde::Deserialize)]
+struct GithubCommitDetails {
+    message: String,
+}
+
+fn parse_latest_commit(body: &str) -> Result<RemoteCommit, UpdateCheckError> {
+    let parsed: GithubCommitResponse = serde_json::from_str(body)
+        .map_err(|error| UpdateCheckError::MalformedJson(error.to_string()))?;
+    if parsed.sha.trim().is_empty() || parsed.commit.message.trim().is_empty() {
+        return Err(UpdateCheckError::MalformedJson(
+            "commit SHA and message are required".to_string(),
+        ));
+    }
+    Ok(RemoteCommit {
+        sha: parsed.sha,
+        message: parsed.commit.message,
+    })
+}
+
+fn local_commit_sha() -> Option<&'static str> {
+    option_env!("GIT_COMMIT_SHA")
+        .or(option_env!("VERGEN_GIT_SHA"))
+        .map(str::trim)
+        .filter(|sha| !sha.is_empty())
+}
+
+fn short_sha(sha: &str) -> &str {
+    sha.get(..8).unwrap_or(sha)
+}
+
+fn commits_match(local: Option<&str>, remote: &str) -> Option<bool> {
+    local.map(|local| local.eq_ignore_ascii_case(remote))
+}
+
+fn classify_http_status(status: u16) -> UpdateCheckError {
+    match status {
+        403 => UpdateCheckError::RateLimited,
+        404 => UpdateCheckError::NotFound,
+        status => UpdateCheckError::Http(status),
+    }
+}
+
+fn classify_transport(
+    kind: ureq::ErrorKind,
+    message: Option<&str>,
+    timed_out: bool,
+) -> UpdateCheckError {
+    if timed_out || message.is_some_and(|message| message.contains("timed out")) {
+        UpdateCheckError::Timeout
+    } else {
+        UpdateCheckError::Network(format!("{}: {}", kind, message.unwrap_or("request failed")))
+    }
+}
+
+fn fetch_latest_commit() -> Result<RemoteCommit, UpdateCheckError> {
     let url = "https://api.github.com/repos/kaiiuen/sensor-watch-rs/commits/master";
-    let resp = ureq::get(url)
+    let response = ureq::get(url)
         .set("User-Agent", "Firmware-Studio")
         .timeout(std::time::Duration::from_secs(10))
         .call()
-        .map_err(|e| e.to_string())?;
-    let body = resp.into_string().map_err(|e| e.to_string())?;
-    // Extract the commit message from the JSON (best-effort).
-    if let Some(idx) = body.find("\"message\":\"") {
-        let rest = &body[idx + "\"message\":\"".len()..];
-        if let Some(end) = rest.find('"') {
-            return Ok(rest[..end].to_string());
-        }
-    }
-    Err("Could not parse commit".to_string())
+        .map_err(|error| match error {
+            ureq::Error::Status(status, _) => classify_http_status(status),
+            ureq::Error::Transport(transport) => {
+                let timed_out = transport
+                    .source()
+                    .and_then(|source| source.downcast_ref::<std::io::Error>())
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut);
+                classify_transport(transport.kind(), transport.message(), timed_out)
+            }
+        })?;
+    let body = response
+        .into_string()
+        .map_err(|error| UpdateCheckError::Network(error.to_string()))?;
+    parse_latest_commit(&body)
 }
 
 /// Returns a cautious, user-facing description of the two firmware volume steps.
@@ -9367,6 +9510,10 @@ mod tests {
         ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS, ARTIFACT_VERIFICATION_FAILED_STATUS,
         ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS, FIRST_RUN_STEPS,
     };
+    use super::{
+        classify_http_status, classify_transport, commits_match, parse_latest_commit,
+        UpdateCheckError,
+    };
     use super::{handle_sim_button, reset_simulator_button_state, ButtonId, SimAction};
     use crate::components;
     use crate::flash::{select_watch_drive, FlashResult, FlashStatus};
@@ -9395,6 +9542,62 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
         panic!("test worker did not finish");
+    }
+
+    #[test]
+    fn parses_github_commit_json_without_substring_assumptions() {
+        let remote = parse_latest_commit(
+            r#"{"sha":"abc12345","commit":{"message":"Fix \"quoted\" JSON\\ntext"}}"#,
+        )
+        .expect("valid GitHub response");
+        assert_eq!(remote.sha, "abc12345");
+        assert_eq!(remote.message, "Fix \"quoted\" JSON\\ntext");
+    }
+
+    #[test]
+    fn classifies_malformed_json_and_http_failures_distinctly() {
+        assert!(matches!(
+            parse_latest_commit("not json"),
+            Err(UpdateCheckError::MalformedJson(_))
+        ));
+        assert!(matches!(
+            classify_http_status(403),
+            UpdateCheckError::RateLimited
+        ));
+        assert!(matches!(
+            classify_http_status(404),
+            UpdateCheckError::NotFound
+        ));
+        assert!(matches!(
+            classify_transport(ureq::ErrorKind::Io, Some("timed out"), false),
+            UpdateCheckError::Timeout
+        ));
+        assert!(matches!(
+            classify_transport(ureq::ErrorKind::Dns, Some("offline"), false),
+            UpdateCheckError::Network(_)
+        ));
+    }
+
+    #[test]
+    fn commit_comparison_never_infers_update_from_message() {
+        assert_eq!(commits_match(Some("ABC"), "abc"), Some(true));
+        assert_eq!(commits_match(Some("local"), "remote"), Some(false));
+        assert_eq!(commits_match(None, "remote"), None);
+    }
+
+    #[test]
+    fn failed_update_check_clears_stale_state_and_spinner() {
+        let mut app = super::StudioApp::default();
+        app.latest_commit = Some("old message".into());
+        app.latest_sha = Some("old sha".into());
+        app.update_time = Some(123);
+        app.update_checking = true;
+        app.finish_update_check(Ok(Err(UpdateCheckError::NotFound)));
+        assert!(!app.update_checking);
+        assert!(app.latest_commit.is_none());
+        assert!(app.latest_sha.is_none());
+        assert!(app.update_time.is_none());
+        assert!(app.status.contains("404"));
     }
 
     #[test]
