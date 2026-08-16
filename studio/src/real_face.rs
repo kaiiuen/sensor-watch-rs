@@ -655,6 +655,12 @@ impl RealFace {
         }
     }
 
+    /// Returns the exact civil time currently handed to the firmware seam.
+    #[cfg(feature = "real-faces")]
+    pub fn time(&self) -> DateTime {
+        self.mock.now
+    }
+
     /// Whether the firmware face has received its initial activation.
     pub fn is_activated(&self) -> bool {
         self.activated
@@ -1365,6 +1371,24 @@ mod tests {
     /// hour, minute, second)` order, matching the reference core tests.
     fn friday() -> (u32, u32, u32, u32, u32, u32) {
         (2023, 1, 6, 15, 4, 0)
+    }
+
+    #[test]
+    fn real_face_receives_exact_simulator_civil_time() {
+        let mut face = RealFace::new("SIMPLE_CLOCK").expect("SIMPLE_CLOCK seam mapping");
+        assert!(face.set_time(2025, 7, 4, 23, 59, 42));
+        let time = face.time();
+        assert_eq!(
+            (
+                time.year,
+                time.month,
+                time.day,
+                time.hour,
+                time.minute,
+                time.second
+            ),
+            (5, 7, 4, 23, 59, 42)
+        );
     }
 
     #[test]

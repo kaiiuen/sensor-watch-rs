@@ -498,18 +498,39 @@ pub fn next_index(id: HelpId, current: usize) -> usize {
     step_index(id, current).saturating_add(1).min(last)
 }
 
-/// Session-only dismissal state. A fresh Studio process intentionally starts empty.
-#[derive(Default)]
-pub struct Dismissed {
-    ids: HashSet<HelpId>,
+/// Persistent claims for panel auto-tours. The string representation keeps the
+/// settings file backward-compatible and allows unknown future IDs to survive a
+/// load/save round trip.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TourClaims {
+    keys: HashSet<String>,
 }
 
-impl Dismissed {
-    pub fn contains(&self, id: HelpId) -> bool {
-        self.ids.contains(&id)
+impl TourClaims {
+    pub fn from_keys(keys: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            keys: keys.into_iter().collect(),
+        }
     }
-    pub fn insert(&mut self, id: HelpId) {
-        self.ids.insert(id);
+
+    pub fn keys(&self) -> Vec<String> {
+        let mut keys: Vec<_> = self.keys.iter().cloned().collect();
+        keys.sort();
+        keys
+    }
+
+    pub fn contains(&self, id: HelpId) -> bool {
+        self.keys.contains(id.stable_key())
+    }
+
+    pub fn claim(&mut self, id: HelpId) -> bool {
+        self.keys.insert(id.stable_key().to_string())
+    }
+
+    pub fn claim_all(&mut self, ids: impl IntoIterator<Item = HelpId>) {
+        for id in ids {
+            self.claim(id);
+        }
     }
 }
 
@@ -554,13 +575,18 @@ mod tests {
     }
 
     #[test]
-    fn stable_ids_and_session_dismissal() {
+    fn stable_ids_and_persistent_claims() {
         let id = HelpId::BuildFlash;
         assert_eq!(id.stable_key(), "build-flash");
-        let mut dismissed = Dismissed::default();
-        assert!(!dismissed.contains(id));
-        dismissed.insert(id);
-        assert!(dismissed.contains(id));
+        let mut claims = TourClaims::default();
+        assert!(!claims.contains(id));
+        assert!(claims.claim(id));
+        assert!(!claims.claim(id));
+        assert!(claims.contains(id));
+        assert_eq!(
+            TourClaims::from_keys(claims.keys()).keys(),
+            vec!["build-flash"]
+        );
     }
 
     #[test]

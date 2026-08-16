@@ -128,6 +128,10 @@ pub struct AppSettings {
     /// Whether the first-run welcome overlay has been dismissed.
     #[serde(default)]
     pub first_run: bool,
+    /// Stable IDs of panel tours explicitly completed or skipped.
+    /// Missing in legacy settings, which means no panel has been claimed.
+    #[serde(default)]
+    pub tour_claims: Vec<String>,
     /// Whether ordinary Studio changes and close automatically save settings.
     #[serde(default = "default_true")]
     pub persist_user_changes: bool,
@@ -188,6 +192,7 @@ impl AppSettings {
         modules: &ModuleManager,
         output_dir: String,
         first_run: bool,
+        tour_claims: Vec<String>,
         drift_ppm: f64,
         rtc_calibration: &RtcCalibrationSettings,
         line_limit: usize,
@@ -215,6 +220,7 @@ impl AppSettings {
             modules: modules.clone(),
             output_dir,
             first_run,
+            tour_claims,
             persist_user_changes,
             reset_test_session_on_compile,
             fresh_test_executable_profile,
@@ -379,6 +385,7 @@ impl Default for AppSettings {
             modules: ModuleManager::default(),
             output_dir: default_output_dir(),
             first_run: false,
+            tour_claims: Vec::new(),
             persist_user_changes: true,
             reset_test_session_on_compile: true,
             fresh_test_executable_profile: true,
@@ -483,6 +490,7 @@ mod tests {
         assert!(loaded.persist_user_changes);
         assert!(loaded.reset_test_session_on_compile);
         assert!(loaded.fresh_test_executable_profile);
+        assert!(loaded.tour_claims.is_empty());
     }
 
     #[test]
@@ -517,6 +525,7 @@ mod tests {
             &super::ModuleManager::default(),
             super::default_output_dir(),
             false,
+            Vec::new(),
             0.0,
             &RtcCalibrationSettings::default(),
             500,

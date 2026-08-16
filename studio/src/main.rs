@@ -43,7 +43,7 @@ mod watch_sim;
 mod wiki;
 
 use eframe::egui;
-use help::{AnchorId, AnchorRect, AnchorRegistry, HelpId};
+use help::{AnchorId, AnchorRect, AnchorRegistry, HelpId, TourClaims};
 use i18n::{tr, Key, Language};
 use presets::PresetManager;
 
@@ -195,10 +195,12 @@ struct StudioApp {
     /// Destination panel requested by a cross-panel tour transition; anchors are
     /// intentionally rendered only after the destination has produced a frame.
     help_pending_panel: Option<Panel>,
-    /// Whether closing the current walkthrough dismisses it for this session.
-    help_dont_show_again: bool,
-    /// Session-only dismissed help IDs; intentionally not persisted.
-    dismissed_help: help::Dismissed,
+    /// Whether the current walkthrough is minimized rather than closed.
+    help_minimized: bool,
+    /// Whether the current walkthrough was auto-opened from a panel visit.
+    help_auto_opened: bool,
+    /// Persistent per-panel auto-tour claims.
+    tour_claims: TourClaims,
     /// The latest system resource snapshot for the footer.
     sys_stats: sysstats::SysStats,
     /// The receiver for background system resource samples.
@@ -344,6 +346,8 @@ struct StudioApp {
     fuzz_test_result: Option<String>,
     /// Whether the first-run welcome overlay should be shown.
     first_run: bool,
+    /// Whether the first-run welcome is minimized into its resume banner.
+    welcome_minimized: bool,
     /// Whether ordinary Studio changes and close automatically save settings.
     persist_user_changes: bool,
     /// Whether a valid build starts with a fresh transient test session.
@@ -877,6 +881,8 @@ impl Default for StudioApp {
         let bootstrap_preferences = persist::load_runtime_preferences();
         // Shared atomic for the stats sampler's live rate.
         let stats_rate_shared = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(1000));
+        let watch = CasioF91W::new();
+        let (sim_year, sim_month, sim_day, sim_hour, sim_minute, _, sim_weekday) = watch.get_time();
         let mut app = StudioApp {
             fonts_installed: false,
             current_panel: Panel::Dashboard,
@@ -905,7 +911,7 @@ impl Default for StudioApp {
             log: debug::DebugLog::new(),
             tick_verbosity: debug::TickVerbosity::Hide,
             tick_log: debug::DebugLog::new(),
-            watch: CasioF91W::new(),
+            watch,
             sim_last_tick: std::time::Instant::now(),
             watch_renderer: watch_display::WatchRenderer::new(),
             sim_scale: 0.5,
@@ -944,8 +950,9 @@ impl Default for StudioApp {
             help_open: None,
             help_step: 0,
             help_pending_panel: None,
-            help_dont_show_again: false,
-            dismissed_help: help::Dismissed::default(),
+            help_minimized: false,
+            help_auto_opened: false,
+            tour_claims: TourClaims::default(),
             sys_stats: sysstats::SysStats::default(),
             stats_rate_ms: 1000,
             stats_rate_shared: stats_rate_shared.clone(),
@@ -977,12 +984,12 @@ impl Default for StudioApp {
             component_profile: 0,
             component_draft: components::selected_config(&components::default_profiles(), 0),
             sim_face_idx: 0,
-            sim_year: 2026,
-            sim_month: 1,
-            sim_day: 1,
-            sim_hour: 12,
-            sim_minute: 0,
-            sim_weekday: 4,
+            sim_year,
+            sim_month,
+            sim_day,
+            sim_hour,
+            sim_minute,
+            sim_weekday: sim_weekday as usize,
             btn_l_down: false,
             btn_c_down: false,
             btn_a_down: false,
@@ -1025,6 +1032,7 @@ impl Default for StudioApp {
             code_view: None,
             fuzz_test_result: None,
             first_run: true,
+            welcome_minimized: false,
             persist_user_changes: true,
             reset_test_session_on_compile: true,
             fresh_test_executable_profile: true,
@@ -1135,9 +1143,9 @@ impl eframe::App for StudioApp {
             self.preset_height = 0.0;
         }
 
-        // Escape belongs to help first, so normal shortcuts cannot consume it.
+        // Escape pauses help first, so normal shortcuts cannot consume it.
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.help_open.is_some() {
-            self.close_help(false);
+            self.minimize_help();
             ctx.request_repaint();
             return;
         }
@@ -1452,7 +1460,7 @@ impl eframe::App for StudioApp {
                     .on_hover_text("Open the beginner walkthrough for this panel");
                 self.register_anchor(self.current_panel, AnchorId::PanelHelp, &response);
                 if response.clicked() {
-                    self.open_help_for(self.current_panel);
+                    self.open_help_for(self.current_panel, false);
                 }
             });
         });
@@ -1649,6 +1657,9 @@ impl eframe::App for StudioApp {
         if was_simulator && self.current_panel != Panel::Simulator {
             self.cancel_simulator_buttons();
         }
+        if !self.first_run && self.help_open.is_none() {
+            self.maybe_open_help_for(self.current_panel);
+        }
         self.help_spotlight(ctx);
 
         if self.advanced_mode_confirm {
@@ -1673,7 +1684,7 @@ impl eframe::App for StudioApp {
         }
 
         // One-time first-run welcome overlay.
-        if self.first_run {
+        if self.first_run && !self.welcome_minimized {
             egui::Window::new("Welcome")
                 .collapsible(false)
                 .resizable(false)
@@ -1687,14 +1698,46 @@ impl eframe::App for StudioApp {
                         ui.label(step);
                     }
                     ui.add_space(10.0);
-                    if ui.button("Start with Blocks").clicked() {
-                        self.first_run = false;
-                        self.block_editor.set_blocks_mode(true);
-                        self.current_panel = first_run_start_panel();
-                        self.open_help_for(self.current_panel);
-                        self.status = "Blocks editor ready - name your face to begin".to_string();
-                        self.save_settings_internal();
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Start").clicked() {
+                            self.first_run = false;
+                            self.block_editor.set_blocks_mode(true);
+                            self.current_panel = first_run_start_panel();
+                            self.open_help_for(self.current_panel, false);
+                            self.status =
+                                "Blocks editor ready - name your face to begin".to_string();
+                            self.save_settings_internal();
+                        }
+                        if ui.button("Skip").clicked() {
+                            self.first_run = false;
+                            self.tour_claims.claim_all(help::FIRST_RUN_SEQUENCE);
+                            self.save_settings_internal();
+                        }
+                        if ui.button("Pause").clicked() {
+                            self.welcome_minimized = true;
+                            self.save_settings_internal();
+                        }
+                    });
+                });
+        }
+        if self.first_run && self.welcome_minimized {
+            egui::Area::new(egui::Id::new("welcome-resume-banner"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(18.0, 18.0))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.strong("Welcome paused");
+                            if ui.button("Resume").clicked() {
+                                self.welcome_minimized = false;
+                            }
+                            if ui.button("Skip").clicked() {
+                                self.first_run = false;
+                                self.tour_claims.claim_all(help::FIRST_RUN_SEQUENCE);
+                                self.save_settings_internal();
+                            }
+                        });
+                    });
                 });
         }
 
@@ -1918,43 +1961,87 @@ impl StudioApp {
         Ok(path)
     }
 
-    fn open_help_for(&mut self, panel: Panel) {
+    fn open_help_for(&mut self, panel: Panel, auto: bool) {
         self.help_open = Some(panel.help_id());
         self.help_step = 0;
-        self.help_dont_show_again = false;
+        self.help_pending_panel = None;
+        self.help_minimized = false;
+        self.help_auto_opened = auto;
     }
 
     fn maybe_open_help_for(&mut self, panel: Panel) {
-        if self.help_open.is_none() && !self.dismissed_help.contains(panel.help_id()) {
-            self.open_help_for(panel);
+        let id = panel.help_id();
+        if self.help_open.is_none() && !self.tour_claims.contains(id) {
+            self.open_help_for(panel, true);
         }
     }
 
-    fn close_help(&mut self, dismiss: bool) {
-        if let Some(id) = self.help_open {
-            if dismiss {
-                self.dismissed_help.insert(id);
+    fn minimize_help(&mut self) {
+        if self.help_open.is_some() {
+            self.help_minimized = true;
+        }
+    }
+
+    fn close_help(&mut self, claim: bool) {
+        if claim {
+            if let Some(id) = self.help_open {
+                self.tour_claims.claim(id);
             }
         }
         self.help_open = None;
         self.help_step = 0;
         self.help_pending_panel = None;
-        self.help_dont_show_again = false;
+        self.help_minimized = false;
+        self.help_auto_opened = false;
+        self.save_settings_internal();
     }
 
     /// Foreground guided-help layer. Missing or cross-panel anchors deliberately
     /// use a centered card; they are never carried over from a prior frame.
     fn help_spotlight(&mut self, ctx: &egui::Context) {
         let Some(id) = self.help_open else { return };
+        let target_panel = panel_for_help_id(id).unwrap_or(self.current_panel);
+        if self.help_minimized || self.current_panel != target_panel {
+            let label = if self.help_minimized {
+                format!("Tour paused — {}", help::tutorial(id).title)
+            } else {
+                format!(
+                    "Tour paused — return to {}",
+                    target_panel.label(self.language)
+                )
+            };
+            let mut resume = false;
+            egui::Area::new(egui::Id::new("help-resume-banner"))
+                .order(egui::Order::Foreground)
+                .fixed_pos(egui::pos2(18.0, 18.0))
+                .show(ctx, |ui| {
+                    egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.strong(label);
+                            if ui.button("Resume").clicked() {
+                                resume = true;
+                            }
+                            if ui.button("Skip").clicked() {
+                                self.close_help(true);
+                            }
+                        });
+                    });
+                });
+            if resume {
+                self.help_minimized = false;
+                if self.current_panel != target_panel {
+                    self.help_pending_panel = Some(target_panel);
+                    self.current_panel = target_panel;
+                }
+                ctx.request_repaint();
+            }
+            return;
+        }
         if let Some(panel) = self.help_pending_panel {
             if self.current_panel == panel {
                 self.help_pending_panel = None;
                 ctx.request_repaint();
             }
-            return;
-        }
-        if self.current_panel.help_id() != id {
-            self.close_help(false);
             return;
         }
         let tutorial = help::tutorial(id);
@@ -2025,10 +2112,7 @@ impl StudioApp {
                             ui.weak(step.instruction(id, index));
                         });
                     ui.label(format!("Step {} of {}", index + 1, tutorial.steps.len()));
-                    ui.checkbox(
-                        &mut self.help_dont_show_again,
-                        "Dismiss this tour for this session",
-                    );
+
                     ui.horizontal(|ui| {
                         if ui
                             .add_enabled(index > 0, egui::Button::new("Back"))
@@ -2039,6 +2123,9 @@ impl StudioApp {
                         let last = index + 1 == tutorial.steps.len();
                         if ui.button(if last { "Finish" } else { "Next" }).clicked() {
                             action = Some(if last { "finish" } else { "next" });
+                        }
+                        if ui.button("Pause").clicked() {
+                            action = Some("pause");
                         }
                         if ui.button("Skip").clicked() {
                             action = Some("skip");
@@ -2059,7 +2146,8 @@ impl StudioApp {
                     self.current_panel = panel;
                 }
             }
-            Some("finish") => self.close_help(self.help_dont_show_again),
+            Some("finish") => self.close_help(true),
+            Some("pause") => self.minimize_help(),
             Some("skip") => self.close_help(true),
             _ => {}
         }
@@ -2206,7 +2294,18 @@ impl StudioApp {
     }
 
     fn draw_tab_button(&mut self, ui: &mut egui::Ui, panel: Panel) {
-        let response = ui.selectable_label(self.current_panel == panel, panel.label(self.language));
+        let return_target = self.help_open.and_then(panel_for_help_id) == Some(panel)
+            && self.current_panel != panel;
+        let response = if return_target {
+            ui.scope(|ui| {
+                ui.visuals_mut().widgets.inactive.bg_fill = egui::Color32::from_rgb(120, 90, 35);
+                ui.visuals_mut().widgets.hovered.bg_fill = egui::Color32::from_rgb(160, 120, 45);
+                ui.selectable_label(false, format!("↩ {}", panel.label(self.language)))
+            })
+            .inner
+        } else {
+            ui.selectable_label(self.current_panel == panel, panel.label(self.language))
+        };
         self.register_anchor(panel, AnchorId::PanelNavigation, &response);
         if response.clicked() {
             if self.current_panel != panel {
@@ -2214,10 +2313,10 @@ impl StudioApp {
                     .log(format!("Switched to panel {}", panel.label(self.language)));
             }
             self.current_panel = panel;
-            // Manual panel switching pauses the active tour and clears all
-            // frame-local targets rather than spotlighting stale geometry.
+            // Manual panel switching pauses the active tour. Its HelpId and
+            // step remain intact; returning renders fresh anchors before resume.
             if self.help_open.is_some() {
-                self.close_help(false);
+                self.help_minimized = true;
                 self.help_anchors.begin_frame(self.help_frame);
             }
         }
@@ -6187,7 +6286,8 @@ impl StudioApp {
 
                 // Date/time controller: set the simulated display without tedious
                 // button mashing.
-                let date_response = ui.collapsing("Date / time controller", |ui| {
+                let date_response = ui.collapsing("Date / time controller (PC local)", |ui| {
+                    ui.weak("Reset to now uses the host PC's local civil time. Apply date/time stays deterministic and is not timezone-converted.");
                     egui::Grid::new("sim_date_grid")
                         .spacing([12.0, 6.0])
                         .num_columns(4)
@@ -6260,10 +6360,10 @@ impl StudioApp {
                             ));
                         }
                         if ui.button("Reset to now").clicked() {
-                            self.watch.time_offset = 0;
-                            self.watch.weekday_override = None;
-                            self.sim_log.log("Reset to now".to_string());
-                            self.log.log("Sim date reset to now");
+                            self.watch.reset_to_now();
+                            self.sync_sim_controller_from_watch();
+                            self.sim_log.log("Reset to host PC local time".to_string());
+                            self.log.log("Sim date reset to host PC local time");
                         }
                     });
                     ui.separator();
@@ -6408,17 +6508,11 @@ impl StudioApp {
         let mode_24 = self.watch.time_mode == watch_sim::TimeMode::H24;
         let active_real_face_name = self.active_real_face_name.clone();
         let active_real_mode_24 = self.active_real_mode_24;
-        // `t_year` is signed from the watch; clamp to a sane wall-clock year
-        // for the firmware's 2020-2083 range before handing it to the seam.
+        // Pass the selected civil fields through unchanged. The firmware seam
+        // validates its supported 2020-2083 RTC range and declines invalid edits.
         let real_result = self.real_face.as_mut().map(|real| {
-            let valid_time = real.set_time(
-                t_year.clamp(2020, 2083) as u32,
-                t_month,
-                t_day,
-                t_hour,
-                t_minute,
-                t_second,
-            );
+            let valid_time =
+                real.set_time(t_year as u32, t_month, t_day, t_hour, t_minute, t_second);
             let face_name = real.face_name().to_string();
             let face_changed = active_real_face_name.as_deref() != Some(face_name.as_str());
             let mode_changed = active_real_mode_24 != Some(mode_24);
@@ -6475,17 +6569,7 @@ impl StudioApp {
             svg_display.second_1 = ' ';
         }
         if let Some(text) = &self.watch.override_text {
-            let slot = |i: usize| -> char { text.chars().nth(i).unwrap_or(' ') };
-            svg_display.mode_2 = ' ';
-            svg_display.mode_1 = ' ';
-            svg_display.day_2 = ' ';
-            svg_display.day_1 = ' ';
-            svg_display.hour_2 = slot(0);
-            svg_display.hour_1 = slot(1);
-            svg_display.minute_2 = slot(2);
-            svg_display.minute_1 = slot(3);
-            svg_display.second_2 = slot(4);
-            svg_display.second_1 = slot(5);
+            svg_display.apply_text_override(text);
         }
 
         // Render the watch SVG at a size based on the scale.
@@ -7754,6 +7838,7 @@ impl StudioApp {
             &self.modules,
             self.output_dir.clone(),
             self.first_run,
+            self.tour_claims.keys(),
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
@@ -7806,6 +7891,7 @@ impl StudioApp {
             &self.modules,
             self.output_dir.clone(),
             self.first_run,
+            self.tour_claims.keys(),
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
@@ -7893,12 +7979,7 @@ impl StudioApp {
         self.active_real_face_name = None;
         self.active_real_mode_24 = None;
         self.sim_face_idx = 0;
-        self.sim_year = 2026;
-        self.sim_month = 1;
-        self.sim_day = 1;
-        self.sim_hour = 12;
-        self.sim_minute = 0;
-        self.sim_weekday = 4;
+        self.sync_sim_controller_from_watch();
         self.btn_l_events = real_face::ButtonEventState::default();
         self.btn_a_events = real_face::ButtonEventState::default();
         self.cancel_simulator_buttons();
@@ -7949,6 +8030,7 @@ impl StudioApp {
             &self.modules,
             self.output_dir.clone(),
             self.first_run,
+            self.tour_claims.keys(),
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
@@ -7991,6 +8073,7 @@ impl StudioApp {
             &self.modules,
             self.output_dir.clone(),
             self.first_run,
+            self.tour_claims.keys(),
             self.drift_session.ppm,
             &self.rtc_calibration,
             self.line_limit,
@@ -8099,6 +8182,8 @@ impl StudioApp {
         self.component_draft =
             components::selected_config(&self.component_profiles, self.component_profile);
         self.first_run = s.first_run;
+        self.welcome_minimized = false;
+        self.tour_claims = TourClaims::from_keys(s.tour_claims);
         self.persist_user_changes = s.persist_user_changes;
         self.reset_test_session_on_compile = s.reset_test_session_on_compile;
         self.fresh_test_executable_profile = s.fresh_test_executable_profile;
@@ -9966,6 +10051,39 @@ mod tests {
     #[test]
     fn first_run_starts_in_the_blocks_editor() {
         assert_eq!(first_run_start_panel(), Panel::Editor);
+    }
+
+    #[test]
+    fn welcome_skip_claims_first_run_tours_without_opening_one() {
+        let mut app = super::StudioApp::default();
+        app.first_run = false;
+        app.tour_claims.claim_all(super::help::FIRST_RUN_SEQUENCE);
+        assert!(super::help::FIRST_RUN_SEQUENCE
+            .into_iter()
+            .all(|id| app.tour_claims.contains(id)));
+        assert!(app.help_open.is_none());
+    }
+
+    #[test]
+    fn pause_and_resume_keep_the_same_tour_step() {
+        let mut app = super::StudioApp::default();
+        app.open_help_for(super::Panel::Editor, false);
+        app.help_step = 2;
+        app.minimize_help();
+        assert_eq!(app.help_open, Some(super::HelpId::Editor));
+        assert_eq!(app.help_step, 2);
+        assert!(app.help_minimized);
+        app.help_minimized = false;
+        assert_eq!(app.help_step, 2);
+    }
+
+    #[test]
+    fn manual_help_reopens_after_an_auto_claim() {
+        let mut app = super::StudioApp::default();
+        app.tour_claims.claim(super::HelpId::Settings);
+        app.open_help_for(super::Panel::Settings, false);
+        assert_eq!(app.help_open, Some(super::HelpId::Settings));
+        assert_eq!(app.help_step, 0);
     }
 
     #[test]

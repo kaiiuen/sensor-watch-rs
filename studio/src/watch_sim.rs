@@ -7,6 +7,7 @@
 //! field takes priority over the normal time display, so overrides can never be
 //! clobbered by the per-frame update.
 
+use chrono::{Datelike, Local, TimeZone, Timelike};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// The time mode (12 or 24 hour).
@@ -22,6 +23,7 @@ pub struct Display {
     pub alarm_on_mark: bool,
     pub time_signal_on_mark: bool,
     pub time_mode_24: bool,
+    /// The physical PM glyph. AM leaves this off, even in 12-hour mode.
     pub time_mode_12: bool,
     pub lap: bool,
     pub dots: bool,
@@ -36,6 +38,32 @@ pub struct Display {
     pub minute_1: char,
     pub second_2: char,
     pub second_1: char,
+}
+
+impl Display {
+    /// Replaces the normal digits with an overlay while preserving a physically
+    /// held backlight and hiding every other LCD indicator.
+    pub fn apply_text_override(&mut self, text: &str) {
+        self.alarm_on_mark = false;
+        self.time_signal_on_mark = false;
+        self.time_mode_24 = false;
+        self.time_mode_12 = false;
+        self.lap = false;
+        self.dots = false;
+
+        self.mode_2 = ' ';
+        self.mode_1 = ' ';
+        self.day_2 = ' ';
+        self.day_1 = ' ';
+        let chars: Vec<char> = text.chars().collect();
+        let slot = |i: usize| chars.get(i).copied().unwrap_or(' ');
+        self.hour_2 = slot(0);
+        self.hour_1 = slot(1);
+        self.minute_2 = slot(2);
+        self.minute_1 = slot(3);
+        self.second_2 = slot(4);
+        self.second_1 = slot(5);
+    }
 }
 
 /// The watch operating system.
@@ -60,14 +88,17 @@ pub struct CasioF91W {
 impl CasioF91W {
     /// Creates a new watch with default state.
     pub fn new() -> Self {
-        CasioF91W {
+        let mut watch = CasioF91W {
             time_offset: 0,
             time_mode: TimeMode::H24,
             light: false,
             display: Display::default(),
             weekday_override: None,
             override_text: None,
-        }
+        };
+        // Simulator policy: "now" means the host PC's local civil time, not UTC.
+        watch.reset_to_now();
+        watch
     }
 
     /// Returns the current wall-clock time in seconds since the epoch.
@@ -95,10 +126,32 @@ impl CasioF91W {
         (year as i32, month, day, hour, minute, second, dow % 7)
     }
 
-    /// Sets the watch's displayed date/time to the given civil date.
+    /// Sets the watch's displayed date/time to explicit civil fields.
+    ///
+    /// This intentionally does not consult the host timezone: Apply date/time
+    /// is deterministic and treats the fields as simulator civil time.
     pub fn set_datetime(&mut self, year: i32, month: u32, day: u32, hour: u32, minute: u32) {
+        self.set_civil_datetime(year, month, day, hour, minute, 0);
+    }
+
+    /// Resets the simulator to the host PC's local civil time.
+    pub fn reset_to_now(&mut self) {
+        let (year, month, day, hour, minute, second, _) = local_civil_time_now();
+        self.set_civil_datetime(year, month, day, hour, minute, second);
+        self.weekday_override = None;
+    }
+
+    fn set_civil_datetime(
+        &mut self,
+        year: i32,
+        month: u32,
+        day: u32,
+        hour: u32,
+        minute: u32,
+        second: u32,
+    ) {
         let days = days_from_civil(year, month, day);
-        let target = days * 86400 + (hour as i64) * 3600 + (minute as i64) * 60;
+        let target = days * 86400 + (hour as i64) * 3600 + (minute as i64) * 60 + second as i64;
         let base = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs() as i64)
@@ -140,14 +193,7 @@ impl CasioF91W {
 
         // If an override is set, show it and skip the normal time display.
         if let Some(text) = &self.override_text {
-            let chars: Vec<char> = text.chars().collect();
-            let slot = |i: usize| -> char { chars.get(i).copied().unwrap_or(' ') };
-            d.hour_2 = slot(0);
-            d.hour_1 = slot(1);
-            d.minute_2 = slot(2);
-            d.minute_1 = slot(3);
-            d.second_2 = slot(4);
-            d.second_1 = slot(5);
+            d.apply_text_override(text);
             self.display = d;
             return;
         }
@@ -224,6 +270,34 @@ impl CasioF91W {
     }
 }
 
+/// Returns the host-local civil fields for a Unix timestamp.
+///
+/// Keeping this conversion in chrono's platform-backed local timezone support
+/// avoids hand-written offset/DST arithmetic in the simulator.
+pub(crate) fn local_civil_time_at(timestamp: i64) -> (i32, u32, u32, u32, u32, u32, u32) {
+    let local = Local
+        .timestamp_opt(timestamp, 0)
+        .single()
+        .expect("Unix timestamp must map to one local civil time");
+    (
+        local.year(),
+        local.month(),
+        local.day(),
+        local.hour(),
+        local.minute(),
+        local.second(),
+        local.weekday().num_days_from_sunday(),
+    )
+}
+
+fn local_civil_time_now() -> (i32, u32, u32, u32, u32, u32, u32) {
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    local_civil_time_at(timestamp)
+}
+
 impl Default for CasioF91W {
     fn default() -> Self {
         Self::new()
@@ -232,7 +306,82 @@ impl Default for CasioF91W {
 
 #[cfg(test)]
 mod tests {
-    use super::{CasioF91W, TimeMode};
+    use super::{local_civil_time_at, CasioF91W, Display, TimeMode};
+    use chrono::{Datelike, Local, TimeZone, Timelike};
+
+    #[test]
+    fn fixed_timestamp_uses_platform_local_civil_conversion() {
+        let timestamp = 1_735_732_800; // 2025-01-01 00:00:00 UTC
+        let actual = local_civil_time_at(timestamp);
+        let expected = Local.timestamp_opt(timestamp, 0).single().unwrap();
+        assert_eq!(
+            actual,
+            (
+                expected.year(),
+                expected.month(),
+                expected.day(),
+                expected.hour(),
+                expected.minute(),
+                expected.second(),
+                expected.weekday().num_days_from_sunday(),
+            )
+        );
+    }
+
+    #[test]
+    fn reset_to_now_uses_host_local_civil_time() {
+        let mut watch = CasioF91W::new();
+        watch.reset_to_now();
+        let (year, month, day, hour, minute, second, _) = watch.get_time();
+        let now = Local::now();
+        assert_eq!(
+            (year, month, day, hour, minute),
+            (now.year(), now.month(), now.day(), now.hour(), now.minute())
+        );
+        assert!((second as i32 - now.second() as i32).abs() <= 1);
+    }
+
+    #[test]
+    fn explicit_simulated_time_is_timezone_independent_and_stable() {
+        let mut watch = CasioF91W::new();
+        watch.set_datetime(2025, 7, 4, 23, 59);
+        assert_eq!(
+            (
+                watch.get_time().0,
+                watch.get_time().1,
+                watch.get_time().2,
+                watch.get_time().3,
+                watch.get_time().4
+            ),
+            (2025, 7, 4, 23, 59)
+        );
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(
+            (
+                watch.get_time().0,
+                watch.get_time().1,
+                watch.get_time().2,
+                watch.get_time().3,
+                watch.get_time().4
+            ),
+            (2025, 7, 4, 23, 59)
+        );
+    }
+
+    #[test]
+    fn changing_time_mode_only_changes_display_representation() {
+        let mut watch = CasioF91W::new();
+        watch.set_datetime(2025, 7, 4, 23, 0);
+        let civil_before = watch.get_time();
+        watch.time_mode = TimeMode::H12;
+        watch.update_display();
+        assert_eq!(watch.get_time(), civil_before);
+        assert!(watch.display.time_mode_12);
+        watch.time_mode = TimeMode::H24;
+        watch.update_display();
+        assert_eq!(watch.get_time(), civil_before);
+        assert!(watch.display.time_mode_24);
+    }
 
     #[test]
     fn twelve_hour_display_uses_twelve_for_midnight_and_noon() {
@@ -242,6 +391,60 @@ mod tests {
         assert_eq!(watch.display_hour(12), 12);
         assert_eq!(watch.display_hour(13), 1);
         assert_eq!(watch.display_hour(23), 11);
+    }
+
+    #[test]
+    fn casio_overlay_clears_indicators_but_preserves_held_light_and_restores() {
+        let normal = Display {
+            alarm_on_mark: true,
+            time_signal_on_mark: true,
+            time_mode_24: true,
+            time_mode_12: true,
+            lap: true,
+            dots: true,
+            light: true,
+            mode_2: 'M',
+            mode_1: 'O',
+            day_2: '2',
+            day_1: '4',
+            hour_2: '1',
+            hour_1: '2',
+            minute_2: '3',
+            minute_1: '4',
+            second_2: '5',
+            second_1: '6',
+        };
+        let mut overlay = normal;
+        overlay.apply_text_override("CASIO ");
+        assert_eq!(overlay.hour_2, 'C');
+        assert_eq!(overlay.hour_1, 'A');
+        assert_eq!(overlay.minute_2, 'S');
+        assert_eq!(overlay.minute_1, 'I');
+        assert_eq!(overlay.second_2, 'O');
+        assert_eq!(overlay.second_1, ' ');
+        assert!(!overlay.alarm_on_mark);
+        assert!(!overlay.time_signal_on_mark);
+        assert!(!overlay.time_mode_24);
+        assert!(!overlay.time_mode_12);
+        assert!(!overlay.lap);
+        assert!(!overlay.dots);
+        assert!(overlay.light);
+
+        // A released CASIO override is rebuilt from the normal watch state,
+        // restoring the snapshot rather than retaining the cleared flags.
+        let mut watch = CasioF91W::new();
+        watch.time_mode = TimeMode::H24;
+        watch.light = true;
+        watch.update_display();
+        let restored = watch.display;
+        watch.set_casio(true);
+        watch.update_display();
+        assert!(!watch.display.dots);
+        assert!(!watch.display.time_mode_24);
+        watch.set_casio(false);
+        watch.update_display();
+        assert_eq!(watch.display, restored);
+        assert_eq!(normal, Display { ..normal });
     }
 
     #[test]

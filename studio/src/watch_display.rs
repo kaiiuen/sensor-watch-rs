@@ -291,6 +291,20 @@ mod tests {
     }
 
     #[test]
+    fn am_hides_pm_glyph_in_12_hour_mode() {
+        let fd = FaceDisplay {
+            pm: false,
+            h24: false,
+            ..FaceDisplay::default()
+        };
+        let display = face_display_to_svg(&fd);
+        // `timeMode12` is the PM glyph, not a generic 12-hour-mode marker.
+        assert!(!display.time_mode_12);
+        assert!(!display.time_mode_24);
+        assert_eq!(element_opacity("timeMode12", &display), Some(0.0));
+    }
+
+    #[test]
     fn twenty_four_hour_display_never_maps_pm_to_mode_glyph() {
         let fd = FaceDisplay {
             pm: true,
@@ -302,5 +316,31 @@ mod tests {
         assert!(!display.time_mode_12);
         assert_eq!(element_opacity("timeMode24", &display), Some(1.0));
         assert_eq!(element_opacity("timeMode12", &display), Some(0.0));
+    }
+
+    #[test]
+    fn false_indicators_are_hidden_without_inverting_their_state() {
+        let mut hidden = Display::default();
+        assert_eq!(element_opacity("alarmOnMark", &hidden), Some(0.0));
+        assert_eq!(element_opacity("timeSignalOnMark", &hidden), Some(0.0));
+        assert_eq!(element_opacity("timeMode24", &hidden), Some(0.0));
+        assert_eq!(element_opacity("timeMode12", &hidden), Some(0.0));
+        assert_eq!(element_opacity("lap", &hidden), Some(0.0));
+        assert_eq!(element_opacity("dot-top", &hidden), Some(0.0));
+
+        hidden.alarm_on_mark = true;
+        hidden.time_signal_on_mark = true;
+        hidden.time_mode_24 = true;
+        hidden.time_mode_12 = true;
+        hidden.lap = true;
+        hidden.dots = true;
+        hidden.light = true;
+        assert_eq!(element_opacity("alarmOnMark", &hidden), Some(1.0));
+        assert_eq!(element_opacity("timeSignalOnMark", &hidden), Some(1.0));
+        assert_eq!(element_opacity("timeMode24", &hidden), Some(1.0));
+        assert_eq!(element_opacity("timeMode12", &hidden), Some(1.0));
+        assert_eq!(element_opacity("lap", &hidden), Some(1.0));
+        assert_eq!(element_opacity("dot-bottom", &hidden), Some(1.0));
+        assert_eq!(element_opacity("light", &hidden), Some(0.4));
     }
 }

@@ -18,6 +18,9 @@ default = ["real-faces"]
 eframe = "0.27"
 egui = "0.27"
 
+# Host-local civil time for the simulator's Reset to now/startup policy.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
 # SVG rendering for the watch face (1:1 F-91W replica)
 resvg = "0.42"
 usvg = "0.42"
