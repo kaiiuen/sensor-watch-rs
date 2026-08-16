@@ -197,6 +197,9 @@ struct StudioApp {
     help_pending_panel: Option<Panel>,
     /// Whether the current walkthrough is minimized rather than closed.
     help_minimized: bool,
+    /// Changes when a tour step/panel/tour changes, giving the movable card a
+    /// fresh default without resetting it on ordinary repaint frames.
+    help_card_generation: u64,
     /// Whether the current walkthrough was auto-opened from a panel visit.
     help_auto_opened: bool,
     /// Persistent per-panel auto-tour claims.
@@ -951,6 +954,7 @@ impl Default for StudioApp {
             help_step: 0,
             help_pending_panel: None,
             help_minimized: false,
+            help_card_generation: 0,
             help_auto_opened: false,
             tour_claims: TourClaims::default(),
             sys_stats: sysstats::SysStats::default(),
@@ -1633,6 +1637,19 @@ impl eframe::App for StudioApp {
             self.current_panel = Panel::Dashboard;
         }
 
+        // Open an auto-tour before drawing the panel so it owns simulator input
+        // on its first visible frame. Its target will appear after this frame's
+        // anchors are registered; missing anchors use the safe centered card.
+        if !self.first_run && self.help_open.is_none() {
+            self.maybe_open_help_for(self.current_panel);
+        }
+        if self.help_open.is_some() {
+            // A tour owns pointer input, including a paused tour's stale holds.
+            // Clearing every frame is idempotent and prevents a press from
+            // surviving a step, panel, or tour transition.
+            self.cancel_simulator_buttons();
+        }
+
         // The central panel.
         let was_simulator = self.current_panel == Panel::Simulator;
         egui::CentralPanel::default().show(ctx, |ui| match self.current_panel {
@@ -1656,9 +1673,6 @@ impl eframe::App for StudioApp {
         self.invalidate_stale_artifact();
         if was_simulator && self.current_panel != Panel::Simulator {
             self.cancel_simulator_buttons();
-        }
-        if !self.first_run && self.help_open.is_none() {
-            self.maybe_open_help_for(self.current_panel);
         }
         self.help_spotlight(ctx);
 
@@ -1961,12 +1975,17 @@ impl StudioApp {
         Ok(path)
     }
 
+    fn reset_help_card_position(&mut self) {
+        self.help_card_generation = self.help_card_generation.wrapping_add(1);
+    }
+
     fn open_help_for(&mut self, panel: Panel, auto: bool) {
         self.help_open = Some(panel.help_id());
         self.help_step = 0;
         self.help_pending_panel = None;
         self.help_minimized = false;
         self.help_auto_opened = auto;
+        self.reset_help_card_position();
     }
 
     fn maybe_open_help_for(&mut self, panel: Panel) {
@@ -1993,6 +2012,7 @@ impl StudioApp {
         self.help_pending_panel = None;
         self.help_minimized = false;
         self.help_auto_opened = false;
+        self.reset_help_card_position();
         self.save_settings_internal();
     }
 
@@ -2053,8 +2073,13 @@ impl StudioApp {
             .and_then(|key| self.help_anchors.get(id, key.key()));
         let screen = ctx.screen_rect();
         let viewport = (screen.width(), screen.height());
+        let target_local = target.map(|rect| AnchorRect {
+            min: (rect.min.0 - screen.min.x, rect.min.1 - screen.min.y),
+            max: (rect.max.0 - screen.min.x, rect.max.1 - screen.min.y),
+        });
+        let spotlight_target = target_local.map(|rect| rect.expand(8.0));
         let card = help::place_card(
-            target,
+            target_local,
             (
                 viewport.0.min(560.0).max(240.0),
                 viewport.1.min(220.0).max(1.0),
@@ -2062,21 +2087,27 @@ impl StudioApp {
             viewport,
             16.0,
         );
-        let painter = ctx.layer_painter(egui::LayerId::new(
+        let tint = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150);
+        let lower_layer = egui::LayerId::new(
             egui::Order::Foreground,
-            egui::Id::new("help-spotlight"),
-        ));
-        painter.rect_filled(
-            screen,
-            0.0,
-            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150),
+            egui::Id::new("help-dim-and-shield"),
         );
-        if let Some(rect) = target {
+        let painter = ctx.layer_painter(lower_layer);
+        for region in help::dim_regions(viewport, spotlight_target) {
+            painter.rect_filled(
+                egui::Rect::from_min_max(
+                    screen.min + egui::vec2(region.min.0, region.min.1),
+                    screen.min + egui::vec2(region.max.0, region.max.1),
+                ),
+                0.0,
+                tint,
+            );
+        }
+        if let Some(rect) = spotlight_target {
             let r = egui::Rect::from_min_max(
-                egui::pos2(rect.min.0, rect.min.1),
-                egui::pos2(rect.max.0, rect.max.1),
-            )
-            .expand(8.0);
+                screen.min + egui::vec2(rect.min.0, rect.min.1),
+                screen.min + egui::vec2(rect.max.0, rect.max.1),
+            );
             painter.rect_stroke(
                 r,
                 5.0,
@@ -2084,21 +2115,26 @@ impl StudioApp {
             );
         }
         let mut action: Option<&'static str> = None;
-        // A foreground hit-test layer owns the dimmed surface. The tutorial
-        // card is the only interactive region; panel widgets below cannot
-        // receive pointer events while the tour is visible.
+        // Shield only the dimmed regions. This keeps the highlighted control
+        // readable and lets its existing guided_action_allowed gate route a
+        // safe action, while the card remains the higher interactive layer.
         egui::Area::new(egui::Id::new("help-interaction-shield"))
             .order(egui::Order::Foreground)
             .fixed_pos(screen.min)
             .show(ctx, |ui| {
-                let response = ui.allocate_rect(screen, egui::Sense::click());
-                if response.clicked() {
-                    ctx.request_repaint();
+                for region in help::dim_regions(viewport, spotlight_target) {
+                    let rect = egui::Rect::from_min_max(
+                        egui::pos2(region.min.0, region.min.1),
+                        egui::pos2(region.max.0, region.max.1),
+                    );
+                    ui.allocate_rect(rect, egui::Sense::click());
                 }
             });
-        egui::Area::new(egui::Id::new("help-card"))
-            .order(egui::Order::Foreground)
-            .fixed_pos(egui::pos2(card.min.0, card.min.1))
+        egui::Area::new(egui::Id::new(("help-card", self.help_card_generation)))
+            .order(egui::Order::Tooltip)
+            .default_pos(screen.min + egui::vec2(card.min.0, card.min.1))
+            .movable(true)
+            .constrain(true)
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.set_min_width(card.size.0);
@@ -2119,6 +2155,7 @@ impl StudioApp {
                             .clicked()
                         {
                             self.help_step = help::previous_index(id, index);
+                            self.reset_help_card_position();
                         }
                         let last = index + 1 == tutorial.steps.len();
                         if ui.button(if last { "Finish" } else { "Next" }).clicked() {
@@ -2136,6 +2173,7 @@ impl StudioApp {
         match action {
             Some("next") => {
                 self.help_step = help::next_index(id, index);
+                self.reset_help_card_position();
                 let wanted = help::route(id, self.help_step);
                 if let Some(panel) =
                     help::pending_navigation(id, wanted).and_then(panel_for_help_id)
@@ -2144,6 +2182,7 @@ impl StudioApp {
                     self.help_anchors
                         .begin_frame(self.help_frame.wrapping_add(1));
                     self.current_panel = panel;
+                    self.reset_help_card_position();
                 }
             }
             Some("finish") => self.close_help(true),
@@ -6605,8 +6644,14 @@ impl StudioApp {
         // holding stays active even if the pointer drifts off the small widget.
         // The held button locks on press and only clears when the mouse is
         // fully released.
-        let pointer_down = ui.input(|i| i.pointer.primary_down());
-        let pointer_pos = ui.input(|i| i.pointer.interact_pos());
+        // The guided tour owns pointer routing. In particular, do not let a
+        // global pointer query turn a card click or shield click into L/C/A
+        // input, light, CASIO mode, face cycling, or real-face events.
+        let tour_owns_input = self.help_open.is_some();
+        let pointer_down = !tour_owns_input && ui.input(|i| i.pointer.primary_down());
+        let pointer_pos = (!tour_owns_input)
+            .then(|| ui.input(|i| i.pointer.interact_pos()))
+            .flatten();
 
         // Buttons: mirror the physical F-91W layout (L top-left, C bottom-left,
         // A right). Each press fires exactly once on the press edge.
@@ -6661,8 +6706,11 @@ impl StudioApp {
                 }
 
                 // Lock onto the first button pressed; keep it held until the
-                // mouse is fully released.
-                if pointer_down {
+                // mouse is fully released. A visible tour has already cancelled
+                // state and skips all simulator input routing below.
+                if tour_owns_input {
+                    self.cancel_simulator_buttons();
+                } else if pointer_down {
                     if self.held_button.is_none() {
                         self.held_button = under;
                     }
@@ -6673,35 +6721,49 @@ impl StudioApp {
                 let c_down = self.held_button == Some(ButtonId::C);
                 let a_down = self.held_button == Some(ButtonId::A);
 
-                let l_act = handle_sim_button(
-                    l_down,
-                    &mut self.btn_l_down,
-                    &mut self.btn_l_hold,
-                    self.sim_dt,
-                );
-                let c_act = handle_sim_button(
-                    c_down,
-                    &mut self.btn_c_down,
-                    &mut self.btn_c_hold,
-                    self.sim_dt,
-                );
-                let a_act = handle_sim_button(
-                    a_down,
-                    &mut self.btn_a_down,
-                    &mut self.btn_a_hold,
-                    self.sim_dt,
-                );
+                let l_act = if tour_owns_input {
+                    SimAction::None
+                } else {
+                    handle_sim_button(
+                        l_down,
+                        &mut self.btn_l_down,
+                        &mut self.btn_l_hold,
+                        self.sim_dt,
+                    )
+                };
+                let c_act = if tour_owns_input {
+                    SimAction::None
+                } else {
+                    handle_sim_button(
+                        c_down,
+                        &mut self.btn_c_down,
+                        &mut self.btn_c_hold,
+                        self.sim_dt,
+                    )
+                };
+                let a_act = if tour_owns_input {
+                    SimAction::None
+                } else {
+                    handle_sim_button(
+                        a_down,
+                        &mut self.btn_a_down,
+                        &mut self.btn_a_hold,
+                        self.sim_dt,
+                    )
+                };
                 // Deliver threshold-aware public events to migrated firmware
                 // faces. The face_sim path below intentionally keeps its
                 // existing short-press semantics.
-                if let Some(event) = self.btn_l_events.update(l_down, self.sim_dt) {
-                    if let Some(real) = self.real_face.as_mut() {
-                        real.button_event(real_face::RealButton::Light, event);
+                if !tour_owns_input {
+                    if let Some(event) = self.btn_l_events.update(l_down, self.sim_dt) {
+                        if let Some(real) = self.real_face.as_mut() {
+                            real.button_event(real_face::RealButton::Light, event);
+                        }
                     }
-                }
-                if let Some(event) = self.btn_a_events.update(a_down, self.sim_dt) {
-                    if let Some(real) = self.real_face.as_mut() {
-                        real.button_event(real_face::RealButton::Alarm, event);
+                    if let Some(event) = self.btn_a_events.update(a_down, self.sim_dt) {
+                        if let Some(real) = self.real_face.as_mut() {
+                            real.button_event(real_face::RealButton::Alarm, event);
+                        }
                     }
                 }
                 // L button: toggle the backlight while held, and act as the
@@ -9421,6 +9483,30 @@ mod tests {
                 .map(|event| event.operation_id),
             Some(44)
         );
+    }
+
+    #[test]
+    fn visible_tour_cancels_all_simulator_input_and_unsafe_actions_stay_closed() {
+        let mut app = super::StudioApp::default();
+        app.help_open = Some(crate::help::HelpId::Simulator);
+        app.btn_l_down = true;
+        app.btn_c_down = true;
+        app.btn_a_down = true;
+        app.btn_l_hold = 2.0;
+        app.btn_c_hold = 2.0;
+        app.btn_a_hold = 2.0;
+        app.held_button = Some(ButtonId::A);
+        app.watch.light = true;
+        app.watch.set_casio(true);
+        app.cancel_simulator_buttons();
+        assert!(!app.btn_l_down && !app.btn_c_down && !app.btn_a_down);
+        assert_eq!(app.btn_l_hold, 0.0);
+        assert_eq!(app.btn_c_hold, 0.0);
+        assert_eq!(app.btn_a_hold, 0.0);
+        assert!(app.held_button.is_none());
+        assert!(!app.watch.light);
+        assert!(app.watch.override_text.is_none());
+        assert!(!app.unsafe_action_allowed());
     }
 
     #[test]

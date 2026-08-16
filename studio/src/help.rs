@@ -153,6 +153,49 @@ pub fn place_card(
     }
 }
 
+/// Rectangles that should be dimmed in a viewport-local coordinate space.
+/// The target is intentionally omitted so highlighted controls remain readable
+/// and, when safe, continue to receive routed clicks.
+pub fn dim_regions(viewport: (f32, f32), target: Option<AnchorRect>) -> Vec<AnchorRect> {
+    let (width, height) = viewport;
+    let Some(target) = target else {
+        return vec![AnchorRect {
+            min: (0.0, 0.0),
+            max: (width, height),
+        }];
+    };
+    let min_x = target.min.0.clamp(0.0, width);
+    let min_y = target.min.1.clamp(0.0, height);
+    let max_x = target.max.0.clamp(min_x, width);
+    let max_y = target.max.1.clamp(min_y, height);
+    let mut regions = Vec::with_capacity(4);
+    if min_y > 0.0 {
+        regions.push(AnchorRect {
+            min: (0.0, 0.0),
+            max: (width, min_y),
+        });
+    }
+    if max_y < height {
+        regions.push(AnchorRect {
+            min: (0.0, max_y),
+            max: (width, height),
+        });
+    }
+    if min_x > 0.0 && max_y > min_y {
+        regions.push(AnchorRect {
+            min: (0.0, min_y),
+            max: (min_x, max_y),
+        });
+    }
+    if max_x < width && max_y > min_y {
+        regions.push(AnchorRect {
+            min: (max_x, min_y),
+            max: (width, max_y),
+        });
+    }
+    regions
+}
+
 pub fn overlay_allows_click(anchor: Option<AnchorId>, in_target: bool) -> bool {
     in_target && anchor.is_some_and(forced_action_allowed)
 }
@@ -632,6 +675,48 @@ mod tests {
         assert!(registry
             .get(HelpId::Editor, AnchorId::EditorName.key())
             .is_none());
+    }
+
+    #[test]
+    fn dimming_uses_four_regions_and_leaves_target_clear() {
+        let regions = dim_regions(
+            (100.0, 80.0),
+            Some(AnchorRect {
+                min: (30.0, 20.0),
+                max: (70.0, 60.0),
+            }),
+        );
+        assert_eq!(regions.len(), 4);
+        assert!(regions
+            .iter()
+            .all(|region| { region.max.0 > region.min.0 && region.max.1 > region.min.1 }));
+        assert_eq!(dim_regions((100.0, 80.0), None).len(), 1);
+    }
+
+    #[test]
+    fn card_placement_stays_inside_viewport_and_moves_with_target() {
+        let first = place_card(
+            Some(AnchorRect {
+                min: (20.0, 20.0),
+                max: (40.0, 40.0),
+            }),
+            (300.0, 180.0),
+            (800.0, 600.0),
+            16.0,
+        );
+        let second = place_card(
+            Some(AnchorRect {
+                min: (700.0, 400.0),
+                max: (740.0, 440.0),
+            }),
+            (300.0, 180.0),
+            (800.0, 600.0),
+            16.0,
+        );
+        assert_ne!(first.min, second.min);
+        assert!(second.min.0 >= 16.0 && second.min.1 >= 16.0);
+        assert!(second.min.0 + second.size.0 <= 784.0);
+        assert!(second.min.1 + second.size.1 <= 584.0);
     }
 
     #[test]
