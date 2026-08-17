@@ -1015,7 +1015,7 @@ pub(crate) const REAL_FACE_NAMES: &[&str] = &[
 
 #[cfg(feature = "real-faces")]
 fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
-    let upper = face_name.to_ascii_uppercase();
+    let upper = super::faces::face_identity(face_name).to_ascii_uppercase();
     match upper.as_str() {
         "SIMPLE_CLOCK" => Some(Box::new(simple_clock::SimpleClockFace::new())),
         "ACCEL_INTERRUPT_COUNT" => Some(Box::new(
@@ -1164,7 +1164,7 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
 /// [`new_face`]. Used to detect face switches in the app.
 #[cfg(feature = "real-faces")]
 fn new_face_name(face_name: &str) -> &'static str {
-    let upper = face_name.to_ascii_uppercase();
+    let upper = super::faces::face_identity(face_name).to_ascii_uppercase();
     match upper.as_str() {
         "SIMPLE_CLOCK" => "SIMPLE_CLOCK",
         "ACCEL_INTERRUPT_COUNT" => "ACCEL_INTERRUPT_COUNT",

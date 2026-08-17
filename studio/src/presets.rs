@@ -8,6 +8,8 @@ use std::collections::VecDeque;
 
 use serde::{Deserialize, Serialize};
 
+use super::faces::face_identity;
+
 /// A single watch-face preset.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Preset {
@@ -74,9 +76,22 @@ impl PresetManager {
     /// Adds a face to the active preset (if not already present).
     pub fn add_face(&mut self, face: &str) {
         if let Some(preset) = self.presets.get_mut(self.active) {
-            if !preset.faces.iter().any(|f| f == face) {
+            if !preset
+                .faces
+                .iter()
+                .any(|candidate| face_identity(candidate) == face_identity(face))
+            {
                 preset.faces.push(face.to_string());
             }
+        }
+    }
+
+    /// Removes case-only duplicate references, preserving the first spelling and
+    /// order. Unknown/user references are intentionally retained.
+    pub fn migrate_face_duplicates(&mut self) {
+        for preset in &mut self.presets {
+            let mut seen = std::collections::HashSet::new();
+            preset.faces.retain(|face| seen.insert(face_identity(face)));
         }
     }
 
@@ -94,7 +109,10 @@ impl PresetManager {
         let mut removed = 0;
         for preset in &mut self.presets {
             let before = preset.faces.len();
-            preset.faces.retain(|candidate| candidate != face);
+            let identity = face_identity(face);
+            preset
+                .faces
+                .retain(|candidate| face_identity(candidate) != identity);
             removed += before - preset.faces.len();
         }
         removed
@@ -178,5 +196,42 @@ mod tests {
             .iter()
             .all(|preset| { !preset.faces.iter().any(|face| face == "CUSTOM") }));
         assert_eq!(manager.presets[1].faces, vec!["KEEP"]);
+    }
+
+    #[test]
+    fn add_and_migrate_deduplicate_case_only_variants() {
+        let mut manager = PresetManager::new();
+        manager.presets[0].faces = vec![
+            "SIMPLE_CLOCK".into(),
+            "simple_clock".into(),
+            "USER_FACE".into(),
+            "User_Face".into(),
+            "WORLD_CLOCK2".into(),
+            "WORLD_CLOCK".into(),
+        ];
+        manager.migrate_face_duplicates();
+        manager.migrate_face_duplicates();
+        assert_eq!(
+            manager.presets[0].faces,
+            vec!["SIMPLE_CLOCK", "USER_FACE", "WORLD_CLOCK2", "WORLD_CLOCK"]
+        );
+        manager.add_face("Simple_Clock");
+        manager.add_face("stock_stopwatch");
+        assert_eq!(manager.presets[0].faces.last().unwrap(), "stock_stopwatch");
+    }
+
+    #[test]
+    fn remove_is_case_insensitive_but_keeps_distinct_identities() {
+        let mut manager = PresetManager::new();
+        manager.presets[0].faces = vec![
+            "STOPWATCH".into(),
+            "STOCK_STOPWATCH".into(),
+            "WORLD_CLOCK2".into(),
+        ];
+        assert_eq!(manager.remove_face_from_all("stopwatch"), 1);
+        assert_eq!(
+            manager.presets[0].faces,
+            vec!["STOCK_STOPWATCH", "WORLD_CLOCK2"]
+        );
     }
 }

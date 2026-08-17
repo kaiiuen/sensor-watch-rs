@@ -7,10 +7,24 @@
 pub struct FaceInfo {
     pub index: usize,
     pub name: String,
-    /// A short description from the face's module doc comment, if available.
+    /// A short description from the face's source file (the first `//!` doc comment line), if available.
     pub description: String,
     /// A category label derived from the face name.
     pub category: &'static str,
+}
+
+/// Returns the one ASCII identity used for face names throughout Studio.
+///
+/// Face names are Rust identifiers, so ASCII folding is intentional and avoids
+/// Unicode case-folding differences between source lookup and persisted data.
+pub fn face_identity(name: &str) -> String {
+    name.bytes()
+        .map(|byte| byte.to_ascii_lowercase() as char)
+        .collect()
+}
+
+fn valid_face_identifier(name: &str) -> bool {
+    !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Scans the firmware's `app_setup()` for registered faces.
@@ -25,27 +39,36 @@ pub fn discover_faces() -> Vec<FaceInfo> {
         Err(_) => return faces,
     };
 
-    for line in content.lines() {
-        let line = line.trim();
-        // WATCH_FACES[0] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK));
-        if let Some(rest) = line.strip_prefix("WATCH_FACES[") {
-            if let Some(idx_end) = rest.find(']') {
-                if let Ok(index) = rest[..idx_end].parse::<usize>() {
-                    if let Some(name_start) = rest.find("addr_of_mut!") {
-                        let after = &rest[name_start + "addr_of_mut!(".len()..];
-                        if let Some(name_end) = after.find(')') {
-                            let name = after[..name_end].to_string();
-                            faces.push(FaceInfo {
-                                index,
-                                description: face_description(&name),
-                                category: face_category(&name),
-                                name: name.clone(),
-                            });
-                        }
-                    }
+    // Parse by occurrence rather than physical line: generated firmware may
+    // split a WATCH_FACES assignment across several lines.
+    let mut cursor = 0;
+    while let Some(start) = content[cursor..].find("WATCH_FACES[") {
+        let start = cursor + start;
+        let rest = &content[start + "WATCH_FACES[".len()..];
+        let Some(idx_end) = rest.find(']') else { break };
+        let Ok(index) = rest[..idx_end].trim().parse::<usize>() else {
+            cursor = start + 1;
+            continue;
+        };
+        let end = content[start + 1..]
+            .find("WATCH_FACES[")
+            .map_or(content.len(), |next| start + 1 + next);
+        let assignment = &content[start..end];
+        if let Some(name_start) = assignment.find("addr_of_mut!(") {
+            let after = &assignment[name_start + "addr_of_mut!(".len()..];
+            if let Some(name_end) = after.find(')') {
+                let name = after[..name_end].trim().to_string();
+                if valid_face_identifier(&name) {
+                    faces.push(FaceInfo {
+                        index,
+                        description: face_description(&name),
+                        category: face_category(&name),
+                        name,
+                    });
                 }
             }
         }
+        cursor = start + "WATCH_FACES[".len();
     }
 
     // Also surface faces that only have a `pub mod <name>;` declaration but no
@@ -64,9 +87,10 @@ pub fn discover_faces() -> Vec<FaceInfo> {
         if let Some(rest) = line.strip_prefix("pub mod ") {
             if let Some(name) = rest.strip_suffix(';') {
                 let name = name.trim().to_string();
-                if !name.is_empty()
-                    && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && !faces.iter().any(|f| f.name == name)
+                if valid_face_identifier(&name)
+                    && !faces
+                        .iter()
+                        .any(|f| face_identity(&f.name) == face_identity(&name))
                 {
                     faces.push(FaceInfo {
                         index: next_index,
@@ -185,31 +209,68 @@ mod tests {
     fn parses_face_lines() {
         let content = "\n        if WATCH_FACES[0].is_none() {\n            WATCH_FACES[0] = Some(&mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK));\n            WATCH_FACES[1] = Some(&mut *core::ptr::addr_of_mut!(COUNTDOWN));\n            WATCH_FACES[110] = Some(&mut *core::ptr::addr_of_mut!(SQUASH));\n        }\n";
         let mut faces = Vec::new();
-        for line in content.lines() {
-            let line = line.trim();
-            if let Some(rest) = line.strip_prefix("WATCH_FACES[") {
-                if let Some(idx_end) = rest.find(']') {
-                    if let Ok(index) = rest[..idx_end].parse::<usize>() {
-                        if let Some(name_start) = rest.find("addr_of_mut!(") {
-                            let after = &rest[name_start + "addr_of_mut!(".len()..];
-                            if let Some(name_end) = after.find(')') {
-                                let name = after[..name_end].to_string();
-                                faces.push(FaceInfo {
-                                    index,
-                                    description: String::new(),
-                                    category: "Other",
-                                    name: name.clone(),
-                                });
-                            }
-                        }
-                    }
+        let mut cursor = 0;
+        while let Some(start) = content[cursor..].find("WATCH_FACES[") {
+            let start = cursor + start;
+            let rest = &content[start + "WATCH_FACES[".len()..];
+            let idx_end = rest.find(']').unwrap();
+            let index = rest[..idx_end].trim().parse::<usize>().unwrap();
+            let end = content[start + 1..]
+                .find("WATCH_FACES[")
+                .map_or(content.len(), |next| start + 1 + next);
+            let assignment = &content[start..end];
+            if let Some(name_start) = assignment.find("addr_of_mut!(") {
+                let after = &assignment[name_start + "addr_of_mut!(".len()..];
+                if let Some(name_end) = after.find(')') {
+                    faces.push(FaceInfo {
+                        index,
+                        description: String::new(),
+                        category: "Other",
+                        name: after[..name_end].trim().to_string(),
+                    });
                 }
             }
+            cursor = start + "WATCH_FACES[".len();
         }
         assert_eq!(faces.len(), 3);
         assert_eq!(faces[0].index, 0);
         assert_eq!(faces[0].name, "SIMPLE_CLOCK");
         assert_eq!(faces[2].index, 110);
         assert_eq!(faces[2].name, "SQUASH");
+    }
+
+    #[test]
+    fn current_catalog_has_111_registered_faces() {
+        let catalog = discover_faces();
+        let registered: Vec<_> = catalog.iter().filter(|face| face.index <= 110).collect();
+        assert_eq!(registered.len(), 111);
+        assert!(registered
+            .iter()
+            .any(|face| face.name == "ACCELEROMETER_DATA_ACQUISITION"));
+        let identities: std::collections::HashSet<_> = registered
+            .iter()
+            .map(|face| face_identity(&face.name))
+            .collect();
+        assert_eq!(identities.len(), registered.len());
+    }
+
+    #[test]
+    fn multiline_registry_merges_case_only_module_duplicate() {
+        let content = "pub mod simple_clock;\npub mod ACCELEROMETER_DATA_ACQUISITION;\n\nWATCH_FACES[0] = Some(\n    &mut *core::ptr::addr_of_mut!(SIMPLE_CLOCK)\n);\nWATCH_FACES[1] = Some(&mut *core::ptr::addr_of_mut!(ACCELEROMETER_DATA_ACQUISITION));";
+        let mut names = Vec::new();
+        let mut cursor = 0;
+        while let Some(start) = content[cursor..].find("WATCH_FACES[") {
+            let start = cursor + start;
+            let end = content[start + 1..]
+                .find("WATCH_FACES[")
+                .map_or(content.len(), |n| start + 1 + n);
+            let assignment = &content[start..end];
+            let name_start = assignment.find("addr_of_mut!(").unwrap();
+            let after = &assignment[name_start + "addr_of_mut!(".len()..];
+            names.push(after[..after.find(')').unwrap()].trim().to_string());
+            cursor = start + 1;
+        }
+        assert_eq!(names, ["SIMPLE_CLOCK", "ACCELEROMETER_DATA_ACQUISITION"]);
+        assert_eq!(face_identity("Simple_Clock"), face_identity("SIMPLE_CLOCK"));
     }
 }

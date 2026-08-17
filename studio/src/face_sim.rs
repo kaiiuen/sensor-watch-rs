@@ -136,7 +136,7 @@ impl FaceEngine {
 
     /// Handles a button press for the current face.
     pub fn press(&mut self, button: FaceButton) {
-        let upper = self.face_name.to_uppercase();
+        let upper = super::faces::face_identity(&self.face_name).to_ascii_uppercase();
         if upper.contains("STOPWATCH") {
             match button {
                 FaceButton::Alarm => self.sw_running = !self.sw_running,
@@ -226,7 +226,7 @@ impl FaceEngine {
     /// Advances the face state by one second (called on each tick).
     pub fn tick(&mut self) {
         self.power_on_seconds = self.power_on_seconds.wrapping_add(1);
-        let upper = self.face_name.to_uppercase();
+        let upper = super::faces::face_identity(&self.face_name).to_ascii_uppercase();
         if upper.contains("STOPWATCH") && self.sw_running {
             self.sw_seconds = (self.sw_seconds + 1) % 3_600_000;
         } else if (upper.contains("TIMER") || upper.contains("COUNTDOWN")) && self.timer_running {
@@ -240,7 +240,7 @@ impl FaceEngine {
 
     /// Renders the current face to an LCD display for the given time.
     pub fn render(&self, time: &SimTime) -> FaceDisplay {
-        let upper = self.face_name.to_uppercase();
+        let upper = super::faces::face_identity(&self.face_name).to_ascii_uppercase();
         let mut d = FaceDisplay::default();
         // Seconds since midnight: a live, plausibly-counting value for the
         // sim renderer badges below.

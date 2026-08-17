@@ -368,7 +368,10 @@ impl AppSettings {
         if json.len() > MAX_SETTINGS_JSON_BYTES {
             return Err("settings JSON is too large".into());
         }
-        let settings: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        let mut settings: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        // Compatibility migration for settings written before face identity
+        // became case-insensitive. It is order-preserving and idempotent.
+        settings.presets.migrate_face_duplicates();
         settings.validate()?;
         Ok(settings)
     }

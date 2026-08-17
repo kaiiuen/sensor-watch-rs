@@ -3,6 +3,8 @@
 //! Provides templates and editing support for creating and modifying watch
 //! faces. The editor works on the firmware's `src/movement/` source files.
 
+use super::faces::face_identity;
+
 /// A template for a new watch face.
 pub struct Template {
     pub name: &'static str,
@@ -190,11 +192,44 @@ pub fn register_face(name: &str) -> Result<(), String> {
     }
     let content = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
     let declaration = format!("pub mod {name};");
+    let identity = face_identity(name);
 
-    // If already declared, nothing to do.
-    let already_declared = content.lines().any(|l| l.trim() == declaration);
-    if already_declared {
-        return Ok(());
+    // Rust module names and source filenames collide on case-insensitive
+    // filesystems. Exact registration is idempotent; a case-only variant is
+    // rejected instead of creating an ambiguous or silently overwritten face.
+    for line in content.lines() {
+        let Some(module) = line
+            .trim()
+            .strip_prefix("pub mod ")
+            .and_then(|rest| rest.strip_suffix(';'))
+            .map(str::trim)
+        else {
+            continue;
+        };
+        if face_identity(module) == identity {
+            if module == name {
+                return Ok(());
+            }
+            return Err(format!(
+                "face name {name:?} collides with existing module {module:?}"
+            ));
+        }
+    }
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let file_name = entry.file_name();
+            let Some(file_name) = file_name.to_str() else {
+                continue;
+            };
+            let Some(stem) = file_name.strip_suffix(".rs") else {
+                continue;
+            };
+            if face_identity(stem) == identity && stem != name {
+                return Err(format!(
+                    "face name {name:?} collides with existing source {file_name:?}"
+                ));
+            }
+        }
     }
 
     // Insert before the `use crate::movement::types::*;` line, which ends the
@@ -217,4 +252,15 @@ pub fn register_face(name: &str) -> Result<(), String> {
     };
 
     std::fs::write(&path, updated).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registration_rejects_case_only_existing_module_collision() {
+        let error = register_face("SIMPLE_CLOCK").expect_err("case-only collision must fail");
+        assert!(error.contains("simple_clock"));
+    }
 }

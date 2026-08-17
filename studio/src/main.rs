@@ -3300,7 +3300,7 @@ impl StudioApp {
                                                         .iter()
                                                         .enumerate()
                                                     {
-                                                        if *f == face_name {
+                                                        if faces::face_identity(f) == faces::face_identity(&face_name) {
                                                             idx = Some(j);
                                                             break;
                                                         }
@@ -6607,9 +6607,9 @@ impl StudioApp {
             if self
                 .real_face
                 .as_ref()
-                .map(|r| r.face_name())
-                .unwrap_or(&face_name)
-                != face_name
+                .map(|r| faces::face_identity(r.face_name()))
+                .unwrap_or_else(|| faces::face_identity(&face_name))
+                != faces::face_identity(&face_name)
             {
                 // Drop the old seam guard before constructing the replacement;
                 // `RealFace::new` must acquire the same global lock.
@@ -6663,7 +6663,8 @@ impl StudioApp {
             let valid_time =
                 real.set_time(t_year as u32, t_month, t_day, t_hour, t_minute, t_second);
             let face_name = real.face_name().to_string();
-            let face_changed = active_real_face_name.as_deref() != Some(face_name.as_str());
+            let face_changed = active_real_face_name.as_deref().map(faces::face_identity)
+                != Some(faces::face_identity(&face_name));
             let mode_changed = active_real_mode_24 != Some(mode_24);
             if valid_time && (face_changed || mode_changed) {
                 real.activate(mode_24);
@@ -8388,6 +8389,7 @@ impl StudioApp {
             self.theme = *theme;
         }
         self.presets = s.presets;
+        self.presets.migrate_face_duplicates();
         self.presets.clamp_active();
         self.ntp_server = s.ntp_server;
         self.ntp_servers = s.ntp_servers;
