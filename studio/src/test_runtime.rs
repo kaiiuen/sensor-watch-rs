@@ -57,7 +57,15 @@ fn paths(root: PathBuf, warning: Option<String>, isolated_debug: bool) -> Profil
 /// Resolves a profile using an injected executable identity. This is also the
 /// test seam; production uses `current_executable_identity` below.
 pub fn resolve(fresh: bool, executable_identity: Result<String, String>) -> ProfilePaths {
-    let normal = normal_config_dir();
+    resolve_from(fresh, executable_identity, normal_config_dir())
+}
+
+/// Resolves a profile beneath an explicitly selected, already validated root.
+pub fn resolve_from(
+    fresh: bool,
+    executable_identity: Result<String, String>,
+    normal: PathBuf,
+) -> ProfilePaths {
     if !cfg!(debug_assertions) || !fresh {
         return paths(normal, None, false);
     }
@@ -85,7 +93,11 @@ pub fn current_executable_identity() -> Result<String, String> {
 }
 
 pub fn initialize(fresh: bool) -> ProfilePaths {
-    let profile = resolve(fresh, current_executable_identity());
+    initialize_from(fresh, normal_config_dir())
+}
+
+pub fn initialize_from(fresh: bool, normal: PathBuf) -> ProfilePaths {
+    let profile = resolve_from(fresh, current_executable_identity(), normal);
     let _ = ACTIVE.set(profile.clone());
     profile
 }
@@ -139,6 +151,30 @@ mod tests {
     fn settings_and_restore_paths_agree_on_root() {
         let p = resolve(true, Ok("abc".into()));
         assert_eq!(p.settings.parent(), p.restore.parent());
+    }
+
+    #[test]
+    fn new_debug_identity_is_clean_until_explicit_migration() {
+        let normal = std::env::temp_dir().join("studio-clean-debug-profile");
+        let old = resolve_from(true, Ok("old-hash".into()), normal.clone());
+        let new = resolve_from(true, Ok("new-hash".into()), normal);
+        if cfg!(debug_assertions) {
+            assert_ne!(old.root, new.root);
+            assert!(!new.root.join(SETTINGS_FILE).exists());
+        } else {
+            assert_eq!(old.root, new.root);
+        }
+    }
+
+    #[test]
+    fn custom_root_keeps_debug_hash_namespacing() {
+        let root = std::env::temp_dir().join("studio-runtime-custom-root");
+        let p = resolve_from(true, Ok("abc".into()), root.clone());
+        if cfg!(debug_assertions) {
+            assert_eq!(p.root, root.join("debug").join("abc"));
+        } else {
+            assert_eq!(p.root, root);
+        }
     }
 
     #[test]

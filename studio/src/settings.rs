@@ -121,6 +121,9 @@ pub struct AppSettings {
     pub preset_height: f32,
     /// Custom hardware modules.
     pub modules: ModuleManager,
+    /// The configured Studio data root. It is applied only on next launch.
+    #[serde(default = "default_data_folder")]
+    pub data_folder: String,
     /// The output directory for built artifacts (e.g. the .uf2 file).
     /// Defaults to a writable user folder when running as a standalone exe.
     #[serde(default = "default_output_dir")]
@@ -218,6 +221,7 @@ impl AppSettings {
             catalog_width,
             preset_height,
             modules: modules.clone(),
+            data_folder: default_data_folder(),
             output_dir,
             first_run,
             tour_claims,
@@ -244,6 +248,11 @@ impl AppSettings {
 
     pub fn with_advanced_mode(mut self, advanced_mode: bool) -> Self {
         self.advanced_mode = advanced_mode;
+        self
+    }
+
+    pub fn with_data_folder(mut self, data_folder: impl Into<String>) -> Self {
+        self.data_folder = data_folder.into();
         self
     }
 
@@ -383,6 +392,7 @@ impl Default for AppSettings {
             catalog_width: 0.0,
             preset_height: 0.0,
             modules: ModuleManager::default(),
+            data_folder: default_data_folder(),
             output_dir: default_output_dir(),
             first_run: false,
             tour_claims: Vec::new(),
@@ -448,6 +458,10 @@ pub fn default_schema_version() -> u32 {
 /// location.
 pub fn default_board() -> String {
     "Green".to_string()
+}
+
+pub fn default_data_folder() -> String {
+    super::data_dir::default_path().display().to_string()
 }
 
 pub fn default_output_dir() -> String {

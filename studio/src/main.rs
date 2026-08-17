@@ -8,6 +8,7 @@
 mod block_editor;
 mod build;
 mod components;
+mod data_dir;
 mod debug;
 mod diagnostics;
 mod drift;
@@ -185,6 +186,10 @@ struct StudioApp {
     modules: modules::ModuleManager,
     /// The output directory for built artifacts (e.g. the .uf2).
     output_dir: String,
+    /// Pending user-entered data root; changes apply on next launch only.
+    pending_data_folder: String,
+    /// Inline validation/status for the pending data root.
+    data_folder_status: String,
     /// The editor's module name/target/description inputs.
     module_name: String,
     module_target: String,
@@ -963,6 +968,8 @@ impl Default for StudioApp {
             watch_config: watch_config::WatchConfig::default(),
             modules: modules::ModuleManager::default(),
             output_dir: settings::default_output_dir(),
+            pending_data_folder: bootstrap_preferences.data_folder.clone(),
+            data_folder_status: String::new(),
             module_name: String::new(),
             module_target: String::new(),
             module_description: String::new(),
@@ -7405,6 +7412,19 @@ impl StudioApp {
                 });
                 ui.end_row();
 
+                // Studio data root: deliberately pending until an explicit Apply.
+                ui.label("Studio data folder");
+                ui.horizontal(|ui| {
+                    ui.text_edit_singleline(&mut self.pending_data_folder);
+                    if ui.button("Apply").clicked() { self.apply_data_folder(); }
+                    if ui.button("Reset to default").clicked() {
+                        self.pending_data_folder = data_dir::default_path().display().to_string();
+                        self.data_folder_status = "Default selected; click Apply to use it after restart".into();
+                    }
+                });
+                if !self.data_folder_status.is_empty() { ui.weak(&self.data_folder_status); }
+                ui.end_row();
+
                 // Firmware project path.
                 ui.label(tr(self.language, Key::FirmwareProject));
                 ui.monospace(build::firmware_dir().display().to_string());
@@ -8018,7 +8038,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode);
+        .with_advanced_mode(self.advanced_mode)
+        .with_data_folder(self.pending_data_folder.clone());
         // Use the same atomic, validated writer as automatic persistence.
         let path = persist::settings_path();
         match persist::save(&settings) {
@@ -8071,7 +8092,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode);
+        .with_advanced_mode(self.advanced_mode)
+        .with_data_folder(self.pending_data_folder.clone());
         self.restore_store
             .create(name, settings, self.board.label(), self.presets.active);
         if let Err(e) = self.restore_store.save() {
@@ -8129,6 +8151,8 @@ impl StudioApp {
         let bootstrap = persist::RuntimePreferences {
             fresh_test_executable_profile: self.fresh_test_executable_profile,
             persist_user_changes: self.persist_user_changes,
+            data_folder: self.pending_data_folder.clone(),
+            output_dir: self.output_dir.clone(),
         };
         let mut defaults = settings::AppSettings::default();
         defaults.language = "English".into();
@@ -8210,7 +8234,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode);
+        .with_advanced_mode(self.advanced_mode)
+        .with_data_folder(self.pending_data_folder.clone());
         match persist::save(&settings) {
             Ok(_) => {}
             Err(e) => {
@@ -8253,7 +8278,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode);
+        .with_advanced_mode(self.advanced_mode)
+        .with_data_folder(self.pending_data_folder.clone());
         match settings.to_json() {
             Ok(json) => {
                 self.log
@@ -8300,15 +8326,54 @@ impl StudioApp {
         }
     }
 
+    fn apply_data_folder(&mut self) {
+        let candidate = std::path::PathBuf::from(self.pending_data_folder.trim());
+        let executable = std::env::current_exe().unwrap_or_default();
+        let firmware = build::firmware_dir();
+        let output = std::path::PathBuf::from(&self.output_dir);
+        let recovery = output.join("recovery");
+        let protected = [
+            firmware.as_path(),
+            output.as_path(),
+            recovery.as_path(),
+            executable.as_path(),
+        ];
+        if let Err(error) = data_dir::validate(&candidate, &protected) {
+            self.data_folder_status = format!("Invalid Studio data folder: {error}");
+            return;
+        }
+        let old = test_runtime::active().root;
+        if let Err(error) = data_dir::migrate(&old, &candidate) {
+            self.data_folder_status = format!("Data folder was not changed: {error}");
+            return;
+        }
+        let preferences = persist::RuntimePreferences {
+            fresh_test_executable_profile: self.fresh_test_executable_profile,
+            persist_user_changes: self.persist_user_changes,
+            data_folder: candidate.display().to_string(),
+            output_dir: self.output_dir.clone(),
+        };
+        if let Err(error) = persist::save_runtime_preferences(&preferences) {
+            self.data_folder_status = format!("Data folder was not changed: {error}");
+            return;
+        }
+        self.data_folder_status = "Applied safely. Restart Studio to use the new folder; the current session remains on its original root.".into();
+    }
+
     fn apply_bootstrap_preferences(&mut self, preferences: &persist::RuntimePreferences) {
         self.persist_user_changes = preferences.persist_user_changes;
         self.fresh_test_executable_profile = preferences.fresh_test_executable_profile;
+        if !preferences.data_folder.is_empty() {
+            self.pending_data_folder = preferences.data_folder.clone();
+        }
     }
 
     fn save_bootstrap_preferences(&mut self) {
         if let Err(error) = persist::save_toggle_preferences(
             self.fresh_test_executable_profile,
             self.persist_user_changes,
+            self.pending_data_folder.clone(),
+            self.output_dir.clone(),
         ) {
             self.log_error(&format!("Failed to save runtime preferences: {error}"));
         }
@@ -8353,6 +8418,11 @@ impl StudioApp {
         self.persist_user_changes = s.persist_user_changes;
         self.reset_test_session_on_compile = s.reset_test_session_on_compile;
         self.fresh_test_executable_profile = s.fresh_test_executable_profile;
+        self.pending_data_folder = if s.data_folder.is_empty() {
+            data_dir::default_path().display().to_string()
+        } else {
+            s.data_folder
+        };
         self.advanced_mode = s.advanced_mode;
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
@@ -8878,7 +8948,60 @@ fn main() -> eframe::Result<()> {
     // before selecting an executable-hash profile.
     let bootstrap = persist::load_runtime_preferences();
     let fresh = bootstrap.fresh_test_executable_profile;
-    let profile = test_runtime::initialize(fresh);
+    let requested_root = std::path::PathBuf::from(&bootstrap.data_folder);
+    let fallback_root = data_dir::default_path();
+    let executable = std::env::current_exe().unwrap_or_default();
+    let firmware = build::firmware_dir();
+    // The bootstrap output directory is the only safe output value available
+    // before selecting the executable-scoped profile. Do not load that profile
+    // merely to discover its output path: that would make profile selection
+    // circular.
+    let output_path = std::path::PathBuf::from(&bootstrap.output_dir);
+    let recovery = output_path.join("recovery");
+    let protected = [
+        firmware.as_path(),
+        output_path.as_path(),
+        recovery.as_path(),
+        executable.as_path(),
+    ];
+    let (root, root_warning) = if data_dir::validate(&requested_root, &protected).is_ok() {
+        (requested_root, None)
+    } else if data_dir::validate(&fallback_root, &protected).is_ok() {
+        (
+            fallback_root,
+            Some("Configured Studio data folder was rejected; using the default folder"),
+        )
+    } else {
+        // This is deliberately a visible degraded mode. Never enable writes
+        // against a root that overlaps firmware, output, recovery, or the exe.
+        (
+            fallback_root,
+            Some(
+                "Studio data-folder validation failed; running without changing the selected root",
+            ),
+        )
+    };
+    if let Some(warning) = root_warning {
+        eprintln!("{warning}: {}", root.display());
+    }
+    let identity = test_runtime::current_executable_identity();
+    let candidate_profile = test_runtime::resolve_from(fresh, identity, root.clone());
+    let profile_protected = [
+        firmware.as_path(),
+        output_path.as_path(),
+        recovery.as_path(),
+        executable.as_path(),
+    ];
+    let profile_fresh = if data_dir::validate(&candidate_profile.root, &profile_protected).is_ok() {
+        fresh
+    } else {
+        eprintln!("Studio profile overlaps a protected path; using the non-isolated profile");
+        false
+    };
+    // Migration is intentionally not automatic here. A newly compiled
+    // executable-hash profile starts clean; the user-visible Apply action is
+    // the explicit, copy-first migration path.
+    let profile = test_runtime::initialize_from(profile_fresh, root);
     if let Some(warning) = profile.warning.as_deref() {
         eprintln!("{warning}: {}", profile.root.display());
     }
