@@ -198,9 +198,7 @@ struct StudioApp {
     help_pending_panel: Option<Panel>,
     /// Whether the current walkthrough is minimized rather than closed.
     help_minimized: bool,
-    /// Blocks a held pointer from becoming a fresh simulator press after a
-    /// guided-help ownership transition. Cleared only after pointer release.
-    simulator_wait_for_pointer_release: bool,
+
     /// Changes when a tour step/panel/tour changes, giving the movable card a
     /// fresh default without resetting it on ordinary repaint frames.
     help_card_generation: u64,
@@ -964,7 +962,7 @@ impl Default for StudioApp {
             help_step: 0,
             help_pending_panel: None,
             help_minimized: false,
-            simulator_wait_for_pointer_release: false,
+
             help_card_generation: 0,
             help_auto_opened: false,
             tour_claims: TourClaims::default(),
@@ -1157,16 +1155,6 @@ impl eframe::App for StudioApp {
             self.last_window_size = window_size;
             self.catalog_width = 0.0;
             self.preset_height = 0.0;
-        }
-
-        // A pointer held through a help transition is never a new simulator
-        // press. Observe the global release before allowing simulator routing.
-        let primary_down = ctx.input(|i| i.pointer.primary_down());
-        if help::simulator_wait_for_pointer_release(
-            &mut self.simulator_wait_for_pointer_release,
-            primary_down,
-        ) {
-            self.cancel_simulator_buttons();
         }
 
         // Escape pauses help first, so normal shortcuts cannot consume it.
@@ -1984,14 +1972,6 @@ impl StudioApp {
         self.watch.set_casio(false);
     }
 
-    /// Arm the pointer barrier before changing guided-help ownership. This is
-    /// deliberately not a synthetic release: simulator latches are cleared,
-    /// and the physical pointer must still reach `up` before a new press works.
-    fn wait_for_simulator_pointer_release(&mut self) {
-        self.simulator_wait_for_pointer_release = true;
-        self.cancel_simulator_buttons();
-    }
-
     fn export_text_file(
         &self,
         filename: &str,
@@ -2011,7 +1991,6 @@ impl StudioApp {
     }
 
     fn open_help_for(&mut self, panel: Panel, auto: bool) {
-        self.wait_for_simulator_pointer_release();
         self.help_open = Some(panel.help_id());
         self.help_step = 0;
         self.help_pending_panel = None;
@@ -2034,7 +2013,7 @@ impl StudioApp {
     fn minimize_help(&mut self) {
         if self.help_open.is_some() && !self.help_minimized {
             self.help_minimized = true;
-            self.wait_for_simulator_pointer_release();
+            self.cancel_simulator_buttons();
         }
     }
 
@@ -2044,7 +2023,7 @@ impl StudioApp {
                 self.tour_claims.claim(id);
             }
         }
-        self.wait_for_simulator_pointer_release();
+        self.cancel_simulator_buttons();
         self.help_open = None;
         self.help_step = 0;
         self.help_pending_panel = None;
@@ -2054,8 +2033,9 @@ impl StudioApp {
         self.save_settings_internal();
     }
 
-    /// Foreground guided-help layer. Missing or cross-panel anchors deliberately
-    /// use a centered card; they are never carried over from a prior frame.
+    /// Foreground guided-help layer. Tint and spotlight are painter-only; the
+    /// movable card is the only tutorial-owned UI. Missing or cross-panel
+    /// anchors deliberately use an informational card.
     fn help_spotlight(&mut self, ctx: &egui::Context) {
         let Some(id) = self.help_open else { return };
         let target_panel = panel_for_help_id(id).unwrap_or(self.current_panel);
@@ -2068,31 +2048,40 @@ impl StudioApp {
                     target_panel.label(self.language)
                 )
             };
-            let mut resume = false;
-            egui::Area::new(egui::Id::new("help-resume-banner"))
+            let card_id = egui::Id::new(("help-card", self.help_card_generation));
+            let mut action = None;
+            egui::Area::new(card_id)
                 .order(egui::Order::Foreground)
-                .fixed_pos(egui::pos2(18.0, 18.0))
+                .default_pos(egui::pos2(18.0, 18.0))
+                .movable(true)
+                .constrain(true)
                 .show(ctx, |ui| {
                     egui::Frame::popup(ui.style()).show(ui, |ui| {
+                        ui.strong(label);
                         ui.horizontal(|ui| {
-                            ui.strong(label);
                             if ui.button("Resume").clicked() {
-                                resume = true;
+                                action = Some("resume");
                             }
                             if ui.button("Skip").clicked() {
-                                self.close_help(true);
+                                action = Some("skip");
+                            }
+                            if ui.button("Close").clicked() {
+                                action = Some("close");
                             }
                         });
                     });
                 });
-            if resume {
-                self.wait_for_simulator_pointer_release();
-                self.help_minimized = false;
-                if self.current_panel != target_panel {
-                    self.help_pending_panel = Some(target_panel);
-                    self.current_panel = target_panel;
+            match action {
+                Some("resume") => {
+                    self.help_minimized = false;
+                    if self.current_panel != target_panel {
+                        self.help_pending_panel = Some(target_panel);
+                        self.current_panel = target_panel;
+                    }
+                    ctx.request_repaint();
                 }
-                ctx.request_repaint();
+                Some("skip") | Some("close") => self.close_help(true),
+                _ => {}
             }
             return;
         }
@@ -2128,33 +2117,24 @@ impl StudioApp {
         let card_id = egui::Id::new(("help-card", self.help_card_generation));
         // A moved card has an existing area rect; on its first frame use the
         // calculated placement. Both are screen-space rectangles, matching the
-        // painter and shield geometry below.
+        // painter geometry below.
         let initial_card_rect = egui::Rect::from_min_size(
             screen.min + egui::vec2(card.min.0, card.min.1),
             egui::vec2(card.size.0, card.size.1),
         );
-        let card_rect = ctx
+        let _card_rect = ctx
             .memory(|memory| memory.area_rect(card_id))
             .unwrap_or(initial_card_rect);
-        let card_exclusion = AnchorRect {
-            min: (card_rect.min.x, card_rect.min.y),
-            max: (card_rect.max.x, card_rect.max.y),
-        };
 
         let mut action: Option<&'static str> = None;
         if target_available {
             let tint = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150);
-            let lower_layer = egui::LayerId::new(
-                egui::Order::Foreground,
-                egui::Id::new("help-dim-and-shield"),
-            );
+            let lower_layer =
+                egui::LayerId::new(egui::Order::Foreground, egui::Id::new("help-dim-painter"));
             let painter = ctx.layer_painter(lower_layer);
-            for region in help::absolute_dim_regions_excluding(
-                (screen.min.x, screen.min.y),
-                viewport,
-                spotlight_target,
-                card_exclusion,
-            ) {
+            for region in
+                help::absolute_dim_regions((screen.min.x, screen.min.y), viewport, spotlight_target)
+            {
                 painter.rect_filled(
                     egui::Rect::from_min_max(
                         egui::pos2(region.min.0, region.min.1),
@@ -2175,29 +2155,8 @@ impl StudioApp {
                     egui::Stroke::new(2.0_f32, egui::Color32::from_rgb(255, 210, 80)),
                 );
             }
-            // Shield only the dimmed regions. This keeps the highlighted
-            // control readable and lets its existing action gate route a safe
-            // action, while the card remains the higher interactive layer.
-            egui::Area::new(egui::Id::new("help-interaction-shield"))
-                .order(egui::Order::Foreground)
-                .fixed_pos(screen.min)
-                .show(ctx, |ui| {
-                    for region in help::absolute_dim_regions_excluding(
-                        (screen.min.x, screen.min.y),
-                        viewport,
-                        spotlight_target,
-                        card_exclusion,
-                    ) {
-                        let rect = egui::Rect::from_min_max(
-                            egui::pos2(region.min.0, region.min.1),
-                            egui::pos2(region.max.0, region.max.1),
-                        );
-                        ui.allocate_rect(rect, egui::Sense::click());
-                    }
-                });
         }
-        // Keep the card in the interactive foreground and create it after the
-        // shield so its controls are above the shield in the same order.
+        // The card is the only interactive tutorial layer.
         egui::Area::new(card_id)
             .order(egui::Order::Foreground)
             .default_pos(screen.min + egui::vec2(card.min.0, card.min.1))
@@ -2244,7 +2203,6 @@ impl StudioApp {
             });
         match action {
             Some("next") => {
-                self.wait_for_simulator_pointer_release();
                 self.help_step = help::next_index(id, index);
                 self.reset_help_card_position();
                 let wanted = help::route(id, self.help_step);
@@ -2252,7 +2210,6 @@ impl StudioApp {
                     help::pending_navigation(id, wanted).and_then(panel_for_help_id)
                 {
                     self.help_pending_panel = Some(panel);
-                    self.wait_for_simulator_pointer_release();
                     self.help_anchors
                         .begin_frame(self.help_frame.wrapping_add(1));
                     self.current_panel = panel;
@@ -2266,31 +2223,12 @@ impl StudioApp {
         }
     }
 
-    fn help_step_target_available(&self) -> bool {
-        // A pending panel transition remains protected until the destination
-        // has rendered its first frame of anchors.
-        if self.help_pending_panel.is_some() {
-            return true;
-        }
-        let Some(id) = self.help_open else {
-            return false;
-        };
-        let index = help::step_index(id, self.help_step);
-        help::step_target(&self.help_anchors, self.current_panel.help_id(), id, index).is_some()
-    }
-
     fn guided_action_allowed(&self, action: AnchorId) -> bool {
-        if !self.help_owns_input() || !self.help_step_target_available() {
-            return true;
-        }
-        let active_step = self
-            .help_open
-            .and_then(|id| help::anchor_for_step(id, help::step_index(id, self.help_step)));
-        help::action_allowed(active_step, action)
+        help::action_allowed(self.help_open.is_some(), action)
     }
 
     fn unsafe_action_allowed(&self) -> bool {
-        !self.help_owns_input() || !self.help_step_target_available()
+        self.help_open.is_none()
     }
 
     fn register_anchor(&mut self, panel: Panel, key: AnchorId, response: &egui::Response) {
@@ -2448,10 +2386,6 @@ impl StudioApp {
             // Manual panel switching pauses the active tour. Its HelpId and
             // step remain intact; returning renders fresh anchors before resume.
             if self.help_open.is_some() {
-                // A paused tour can still have a simulator hold in progress;
-                // switching panels is an ownership transition even when it is
-                // already minimized.
-                self.wait_for_simulator_pointer_release();
                 self.minimize_help();
                 self.help_anchors.begin_frame(self.help_frame);
             }
@@ -2891,6 +2825,10 @@ impl StudioApp {
 
     /// Starts exactly one background firmware build.
     fn start_build(&mut self) {
+        if !self.unsafe_action_allowed() {
+            self.status = "Build is disabled while a guided tour is active".to_string();
+            return;
+        }
         if let Err(reason) = build::validate_configuration_inputs() {
             self.build_message = reason.to_string();
             self.status = "Build unavailable: configuration input contract incomplete".to_string();
@@ -4332,7 +4270,7 @@ impl StudioApp {
                         && self.pending_build.is_none()
                         && !self.flash_busy()
                         && build_response.clicked()
-                        && self.guided_action_allowed(AnchorId::BuildArtifact)
+                        && self.unsafe_action_allowed()
                     {
                         self.start_build();
                     }
@@ -4478,7 +4416,7 @@ impl StudioApp {
                                 "Write the firmware to the watch's USB drive (bootloader mode)",
                             )
                             .clicked()
-                        && self.guided_action_allowed(AnchorId::BuildCopy)
+                        && self.unsafe_action_allowed()
                     {
                         self.snapshot_before("Before flash");
                         self.copy_to_watch(&approved);
@@ -5281,6 +5219,10 @@ impl StudioApp {
     }
 
     fn send_shell_command(&mut self, cmd: &str) {
+        if !self.unsafe_action_allowed() {
+            self.status = "UART Send is disabled while a guided tour is active".to_string();
+            return;
+        }
         if self.pending_probe.is_some() {
             self.status = "UART is busy with the physical probe".to_string();
             return;
@@ -5366,7 +5308,7 @@ impl StudioApp {
             if run_response
                 .on_hover_text("Run read-only checks; requires a connected UART jig and confirmation")
                 .clicked()
-                && self.guided_action_allowed(AnchorId::ProbeRun)
+                && self.unsafe_action_allowed()
             {
                 self.pending_confirm = Some((
                     "Run the physical probe? It will inspect removable drives and send only the read-only commands help, time, events, panic, and optical to the already connected selected UART port.".into(),
@@ -5556,10 +5498,10 @@ impl StudioApp {
                             "Send the command to the selected simulated or UART transport",
                         )
                         .clicked()
-                        && self.guided_action_allowed(AnchorId::ShellSend)
+                        && self.unsafe_action_allowed()
                         || (submitted
                             && self.pending_probe.is_none()
-                            && self.guided_action_allowed(AnchorId::ShellSend))
+                            && self.unsafe_action_allowed())
                     {
                         let cmd = self.shell_input.trim().to_string();
                         self.shell_input.clear();
@@ -6788,14 +6730,12 @@ impl StudioApp {
         // holding stays active even if the pointer drifts off the small widget.
         // The held button locks on press and only clears when the mouse is
         // fully released.
-        // The guided tour owns pointer routing. In particular, do not let a
-        // global pointer query turn a card click or shield click into L/C/A
-        // input, light, CASIO mode, face cycling, or real-face events.
+        // The card owns pointer routing while a guided tour is visible. In
+        // particular, do not let a global pointer query turn a card click into
+        // L/C/A input, light, CASIO mode, face cycling, or real-face events.
         let tour_owns_input = self.help_owns_input();
-        let pointer_blocked = self.simulator_wait_for_pointer_release;
-        let pointer_down =
-            !tour_owns_input && !pointer_blocked && ui.input(|i| i.pointer.primary_down());
-        let pointer_pos = (!tour_owns_input && !pointer_blocked)
+        let pointer_down = !tour_owns_input && ui.input(|i| i.pointer.primary_down());
+        let pointer_pos = (!tour_owns_input)
             .then(|| ui.input(|i| i.pointer.interact_pos()))
             .flatten();
 
@@ -7613,7 +7553,7 @@ impl StudioApp {
                 "Replace settings from clipboard JSON; create a restore point first",
             );
             self.register_anchor(Panel::Settings, AnchorId::SettingsImport, &import_response);
-            if import_response.clicked() && self.guided_action_allowed(AnchorId::SettingsImport) {
+            if import_response.clicked() && self.unsafe_action_allowed() {
                 self.snapshot_before("Before settings import");
                 self.import_settings();
             }
@@ -7640,7 +7580,7 @@ impl StudioApp {
         let mut delete_index = None;
         let mut rename_index = None;
         let restore_points = self.restore_store.points.clone();
-        let restore_allowed = self.guided_action_allowed(AnchorId::SettingsRestore);
+        let restore_allowed = self.unsafe_action_allowed();
         let unsafe_allowed = self.unsafe_action_allowed();
         for (index, point) in restore_points.iter().enumerate() {
             let mut restore_rect = None;
@@ -7696,9 +7636,7 @@ impl StudioApp {
             let import_restore_response = ui
                 .button("Import")
                 .on_hover_text("Import a restore point from clipboard JSON");
-            if import_restore_response.clicked()
-                && self.guided_action_allowed(AnchorId::SettingsRestore)
-            {
+            if import_restore_response.clicked() && self.unsafe_action_allowed() {
                 match ui_paste_from_clipboard()
                     .and_then(|j| self.restore_store.import_json(&j).map(|_| j))
                 {
@@ -8493,6 +8431,10 @@ impl StudioApp {
     /// Starts one worker that owns all artifact and removable-drive filesystem
     /// work. The UI thread only snapshots approval state and schedules it.
     fn copy_to_watch(&mut self, approved: &ApprovedArtifact) {
+        if !self.unsafe_action_allowed() {
+            self.status = "Flash is disabled while a guided tour is active".to_string();
+            return;
+        }
         if self.flash_busy() || self.building || self.pending_build.is_some() {
             self.status = "Flash is unavailable while another operation is active.".to_string();
             self.log_error("Flash blocked while another operation is active");
@@ -9806,7 +9748,7 @@ mod tests {
     }
 
     #[test]
-    fn paused_tour_does_not_own_input_or_gate_normal_actions() {
+    fn paused_tour_releases_input_but_keeps_unsafe_actions_blocked() {
         let mut app = super::StudioApp::default();
         app.current_panel = super::Panel::Simulator;
         app.help_open = Some(crate::help::HelpId::Simulator);
@@ -9822,7 +9764,7 @@ mod tests {
         app.help_step = 1;
         app.minimize_help();
         assert!(!app.help_owns_input());
-        assert!(app.unsafe_action_allowed());
+        assert!(!app.unsafe_action_allowed());
         assert_eq!(app.help_open, Some(crate::help::HelpId::Simulator));
         assert_eq!(app.help_step, 1);
     }

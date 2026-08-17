@@ -216,8 +216,7 @@ pub fn dim_regions(viewport: (f32, f32), target: Option<AnchorRect>) -> Vec<Anch
 
 /// Translate viewport-local dim regions into screen coordinates.
 ///
-/// The interaction shield is fixed at the screen origin, so its allocated
-/// rectangles must use the same absolute coordinate space as egui responses.
+/// Translate painter-only dim regions into screen coordinates.
 pub fn absolute_dim_regions(
     screen_min: (f32, f32),
     viewport: (f32, f32),
@@ -232,9 +231,7 @@ pub fn absolute_dim_regions(
         .collect()
 }
 
-/// Remove an overlay card from rectangular dim/shield regions. Keeping this
-/// geometry operation shared by painting and input routing prevents a popup
-/// from becoming dimmed or accidentally unclickable when it overlaps a region.
+/// Split painter-only dim regions around a card so the card remains readable.
 pub fn exclude_rect(regions: Vec<AnchorRect>, excluded: AnchorRect) -> Vec<AnchorRect> {
     let mut result = Vec::new();
     for region in regions {
@@ -283,10 +280,6 @@ pub fn absolute_dim_regions_excluding(
     exclude_rect(absolute_dim_regions(screen_min, viewport, target), excluded)
 }
 
-pub fn overlay_allows_click(anchor: Option<AnchorId>, in_target: bool) -> bool {
-    in_target && anchor.is_some_and(forced_action_allowed)
-}
-
 /// A missing target is an informational step, not an instruction to block the
 /// application. This also covers conditional controls and cross-panel frames.
 pub fn step_target(
@@ -325,17 +318,30 @@ pub fn forced_action_allowed(anchor: AnchorId) -> bool {
     )
 }
 
-/// Whether an action may be processed while the guided tour owns the input.
-/// Unsafe actions are never force-enabled by a tour; safe actions are allowed
-/// only when they are the currently highlighted control.
-pub fn action_allowed(active_step: Option<AnchorId>, action: AnchorId) -> bool {
-    active_step.is_none() || (active_step == Some(action) && forced_action_allowed(action))
+/// Whether an action may be processed while a guided tour is active.
+/// Tour presentation never grants permission: safe actions remain usable and
+/// unsafe actions are rejected by their handlers regardless of the anchor.
+pub fn action_allowed(tour_active: bool, action: AnchorId) -> bool {
+    !tour_active || !unsafe_action(action)
 }
 
-/// Keeps a pointer held across a help ownership transition from becoming a new
-/// simulator press. The caller arms `waiting` when ownership changes, then
-/// supplies the global pointer state once per frame. No release event is made;
-/// the barrier only ends after the physical pointer is up.
+/// Actions which can write hardware, replace/delete user data, or start a
+/// destructive/irreversible operation. These are guarded at their handlers;
+/// no overlay hit-testing is part of this policy.
+pub fn unsafe_action(action: AnchorId) -> bool {
+    matches!(
+        action,
+        AnchorId::BuildArtifact
+            | AnchorId::BuildCopy
+            | AnchorId::ShellSend
+            | AnchorId::ProbeRun
+            | AnchorId::SettingsImport
+            | AnchorId::SettingsRestore
+    )
+}
+
+/// Legacy pointer barrier helper retained as a small pure state machine for
+/// simulator regression coverage. Tutorial rendering never installs this barrier.
 pub fn simulator_wait_for_pointer_release(waiting: &mut bool, primary_down: bool) -> bool {
     if *waiting && !primary_down {
         *waiting = false;
@@ -779,10 +785,10 @@ mod tests {
         let mut registry = AnchorRegistry::default();
         registry.begin_frame(1);
         assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
-        assert!(action_allowed(None, AnchorId::BuildApprove));
-        assert!(!overlay_allows_click(Some(AnchorId::BuildApprove), false));
-        // The renderer must pass None through the no-overlay path rather than
-        // installing a full-screen dim/shield for an unavailable target.
+        assert!(action_allowed(true, AnchorId::BuildApprove));
+        assert!(!action_allowed(true, AnchorId::BuildCopy));
+        // The renderer passes None through the informational card path rather
+        // than painting a dim region for an unavailable target.
         assert!(dim_regions((800.0, 600.0), None).is_empty());
     }
 
@@ -841,14 +847,8 @@ mod tests {
             },
         );
         assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_some());
-        assert!(!action_allowed(
-            Some(AnchorId::BuildApprove),
-            AnchorId::BuildCopy
-        ));
-        assert!(!action_allowed(
-            Some(AnchorId::BuildApprove),
-            AnchorId::BuildApprove
-        ));
+        assert!(!action_allowed(true, AnchorId::BuildCopy));
+        assert!(action_allowed(true, AnchorId::BuildApprove));
         assert_eq!(next_index(HelpId::BuildFlash, 2), 2);
         assert_eq!(previous_index(HelpId::BuildFlash, 2), 1);
 
@@ -856,8 +856,26 @@ mod tests {
         // stale rectangle, and the step becomes recoverable/informational.
         registry.begin_frame(2);
         assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
-        assert!(action_allowed(None, AnchorId::BuildCopy));
+        assert!(!action_allowed(true, AnchorId::BuildCopy));
         assert_eq!(next_index(HelpId::BuildFlash, 2), 2);
+    }
+
+    #[test]
+    fn tour_policy_allows_safe_actions_and_blocks_unsafe_actions() {
+        assert!(action_allowed(true, AnchorId::EditorName));
+        assert!(action_allowed(true, AnchorId::SimulatorDate));
+        for action in [
+            AnchorId::BuildArtifact,
+            AnchorId::BuildCopy,
+            AnchorId::ShellSend,
+            AnchorId::ProbeRun,
+            AnchorId::SettingsImport,
+            AnchorId::SettingsRestore,
+        ] {
+            assert!(unsafe_action(action));
+            assert!(!action_allowed(true, action));
+        }
+        assert!(action_allowed(false, AnchorId::BuildCopy));
     }
 
     #[test]
@@ -937,7 +955,7 @@ mod tests {
     }
 
     #[test]
-    fn nonzero_screen_origin_translates_shield_regions_without_offset_errors() {
+    fn nonzero_screen_origin_translates_painter_regions_without_offset_errors() {
         let regions = absolute_dim_regions(
             (120.0, 45.0),
             (100.0, 80.0),
@@ -1022,7 +1040,7 @@ mod tests {
     }
 
     #[test]
-    fn card_over_dim_has_no_dim_or_shield_intersection() {
+    fn card_over_dim_has_no_dim_intersection() {
         let card = AnchorRect {
             min: (5.0, 5.0),
             max: (75.0, 45.0),
@@ -1066,12 +1084,13 @@ mod tests {
     }
 
     #[test]
-    fn overlay_blocks_background_and_destructive_actions() {
-        assert!(!overlay_allows_click(Some(AnchorId::BuildCopy), true));
-        assert!(!overlay_allows_click(Some(AnchorId::ProbeRun), true));
-        assert!(!overlay_allows_click(Some(AnchorId::EditorName), false));
-        assert!(overlay_allows_click(Some(AnchorId::EditorName), true));
-        assert!(!overlay_allows_click(None, true));
+    fn tinted_area_has_no_input_policy_and_handlers_guard_unsafe_actions() {
+        assert!(dim_regions((800.0, 600.0), None).is_empty());
+        assert!(unsafe_action(AnchorId::BuildCopy));
+        assert!(unsafe_action(AnchorId::ProbeRun));
+        assert!(!unsafe_action(AnchorId::EditorName));
+        assert!(!action_allowed(true, AnchorId::BuildCopy));
+        assert!(action_allowed(true, AnchorId::EditorName));
     }
 
     #[test]
@@ -1110,23 +1129,11 @@ mod tests {
 
     #[test]
     fn action_gating_blocks_underlying_unsafe_clicks() {
-        assert!(action_allowed(None, AnchorId::BuildCopy));
-        assert!(!action_allowed(
-            Some(AnchorId::BuildCopy),
-            AnchorId::BuildCopy
-        ));
-        assert!(!action_allowed(
-            Some(AnchorId::ProbeRun),
-            AnchorId::ShellSend
-        ));
-        assert!(action_allowed(
-            Some(AnchorId::SimulatorApply),
-            AnchorId::SimulatorApply
-        ));
-        assert!(!action_allowed(
-            Some(AnchorId::SettingsImport),
-            AnchorId::SettingsImport
-        ));
+        assert!(action_allowed(false, AnchorId::BuildCopy));
+        assert!(!action_allowed(true, AnchorId::BuildCopy));
+        assert!(!action_allowed(true, AnchorId::ShellSend));
+        assert!(action_allowed(true, AnchorId::SimulatorApply));
+        assert!(!action_allowed(true, AnchorId::SettingsImport));
     }
 
     #[test]
