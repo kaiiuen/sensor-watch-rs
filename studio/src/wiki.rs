@@ -116,6 +116,11 @@ New to the ecosystem? Read [[Watch Face]] and [[Preset]] first, then
 Want to know how the watch stays accurate? See [[PPM (drift)]] and
 [[NTP]]. For timezone handling, see [[Timezone]] and [[DST]].
 
+For the display and controls, start with [[LCD & Indicators]],
+[[Buttons]], and [[Character Set]]. For configuration vocabulary, see
+[[Settings Terms]]. For Studio and firmware vocabulary, see
+[[Firmware & Studio Terms]].
+
 For the deeper plumbing, read [[HAL]], [[Serial Shell]], and
 [[Settings Register]]. To try faces without hardware, see
 [[Simulator]]. The always-on [[Accelerometer]] page explains motion
@@ -128,6 +133,11 @@ Repos to browse are listed at the top under \"Browse repos\".",
             String::from("Bootloader"),
             String::from("Firmware"),
             String::from("Watch Face"),
+            String::from("LCD & Indicators"),
+            String::from("Buttons"),
+            String::from("Character Set"),
+            String::from("Settings Terms"),
+            String::from("Firmware & Studio Terms"),
         ],
     });
 
@@ -447,6 +457,143 @@ The accelerometer is a peripheral, separate from the timekeeping core,
 so it is only used by faces that opt in to motion sensing.",
         ),
         links: vec![String::from("HAL"), String::from("Simulator")],
+    });
+
+    pages.push(WikiPage {
+        title: String::from("LCD & Indicators"),
+        body: String::from(
+            "The LCD is the watch's segmented display. A segment is either
+lit or unlit; it is not a general-purpose pixel screen. Faces choose
+which segments to light, and the available segments are a hardware
+constraint (see [[Character Set]] and [[Firmware & Studio Terms]]).
+
+Time faces commonly use six character positions in HHMMSS order:
+two for hours, two for minutes, and two for seconds. A colon between
+HH and MM is an indicator, not one of those six positions. Other
+indicators can show PM, 24H, or LAP. Their exact visibility depends on
+the face and the display hardware.
+
+The display's alphabetic glyphs are approximations made from segments.
+A numeric 7 and an alphabetic T or t are different glyph requests. In
+some character tables, the alphabetic glyph is drawn as a backward-7-
+style shape, so it may look like a 7 even though it is not the numeric
+7. See [[Watch Face]] for how a face uses the display.",
+        ),
+        links: vec![
+            String::from("Character Set"),
+            String::from("Firmware & Studio Terms"),
+            String::from("Watch Face"),
+        ],
+    });
+
+    pages.push(WikiPage {
+        title: String::from("Buttons"),
+        body: String::from(
+            "The physical controls are conventionally named L, C, and A:
+Left, Center, and (usually) Alarm/right-side control. The labels are
+button identities, not directions on the LCD. A face can assign its
+own action to each button.
+
+The input vocabulary distinguishes a press from a release and from a
+held press. Down means the button became pressed; Up means it was
+released. LongPress means a press was held long enough to count as a
+long action, and LongUp means the release after that long press. The
+precise threshold is supplied by the firmware/input layer, so a face
+should handle the events it supports rather than assume every face
+uses every event.
+
+The [[Simulator]] exposes L, C, and A controls for trying these actions
+without hardware. The [[HAL]] carries the same input idea to a real
+watch, where switch bounce, timing, and the physical case can affect
+what is practical.",
+        ),
+        links: vec![String::from("Simulator"), String::from("HAL")],
+    });
+
+    pages.push(WikiPage {
+        title: String::from("Character Set"),
+        body: String::from(
+            "A character set is the table that maps a requested symbol to
+segments on the LCD. Numeric glyphs are intended for digits such as
+0 through 9. Alphabetic glyphs are a separate, limited set because a
+segmented LCD cannot draw every letter clearly.
+
+Do not infer a glyph from how it looks: numeric 7 is the digit used in
+numbers, while alphabetic T or t may use a backward-7-style segment
+pattern. The result can look similar on a small LCD, but the character
+meaning and table entry are different. Unsupported letters may be
+blank, substituted, or only approximate.
+
+The [[LCD & Indicators]] page describes positions and indicators. A
+face should use the character definitions supported by its target
+hardware rather than expect a full computer font.",
+        ),
+        links: vec![String::from("LCD & Indicators")],
+    });
+
+    pages.push(WikiPage {
+        title: String::from("Settings Terms"),
+        body: String::from(
+            "Watch settings are values the firmware reads while the watch
+runs, such as time format, timezone, DST, or face choices. They are
+part of the watch's runtime configuration and may be stored in the
+watch's settings area; see [[Settings Register]].
+
+Studio settings are controls for the desktop application: for example,
+which repository or tool path Studio uses, what it displays, or which
+build options it offers. A Studio setting is not automatically a watch
+setting. Likewise, choosing a value in Studio does not prove that a
+connected watch has received it.
+
+A build can use selected defaults from Studio to produce [[Firmware]],
+but the resulting behavior still needs to be checked in the appropriate
+host simulation or on compatible hardware. See [[Timezone]], [[DST]],
+and [[Simulator]] for examples.",
+        ),
+        links: vec![
+            String::from("Settings Register"),
+            String::from("Firmware"),
+            String::from("Timezone"),
+            String::from("DST"),
+            String::from("Simulator"),
+        ],
+    });
+
+    pages.push(WikiPage {
+        title: String::from("Firmware & Studio Terms"),
+        body: String::from(
+            "Firmware is the program compiled for the watch. Studio is the
+desktop tool that helps select faces, build firmware, inspect files,
+and work with a device. A [[UF2]] is a packaged firmware file; the
+[[Bootloader]] accepts it and writes it to [[Flash]]. A host-copy or
+drag-and-drop step only copies a file to the bootloader's USB drive. It
+is not, by itself, confirmation that the hardware rebooted and is
+running the new firmware.
+
+UART is a serial communication interface used for logs or a shell;
+[[Serial Shell]] is one user-facing example. SWD (Serial Wire Debug)
+is a separate hardware debug/programming connection. Neither term
+means that Studio has successfully connected or validated a device.
+
+A real-face is face code intended for the watch target. `face_sim` is
+the host/simulator variant or entry point used to exercise a face on
+the computer. [[Simulator]] is useful for iteration, but it cannot
+prove LCD segment appearance, button feel, power behavior, sensor
+accuracy, UART/SWD wiring, or other hardware-only properties.
+
+Hardware has finite flash, a fixed LCD character/indicator layout, and
+specific buttons and peripherals. A configured Studio build or a
+successful host run does not remove those limitations. Check the
+actual target and use [[Flash]] and [[Watch Face]] as workflow references.",
+        ),
+        links: vec![
+            String::from("UF2"),
+            String::from("Bootloader"),
+            String::from("Flash"),
+            String::from("Serial Shell"),
+            String::from("Simulator"),
+            String::from("Watch Face"),
+        ],
     });
 
     pages

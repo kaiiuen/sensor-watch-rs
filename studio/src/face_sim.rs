@@ -765,6 +765,33 @@ mod tests {
     }
 
     #[test]
+    fn numeric_clock_values_keep_logical_sevens() {
+        let cases = [
+            (7 * 3600 + 7 * 60 + 7, "070707"),
+            (17 * 3600 + 27 * 60 + 37, "172737"),
+        ];
+        for (seconds, expected) in cases {
+            let mut eng = FaceEngine::new("TIMER");
+            eng.timer_seconds = seconds;
+            let display = eng.render(&time());
+            let actual: String = display.chars[4..10].iter().collect();
+            assert_eq!(actual, expected);
+        }
+    }
+
+    #[test]
+    fn alphabetic_t_labels_keep_logical_text_for_render_mapping() {
+        for label in ["TU", "TH", "T"] {
+            let mut display = FaceDisplay::default();
+            display.set_string(label, 4);
+            let actual: String = display.chars[4..4 + label.chars().count()].iter().collect();
+            assert_eq!(actual, label);
+            let svg = crate::watch_display::face_display_to_svg(&display);
+            assert_eq!(svg.hour_2, 'T');
+        }
+    }
+
+    #[test]
     fn world_clock_uses_world_render() {
         // WORLD_CLOCK must not fall through to the generic clock renderer.
         let eng = FaceEngine::new("WORLD_CLOCK");

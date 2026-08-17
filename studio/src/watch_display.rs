@@ -190,10 +190,12 @@ fn char_segments(display_id: &str, c: char) -> Vec<&'static str> {
             out.push(*seg);
         }
     }
-    // Legibility overrides: render 'T' as a backwards 7 (top + right verticals)
-    // and 'I' as a left-side bar, which read better on the 7-segment LCD.
-    if c == 'T' {
-        out = vec!["A", "B", "C"];
+    // The ordinary digit 7 is A/B/C. Alphabetic T/t uses a distinct
+    // backward-7 shape (A/E/F) on regular digit positions; do not change the
+    // logical character in FaceDisplay. The real LCD has position-specific
+    // ninth/extra segments, but this SVG only exposes the seven main segments.
+    if c == 'T' || c == 't' {
+        out = vec!["A", "E", "F"];
     } else if c == 'I' {
         out = vec!["E", "F"];
     }
@@ -316,6 +318,20 @@ mod tests {
         assert!(!display.time_mode_12);
         assert_eq!(element_opacity("timeMode24", &display), Some(1.0));
         assert_eq!(element_opacity("timeMode12", &display), Some(0.0));
+    }
+
+    #[test]
+    fn numeric_seven_and_alphabetic_t_have_distinct_regular_masks() {
+        assert_eq!(char_segments("hour_1", '7'), vec!["A", "B", "C"]);
+        assert_eq!(char_segments("hour_1", 'T'), vec!["A", "E", "F"]);
+        assert_eq!(char_segments("hour_1", 't'), vec!["A", "E", "F"]);
+        assert_ne!(char_segments("hour_1", '7'), char_segments("hour_1", 'T'));
+    }
+
+    #[test]
+    fn weekday_position_overrides_remain_position_specific() {
+        assert_eq!(char_segments("mode_2", 'T'), vec!["A", "H", "I"]);
+        assert_eq!(char_segments("mode_1", 'T'), vec!["A", "E", "F", "H"]);
     }
 
     #[test]
