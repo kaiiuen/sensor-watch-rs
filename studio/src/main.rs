@@ -251,6 +251,13 @@ struct StudioApp {
     /// button). Persists even if the pointer drifts off the widget while held;
     /// only clears when the mouse is fully released.
     held_button: Option<ButtonId>,
+    /// Whether the primary pointer was down in the latest frame. Cancellation
+    /// uses this to distinguish a real release from ownership changing while a
+    /// physical press is still in progress.
+    sim_pointer_primary_down: bool,
+    /// Prevents a still-held physical pointer from becoming a new simulator
+    /// press after cancellation. Cleared only after observing pointer-up.
+    blocked_until_pointer_release: bool,
     /// The stateful watch-face simulation engine.
     face_engine: face_sim::FaceEngine,
     /// The optional REAL face running through the firmware `Hw` seam. Only
@@ -535,7 +542,7 @@ enum Panel {
 }
 
 /// The action a simulator button edge produced.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum SimAction {
     None,
     Press,
@@ -1016,6 +1023,8 @@ impl Default for StudioApp {
             btn_a_events: real_face::ButtonEventState::default(),
             sim_dt: 0.0,
             held_button: None,
+            sim_pointer_primary_down: false,
+            blocked_until_pointer_release: false,
             face_engine: face_sim::FaceEngine::new("SIMPLE_CLOCK"),
             real_face: None,
             last_render_used_real: false,
@@ -1089,6 +1098,8 @@ impl Default for StudioApp {
 
 impl eframe::App for StudioApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.sim_pointer_primary_down = ctx.input(|input| input.pointer.primary_down());
+
         // Install a CJK font once so Chinese text renders instead of empty boxes.
         if !self.fonts_installed {
             fonts::install(ctx);
@@ -1960,6 +1971,9 @@ impl StudioApp {
     /// away. This is intentionally different from a normal release: no Up or
     /// LongUp event belongs to the replacement face.
     fn cancel_simulator_buttons(&mut self) {
+        if self.sim_pointer_primary_down {
+            self.blocked_until_pointer_release = true;
+        }
         reset_simulator_button_state(
             &mut self.btn_l_down,
             &mut self.btn_c_down,
@@ -6796,15 +6810,18 @@ impl StudioApp {
 
                 // Lock onto the first button pressed; keep it held until the
                 // mouse is fully released. A visible tour has already cancelled
-                // state and skips all simulator input routing below.
+                // state and skips all simulator input routing below. A cancelled
+                // press cannot reacquire a button until a real pointer-up has
+                // been observed.
                 if tour_owns_input {
                     self.cancel_simulator_buttons();
-                } else if pointer_down {
-                    if self.held_button.is_none() {
-                        self.held_button = under;
-                    }
                 } else {
-                    self.held_button = None;
+                    update_simulator_pointer_lock(
+                        &mut self.blocked_until_pointer_release,
+                        &mut self.held_button,
+                        pointer_down,
+                        under,
+                    );
                 }
                 let l_down = self.held_button == Some(ButtonId::L);
                 let c_down = self.held_button == Some(ButtonId::C);
@@ -9204,6 +9221,25 @@ fn reset_simulator_button_state(
     *held_button = None;
 }
 
+/// Updates the simulator's pointer ownership barrier.
+///
+/// A pointer-up is the only event that clears a cancellation barrier. While
+/// blocked, a still-down pointer cannot acquire any button, including after
+/// pointer drift or a tab/face replacement.
+fn update_simulator_pointer_lock(
+    blocked_until_pointer_release: &mut bool,
+    held_button: &mut Option<ButtonId>,
+    pointer_down: bool,
+    under: Option<ButtonId>,
+) {
+    if !pointer_down {
+        *blocked_until_pointer_release = false;
+        *held_button = None;
+    } else if !*blocked_until_pointer_release && held_button.is_none() {
+        *held_button = under;
+    }
+}
+
 /// Edge-detects a simulator button and returns the action to apply.
 ///
 /// - Fires `Press` exactly once on the press edge.
@@ -9549,7 +9585,10 @@ mod tests {
         classify_http_status, classify_transport, commits_match, parse_latest_commit,
         UpdateCheckError,
     };
-    use super::{handle_sim_button, reset_simulator_button_state, ButtonId, SimAction};
+    use super::{
+        handle_sim_button, reset_simulator_button_state, update_simulator_pointer_lock, ButtonId,
+        SimAction,
+    };
     use crate::components;
     use crate::flash::{select_watch_drive, FlashResult, FlashStatus};
     use crate::modules;
@@ -10065,6 +10104,87 @@ mod tests {
         fallback.face_engine = super::face_sim::FaceEngine::new("STOPWATCH");
         fallback.press_sim_button(super::ButtonId::A);
         assert!(fallback.face_engine.sw_running);
+    }
+
+    #[test]
+    fn cancellation_blocks_a_held_c_press_until_pointer_release() {
+        let mut app = super::StudioApp::default();
+        app.sim_pointer_primary_down = true;
+        app.btn_c_down = true;
+        app.btn_c_hold = 0.4;
+        app.held_button = Some(ButtonId::C);
+
+        app.cancel_simulator_buttons();
+        assert!(app.blocked_until_pointer_release);
+        assert!(!app.btn_c_down);
+        assert_eq!(app.held_button, None);
+
+        // Face/tab replacement can render several frames while the physical
+        // pointer remains down; none of those frames may reacquire C.
+        let mut held = app.held_button;
+        update_simulator_pointer_lock(
+            &mut app.blocked_until_pointer_release,
+            &mut held,
+            true,
+            Some(ButtonId::C),
+        );
+        assert_eq!(held, None);
+        assert_eq!(
+            handle_sim_button(false, &mut app.btn_c_down, &mut app.btn_c_hold, 0.0),
+            SimAction::None
+        );
+
+        // A real up clears the barrier, and only the next fresh down presses C.
+        update_simulator_pointer_lock(
+            &mut app.blocked_until_pointer_release,
+            &mut held,
+            false,
+            None,
+        );
+        assert!(!app.blocked_until_pointer_release);
+        update_simulator_pointer_lock(
+            &mut app.blocked_until_pointer_release,
+            &mut held,
+            true,
+            Some(ButtonId::C),
+        );
+        assert_eq!(held, Some(ButtonId::C));
+        assert_eq!(
+            handle_sim_button(true, &mut app.btn_c_down, &mut app.btn_c_hold, 0.0),
+            SimAction::Press
+        );
+    }
+
+    #[test]
+    fn cancellation_preserves_l_and_a_short_long_event_parity() {
+        for button in [
+            super::real_face::RealButton::Light,
+            super::real_face::RealButton::Alarm,
+        ] {
+            let mut events = super::real_face::ButtonEventState::default();
+            assert_eq!(
+                events.update(true, 0.0),
+                Some(super::real_face::RealButtonEvent::Down)
+            );
+            assert_eq!(
+                events.update(false, 0.0),
+                Some(super::real_face::RealButtonEvent::Up)
+            );
+
+            assert_eq!(
+                events.update(true, 0.0),
+                Some(super::real_face::RealButtonEvent::Down)
+            );
+            assert_eq!(
+                events.update(true, super::real_face::ButtonEventState::LONG_PRESS_SECONDS),
+                Some(super::real_face::RealButtonEvent::LongPress)
+            );
+            assert_eq!(
+                events.update(false, 0.0),
+                Some(super::real_face::RealButtonEvent::LongUp)
+            );
+            let _ = button;
+        }
     }
 
     #[test]
