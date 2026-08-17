@@ -1042,20 +1042,18 @@ mod tests {
     #[test]
     fn card_over_dim_has_no_dim_intersection() {
         let card = AnchorRect {
-            min: (5.0, 5.0),
-            max: (75.0, 45.0),
+            min: (105.0, 55.0),
+            max: (175.0, 95.0),
         };
-        let dim = absolute_dim_regions_excluding(
-            (100.0, 50.0),
-            (100.0, 80.0),
-            Some(AnchorRect {
-                min: (70.0, 50.0),
-                max: (90.0, 70.0),
-            }),
-            card,
-        );
+        let target = Some(AnchorRect {
+            min: (70.0, 50.0),
+            max: (90.0, 70.0),
+        });
+        let raw_dim = absolute_dim_regions((100.0, 50.0), (100.0, 80.0), target);
+        assert!(raw_dim.iter().any(|region| intersects(*region, card)));
+        let dim = absolute_dim_regions_excluding((100.0, 50.0), (100.0, 80.0), target, card);
         assert!(dim.iter().all(|region| !intersects(*region, card)));
-        // The same function is intentionally used for the painter and shield.
+        // Painter-only dimming is excluded from the card geometry.
         assert_eq!(
             dim,
             absolute_dim_regions_excluding(

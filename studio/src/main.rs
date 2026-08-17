@@ -48,6 +48,9 @@ use i18n::{tr, Key, Language};
 use presets::PresetManager;
 use std::error::Error as _;
 
+const HELP_DIM_LAYER_ORDER: egui::Order = egui::Order::Middle;
+const HELP_CARD_LAYER_ORDER: egui::Order = egui::Order::Foreground;
+
 use flash::{FlashRequest, FlashResult, FlashStatus, WatchDriveSelection};
 use progress::{ProgressEvent, ProgressReceiver};
 use theme::Theme;
@@ -2051,7 +2054,7 @@ impl StudioApp {
             let card_id = egui::Id::new(("help-card", self.help_card_generation));
             let mut action = None;
             egui::Area::new(card_id)
-                .order(egui::Order::Foreground)
+                .order(HELP_CARD_LAYER_ORDER)
                 .default_pos(egui::pos2(18.0, 18.0))
                 .movable(true)
                 .constrain(true)
@@ -2130,7 +2133,7 @@ impl StudioApp {
         if target_available {
             let tint = egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150);
             let lower_layer =
-                egui::LayerId::new(egui::Order::Foreground, egui::Id::new("help-dim-painter"));
+                egui::LayerId::new(HELP_DIM_LAYER_ORDER, egui::Id::new("help-dim-painter"));
             let painter = ctx.layer_painter(lower_layer);
             for region in
                 help::absolute_dim_regions((screen.min.x, screen.min.y), viewport, spotlight_target)
@@ -2158,7 +2161,7 @@ impl StudioApp {
         }
         // The card is the only interactive tutorial layer.
         egui::Area::new(card_id)
-            .order(egui::Order::Foreground)
+            .order(HELP_CARD_LAYER_ORDER)
             .default_pos(screen.min + egui::vec2(card.min.0, card.min.1))
             .movable(true)
             .constrain(true)
@@ -9540,7 +9543,7 @@ mod tests {
         verified_artifact_after_build, verify_artifact_manifest, ApprovedArtifact, CreditEntry,
         Panel, WatchDriveSelection, ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS,
         ARTIFACT_VERIFICATION_FAILED_STATUS, ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS,
-        FIRST_RUN_STEPS,
+        FIRST_RUN_STEPS, HELP_CARD_LAYER_ORDER, HELP_DIM_LAYER_ORDER,
     };
     use super::{
         classify_http_status, classify_transport, commits_match, parse_latest_commit,
@@ -9727,6 +9730,16 @@ mod tests {
                 .map(|event| event.operation_id),
             Some(44)
         );
+    }
+
+    #[test]
+    fn help_layers_keep_painter_below_the_single_interactive_card() {
+        assert_eq!(HELP_DIM_LAYER_ORDER, egui::Order::Middle);
+        assert_eq!(HELP_CARD_LAYER_ORDER, egui::Order::Foreground);
+        let painter_layers = [HELP_DIM_LAYER_ORDER];
+        let interactive_layers = [HELP_CARD_LAYER_ORDER];
+        assert_eq!(painter_layers.len(), 1);
+        assert_eq!(interactive_layers.len(), 1);
     }
 
     #[test]
