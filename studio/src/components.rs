@@ -164,12 +164,38 @@ impl LcdVariant {
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities, capability_chart_cells, capability_chart_rows, effective_config,
-        resolve_conflict, validate_compatibility, BoardKind, BuildProfile, CapabilityStatus,
-        CompatibilitySeverity, ComponentsConfig, ConflictResolution, LcdVariant,
+        capabilities, capability_chart_cells, capability_chart_rows, default_profiles,
+        effective_config, resolve_conflict, validate_compatibility, BoardKind, BuildProfile,
+        CapabilityStatus, CompatibilitySeverity, ComponentsConfig, ConflictResolution, LcdVariant,
         CAPABILITY_BOARD_WIDTH, CAPABILITY_CHART, CAPABILITY_CHART_MIN_WIDTH,
         CAPABILITY_NAME_WIDTH, CAPABILITY_VALUE_WIDTH,
     };
+
+    #[test]
+    fn stock_profiles_match_product_thermistor_evidence() {
+        let profiles = default_profiles();
+        assert!(!profiles[0].config.thermistor);
+        assert!(profiles[1].config.thermistor);
+        assert!(!profiles[2].config.thermistor);
+        assert!(profiles[3].config.thermistor);
+        assert_eq!(
+            profiles[1].config.thermistor,
+            capabilities(BoardKind::RedLite).thermistor != CapabilityStatus::Unknown
+        );
+        assert_eq!(
+            profiles[3].config.thermistor,
+            capabilities(BoardKind::Pro).thermistor != CapabilityStatus::Unknown
+        );
+        assert!(effective_config(BoardKind::RedLite, &profiles[1], &profiles[1].config).thermistor);
+        assert!(effective_config(BoardKind::Pro, &profiles[3], &profiles[3].config).thermistor);
+    }
+
+    #[test]
+    fn edited_stock_profile_is_not_legacy_default() {
+        let mut profile = default_profiles()[3].clone();
+        profile.config.buzzer = false;
+        assert!(!super::is_legacy_default_profile(3, &profile));
+    }
 
     #[test]
     fn lcd_variant_labels_are_stable_and_non_empty() {
@@ -969,6 +995,7 @@ pub fn default_profiles() -> Vec<BuildProfile> {
             "Red / Lite",
             ComponentsConfig {
                 light_sensor: false,
+                thermistor: true,
                 buzzer: true,
                 led: true,
                 ..Default::default()
@@ -986,7 +1013,7 @@ pub fn default_profiles() -> Vec<BuildProfile> {
         BuildProfile::new(
             "Pro",
             ComponentsConfig {
-                thermistor: false,
+                thermistor: true,
                 accelerometer: false,
                 buzzer: true,
                 led: true,
@@ -995,6 +1022,58 @@ pub fn default_profiles() -> Vec<BuildProfile> {
         ),
         BuildProfile::new("Custom", ComponentsConfig::default()),
     ]
+}
+
+/// Returns whether a persisted profile is byte-for-byte equivalent to a stock
+/// profile from settings schema 1. This deliberately excludes edited profiles
+/// from the stock-default migration.
+pub fn is_legacy_default_profile(index: usize, profile: &BuildProfile) -> bool {
+    let legacy = match index {
+        0 => BuildProfile::new(
+            "Green",
+            ComponentsConfig {
+                buzzer: true,
+                led: true,
+                ..Default::default()
+            },
+        ),
+        1 => BuildProfile::new(
+            "Red / Lite",
+            ComponentsConfig {
+                light_sensor: false,
+                buzzer: true,
+                led: true,
+                ..Default::default()
+            },
+        ),
+        2 => BuildProfile::new(
+            "Blue",
+            ComponentsConfig {
+                thermistor: false,
+                buzzer: true,
+                led: true,
+                ..Default::default()
+            },
+        ),
+        3 => BuildProfile::new(
+            "Pro",
+            ComponentsConfig {
+                thermistor: false,
+                accelerometer: false,
+                buzzer: true,
+                led: true,
+                ..Default::default()
+            },
+        ),
+        4 => BuildProfile::new("Custom", ComponentsConfig::default()),
+        _ => return false,
+    };
+    *profile == legacy
+}
+
+/// Product-page-backed thermistor defaults used by stock profiles and migration.
+pub fn default_thermistor_for_profile(name: &str) -> bool {
+    matches!(name, "Red / Lite" | "Red" | "Lite" | "Pro")
 }
 
 pub fn selected_config(profiles: &[BuildProfile], selected: usize) -> ComponentsConfig {

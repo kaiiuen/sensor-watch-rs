@@ -10459,6 +10459,8 @@ mod tests {
     #[test]
     fn active_tour_owns_input_and_protects_unsafe_actions() {
         let mut app = super::StudioApp::default();
+        // This fixture exercises the built-in safe policy, not persisted UX overrides.
+        app.panel_ux_overrides.remove(super::Panel::Simulator.key());
         app.current_panel = super::Panel::Simulator;
         app.help_open = Some(crate::help::HelpId::Simulator);
         app.help_anchors.begin_frame(1);
@@ -10529,6 +10531,8 @@ mod tests {
     #[test]
     fn resuming_restores_tour_input_ownership() {
         let mut app = super::StudioApp::default();
+        // This fixture exercises the built-in safe policy, not persisted UX overrides.
+        app.panel_ux_overrides.remove(super::Panel::Simulator.key());
         app.current_panel = super::Panel::Simulator;
         app.help_open = Some(crate::help::HelpId::Simulator);
         app.help_anchors.begin_frame(1);

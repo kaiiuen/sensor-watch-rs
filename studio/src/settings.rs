@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-use super::components::BuildProfile;
+use super::components::{self, BuildProfile};
 use super::i18n::Language;
 use super::modules::ModuleManager;
 use super::ntp;
@@ -48,6 +48,7 @@ impl Default for TabOverflowBehavior {
 const MAX_SETTINGS_JSON_BYTES: usize = 256 * 1024;
 const MAX_NTP_SERVERS: usize = 64;
 const MAX_SETTINGS_TEXT_BYTES: usize = 256;
+const SETTINGS_SCHEMA_VERSION: u32 = 2;
 
 /// Versioned, persistence-safe Studio representation of RTC calibration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -292,7 +293,7 @@ impl AppSettings {
         fresh_test_executable_profile: bool,
     ) -> Self {
         AppSettings {
-            schema_version: 1,
+            schema_version: SETTINGS_SCHEMA_VERSION,
             language: language.name().to_string(),
             theme: theme.name().to_string(),
             presets: presets.clone(),
@@ -356,7 +357,7 @@ impl AppSettings {
 
     /// Validates values loaded from disk before they can affect the app/build.
     pub fn validate(&self) -> Result<(), String> {
-        if self.schema_version == 0 || self.schema_version > 1 {
+        if self.schema_version == 0 || self.schema_version > SETTINGS_SCHEMA_VERSION {
             return Err("unsupported settings schema version".into());
         }
         for (field, value) in [
@@ -467,6 +468,7 @@ impl AppSettings {
         if value.get("developer_mode").is_none() {
             settings.developer_mode = settings.legacy_advanced_mode;
         }
+        migrate_component_profiles(&mut settings, &value);
         // Compatibility migration for settings written before face identity
         // became case-insensitive. It is order-preserving and idempotent.
         settings.presets.migrate_face_duplicates();
@@ -481,7 +483,7 @@ impl AppSettings {
 impl Default for AppSettings {
     fn default() -> Self {
         AppSettings {
-            schema_version: 1,
+            schema_version: SETTINGS_SCHEMA_VERSION,
             language: String::new(),
             theme: String::new(),
             presets: PresetManager::new(),
@@ -560,6 +562,30 @@ pub fn default_schema_version() -> u32 {
     1
 }
 
+/// Updates only schema-1 stock profiles whose thermistor value was untouched.
+/// Explicit profile edits, including an explicit `false`, survive.
+fn migrate_component_profiles(settings: &mut AppSettings, raw: &serde_json::Value) {
+    if settings.schema_version >= SETTINGS_SCHEMA_VERSION {
+        return;
+    }
+    let raw_profiles = raw.get("component_profiles").and_then(|v| v.as_array());
+    for (index, profile) in settings.component_profiles.iter_mut().enumerate() {
+        let raw_profile = raw_profiles.and_then(|profiles| profiles.get(index));
+        let thermistor_missing = raw_profile
+            .and_then(|value| value.get("config"))
+            .and_then(|config| config.get("thermistor"))
+            .is_none();
+        let old_stock = components::is_legacy_default_profile(index, profile);
+        if old_stock
+            && (thermistor_missing || !profile.config.thermistor)
+            && components::default_thermistor_for_profile(&profile.name)
+        {
+            profile.config.thermistor = true;
+        }
+    }
+    settings.schema_version = SETTINGS_SCHEMA_VERSION;
+}
+
 /// The default output directory for built artifacts: `<User Documents>/FirmwareStudio`.
 /// This is writable even when the app runs as a standalone exe from a read-only
 /// location.
@@ -581,6 +607,58 @@ pub fn default_output_dir() -> String {
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, RtcCalibrationSettings};
+    use crate::components::{default_profiles, BuildProfile, ComponentsConfig};
+
+    #[test]
+    fn fresh_settings_use_current_schema_and_stock_profiles() {
+        let settings = AppSettings::default();
+        assert_eq!(settings.schema_version, 2);
+        let profiles = default_profiles();
+        assert!(!profiles[0].config.thermistor);
+        assert!(profiles[1].config.thermistor);
+        assert!(!profiles[2].config.thermistor);
+        assert!(profiles[3].config.thermistor);
+    }
+
+    #[test]
+    fn legacy_stock_profiles_migrate_without_touching_green_or_blue() {
+        let mut settings = AppSettings::default();
+        settings.schema_version = 1;
+        settings.component_profiles = vec![
+            BuildProfile::new("Green", ComponentsConfig::default()),
+            BuildProfile::new("Red / Lite", ComponentsConfig::default()),
+            BuildProfile::new("Blue", ComponentsConfig::default()),
+            BuildProfile::new("Pro", ComponentsConfig::default()),
+        ];
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&settings.to_json().unwrap()).unwrap();
+        raw["schema_version"] = 1.into();
+        let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
+        assert_eq!(loaded.schema_version, 2);
+        assert!(!loaded.component_profiles[0].config.thermistor);
+        assert!(loaded.component_profiles[1].config.thermistor);
+        assert!(!loaded.component_profiles[2].config.thermistor);
+        assert!(loaded.component_profiles[3].config.thermistor);
+    }
+
+    #[test]
+    fn legacy_custom_profile_is_preserved() {
+        let mut settings = AppSettings::default();
+        settings.schema_version = 1;
+        settings.component_profiles = vec![BuildProfile::new(
+            "My Pro",
+            ComponentsConfig {
+                buzzer: false,
+                ..Default::default()
+            },
+        )];
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&settings.to_json().unwrap()).unwrap();
+        raw["schema_version"] = 1.into();
+        let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
+        assert!(!loaded.component_profiles[0].config.thermistor);
+        assert!(!loaded.component_profiles[0].config.buzzer);
+    }
 
     #[test]
     fn developer_mode_defaults_off_and_migrates_advanced_mode() {
