@@ -46,6 +46,7 @@ mod watch_display;
 mod watch_sim;
 mod wiki;
 
+use components::BoardKind as Board;
 use eframe::egui;
 use help::{AnchorId, AnchorRect, AnchorRegistry, HelpId, TourClaims};
 use i18n::{tr, Key, Language};
@@ -235,6 +236,9 @@ struct StudioApp {
     component_profiles: Vec<components::BuildProfile>,
     component_profile: usize,
     component_draft: components::ComponentsConfig,
+    component_effective: components::ComponentsConfig,
+    /// A board/profile change whose compatibility conflicts await an explicit choice.
+    pending_component_conflict: Option<PendingComponentConflict>,
     /// The index of the preset face currently being simulated.
     sim_face_idx: usize,
     /// Simulator date controller: year, month, day, hour, minute, weekday.
@@ -403,29 +407,6 @@ struct StudioApp {
     probe_progress: Option<probe::ProbeProgress>,
 }
 
-/// The supported Sensor Watch board revisions.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Board {
-    Green,
-    RedLite,
-    Blue,
-    Pro,
-}
-
-impl Board {
-    /// All supported board revisions, in display order.
-    const ALL: [Board; 4] = [Board::Green, Board::RedLite, Board::Blue, Board::Pro];
-
-    fn label(self) -> &'static str {
-        match self {
-            Board::Green => "Green",
-            Board::RedLite => "Red / Lite",
-            Board::Blue => "Blue",
-            Board::Pro => "Pro",
-        }
-    }
-}
-
 /// A short human-readable description of a board revision: what it is, how it
 /// differs from the others, and its key hardware details.
 fn board_info(b: Board) -> &'static str {
@@ -565,6 +546,16 @@ enum ButtonId {
     L,
     C,
     A,
+}
+
+/// A board/profile compatibility change awaiting an explicit choice.
+#[derive(Clone, Debug)]
+struct PendingComponentConflict {
+    board: Board,
+    profile: usize,
+    draft: components::ComponentsConfig,
+    title: String,
+    issues: components::CompatibilityResult,
 }
 
 /// A destructive action awaiting confirmation in a modal dialog.
@@ -1019,6 +1010,8 @@ impl Default for StudioApp {
             component_profiles: components::default_profiles(),
             component_profile: 0,
             component_draft: components::selected_config(&components::default_profiles(), 0),
+            component_effective: components::selected_config(&components::default_profiles(), 0),
+            pending_component_conflict: None,
             sim_face_idx: 0,
             sim_year,
             sim_month,
@@ -1717,6 +1710,7 @@ impl eframe::App for StudioApp {
             self.cancel_simulator_buttons();
         }
         self.help_spotlight(ctx);
+        self.show_component_conflict(ctx);
 
         if self.advanced_mode_confirm {
             egui::Window::new("Enable Advanced mode?")
@@ -1984,6 +1978,83 @@ impl eframe::App for StudioApp {
 }
 
 impl StudioApp {
+    fn request_component_change(
+        &mut self,
+        board: Board,
+        profile: usize,
+        draft: components::ComponentsConfig,
+        title: String,
+    ) {
+        let profile_data = self
+            .component_profiles
+            .get(profile)
+            .cloned()
+            .unwrap_or_else(|| components::BuildProfile::new("draft", draft.clone()));
+        let issues = components::validate_compatibility(board, &profile_data, &draft);
+        if issues
+            .iter()
+            .any(|issue| issue.severity == components::CompatibilitySeverity::Error)
+        {
+            self.pending_component_conflict = Some(PendingComponentConflict {
+                board,
+                profile,
+                draft,
+                title,
+                issues,
+            });
+        } else {
+            self.board = board;
+            self.component_profile = profile;
+            self.component_draft = draft.clone();
+            self.component_effective = components::effective_config(board, &profile_data, &draft);
+        }
+    }
+
+    fn show_component_conflict(&mut self, ctx: &egui::Context) {
+        let Some(pending) = self.pending_component_conflict.clone() else {
+            return;
+        };
+        let mut action = None;
+        egui::Window::new("Component compatibility review")
+            .collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.heading(&pending.title);
+                ui.label("The requested configuration is preserved. Choose how the effective configuration should proceed:");
+                for finding in &pending.issues {
+                    ui.colored_label(egui::Color32::RED, format!("{}: {} — {}", finding.component, finding.reason, finding.suggested_action));
+                }
+                ui.add_space(8.0);
+                ui.horizontal(|ui| {
+                    if ui.button("Cancel").clicked() { action = Some(0); }
+                    if ui.button("Keep / review configuration").clicked() { action = Some(1); }
+                    if ui.button("Disable incompatible options").clicked() { action = Some(2); }
+                });
+            });
+        if let Some(action) = action {
+            if action != 0 {
+                self.board = pending.board;
+                self.component_profile = pending.profile;
+                self.component_draft = pending.draft.clone();
+                let profile = self
+                    .component_profiles
+                    .get(pending.profile)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        components::BuildProfile::new("draft", pending.draft.clone())
+                    });
+                let choice = if action == 1 {
+                    components::ConflictResolution::KeepRequested
+                } else {
+                    components::ConflictResolution::DisableIncompatible
+                };
+                self.component_effective =
+                    components::resolve_conflict(choice, pending.board, &profile, &pending.draft)
+                        .expect("non-cancel component conflict choice must resolve");
+            }
+            self.pending_component_conflict = None;
+        }
+    }
+
     /// Cancels simulator input when its owner (the current face or tab) goes
     /// away. This is intentionally different from a normal release: no Up or
     /// LongUp event belongs to the replacement face.
@@ -2471,9 +2542,15 @@ impl StudioApp {
         let board_response = ui.horizontal(|ui| {
             ui.label("Target board:");
             for b in [Board::Green, Board::RedLite, Board::Blue, Board::Pro] {
-                if ui.selectable_label(self.board == b, b.label()).clicked() {
-                    self.board = b;
-                    self.log.log(format!("Target board set to {}", b.label()));
+                if ui.selectable_label(self.board == b, b.label()).clicked() && self.board != b {
+                    self.request_component_change(
+                        b,
+                        self.component_profile,
+                        self.component_draft.clone(),
+                        format!("Switch target board to {}", b.label()),
+                    );
+                    self.log
+                        .log(format!("Target board change requested: {}", b.label()));
                 }
             }
         });
@@ -4240,12 +4317,21 @@ impl StudioApp {
                 // Board selection (which revision the .uf2 targets).
                 ui.horizontal(|ui| {
                     ui.label("Target board:");
+                    let mut board_rect = None;
                     for b in Board::ALL {
-                        if ui.selectable_label(self.board == b, b.label()).clicked() {
-                            self.board = b;
-                            self.log.log(format!("Target board set to {}", b.label()));
-                            self.save_settings_internal();
+                        let response = ui.selectable_label(self.board == b, b.label());
+                        board_rect = Some(
+                            board_rect
+                                .map(|rect: egui::Rect| rect.union(response.rect))
+                                .unwrap_or(response.rect),
+                        );
+                        if response.clicked() && self.board != b {
+                            self.request_component_change(b, self.component_profile, self.component_draft.clone(), format!("Switch target board to {}", b.label()));
+                            self.log.log(format!("Target board change requested: {}", b.label()));
                         }
+                    }
+                    if let Some(rect) = board_rect {
+                        self.register_anchor_rect(Panel::BuildFlash, AnchorId::BuildBoard, rect);
                     }
                     ui.separator();
                     // Description of the selected board: what it is, hardware
@@ -4262,11 +4348,36 @@ impl StudioApp {
                 ui.add_space(8.0);
 
                 ui.add_space(8.0);
-                components::show_configurator(
+                let profile_start = ui.min_rect();
+                ui.collapsing("Board capability chart", |ui| {
+                    ui.label("Capability status is authoritative for Studio review; uncertain hardware is never assumed buildable.");
+                    egui::Grid::new("board_capability_chart").striped(true).show(ui, |ui| {
+                        for heading in ["Board", "LCD", "LED channels/type", "Light sensor", "Thermistor", "Accelerometer", "Buzzer", "Buses", "UART", "Confidence", "Source", "Revision notes", "Verification"] { ui.strong(heading); }
+                        ui.end_row();
+                        for row in components::capability_chart_rows() {
+                            for value in [row.board, row.lcd, row.led, row.light_sensor, row.thermistor, row.accelerometer, row.buzzer, row.buses, row.uart, row.confidence, row.source, row.revision_notes, row.verification] { ui.label(value); }
+                            ui.end_row();
+                        }
+                    });
+                });
+                let (config_changed, profile_selection) = components::show_configurator(
                     ui,
+                    self.board,
                     &mut self.component_profiles,
                     &mut self.component_profile,
                     &mut self.component_draft,
+                );
+                if let Some(selection) = profile_selection {
+                    self.request_component_change(self.board, selection.index, selection.config, format!("Apply build profile {}", self.component_profiles[selection.index].name));
+                }
+                if config_changed && self.pending_component_conflict.is_none() {
+                    let profile = self.component_profiles.get(self.component_profile).cloned().unwrap_or_else(|| components::BuildProfile::new("draft", self.component_draft.clone()));
+                    self.component_effective = components::effective_config(self.board, &profile, &self.component_draft);
+                }
+                self.register_anchor_rect(
+                    Panel::BuildFlash,
+                    AnchorId::BuildProfile,
+                    profile_start.union(ui.min_rect()),
                 );
                 ui.add_space(8.0);
 
@@ -8454,6 +8565,15 @@ impl StudioApp {
             "Pro" => Board::Pro,
             _ => Board::Green,
         };
+        let profile = self
+            .component_profiles
+            .get(self.component_profile)
+            .cloned()
+            .unwrap_or_else(|| {
+                components::BuildProfile::new("draft", self.component_draft.clone())
+            });
+        self.component_effective =
+            components::effective_config(self.board, &profile, &self.component_draft);
         self.line_limit = s.line_limit.max(1);
         self.tick_verbosity = debug::TickVerbosity::from_setting(&s.tick_verbosity);
         self.apply_line_limit();
