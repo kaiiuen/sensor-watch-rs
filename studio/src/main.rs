@@ -101,7 +101,12 @@ fn configured_estimator_status(
         return format!("Build estimate unavailable: {reason}");
     }
     match state {
-        BuildEstimatorState::NeedsValidation => "Build estimate pending validation".to_string(),
+        BuildEstimatorState::NeedsValidation => {
+            let (flash, ram) = plan.estimate.expect("valid build plan has estimate");
+            format!(
+                "Ready to build configured UF2. Estimated component impact: +{flash} KiB flash, +{ram} KiB RAM (planning estimate)"
+            )
+        }
         BuildEstimatorState::Building => "Building configured UF2...".to_string(),
         BuildEstimatorState::Verified => {
             let (flash, ram) = plan.estimate.expect("valid build plan has estimate");
@@ -12021,14 +12026,28 @@ mod tests {
     }
 
     #[test]
-    fn estimator_reports_the_actual_unsupported_preflight_reason() {
-        let message = super::configured_estimator_status(
-            &super::BuildEstimatorState::Failed("unsupported component mapping".to_string()),
-            &valid_plan(),
-        );
+    fn estimator_reports_ready_valid_plan_before_build_starts() {
+        let plan = valid_plan();
+        let (flash, ram) = plan.estimate.unwrap();
 
         assert_eq!(
-            message,
+            super::configured_estimator_status(&super::BuildEstimatorState::NeedsValidation, &plan),
+            format!(
+                "Ready to build configured UF2. Estimated component impact: +{flash} KiB flash, +{ram} KiB RAM (planning estimate)"
+            )
+        );
+    }
+
+    #[test]
+    fn estimator_reports_exact_invalid_preflight_reason() {
+        let mut plan = valid_plan();
+        plan.preflight = crate::firmware_inputs::PreflightStatus::Invalid(
+            "unsupported component mapping".to_string(),
+        );
+        plan.estimate = None;
+
+        assert_eq!(
+            super::configured_estimator_status(&super::BuildEstimatorState::NeedsValidation, &plan),
             "Build estimate unavailable: unsupported component mapping"
         );
     }
