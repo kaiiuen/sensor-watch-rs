@@ -1928,7 +1928,7 @@ mod tests {
             face.loop_(types::Event::Activate, &mut settings)
         });
         // distance 100 -> 6-digit right-aligned leaves leading NULs.
-        assert_eq!(mock.text(), "TC d\0\0\0100");
+        assert_eq!(mock.text(), "TC d\x00\x00\x00100");
     }
 
     #[test]
@@ -1941,7 +1941,7 @@ mod tests {
             face.loop_(types::Event::Activate, &mut settings)
         });
         // "TA  0000" written from a [0u8;11] buffer -> leading NULs remain.
-        assert_eq!(mock.text(), "TA  \0\0\00");
+        assert_eq!(mock.text(), "TA  \x00\x00\x000");
     }
 
     #[test]
@@ -1967,7 +1967,7 @@ mod tests {
             face.loop_(types::Event::Activate, &mut settings)
         });
         // sum=0 -> "TS00" + 6 NULs + "0".
-        assert_eq!(mock.text(), "TS00\0\0\0\0\00");
+        assert_eq!(mock.text(), "TS00\x00\x00\x00\x00\x000");
     }
 
     #[test]
