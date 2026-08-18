@@ -548,7 +548,7 @@ fn write_signed(buf: &mut [u8; 11], value: i16, offset: usize, width: usize) {
 /// Writes a count into the buffer at the given offset (right-aligned, 6 digits).
 fn write_count(buf: &mut [u8; 11], count: u32, offset: usize) {
     let mut v = count;
-    for i in (offset..offset + 6).rev() {
+    for i in (offset..(offset + 6).min(buf.len())).rev() {
         buf[i] = b'0' + (v % 10) as u8;
         v /= 10;
     }

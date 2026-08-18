@@ -25,6 +25,15 @@
 #[path = "../../movement/shell_auth.rs"]
 pub mod shell_auth;
 
+/// Pure diagnostics support reused from the firmware implementation. Its
+/// persistence is routed through the host backup-register seam.
+#[path = "../../movement/battery.rs"]
+pub mod battery;
+#[path = "../../movement/board.rs"]
+pub mod board;
+#[path = "../../movement/stats.rs"]
+pub mod stats;
+
 pub mod types {
     // Reuse the real movement types verbatim so the trait/event contract is the
     // same code the firmware binary compiles (no drift).
@@ -40,6 +49,13 @@ pub mod types {
     };
     // Re-export the `BuzzerNote` alias the faces / state use.
     pub use crate::watch::buzzer::Note as BuzzerNote;
+}
+
+/// The REAL Diagnostics face, pulled in verbatim through host-only HAL seams.
+pub mod diagnostics {
+    #[path = "../../../movement/diagnostics.rs"]
+    pub mod real;
+    pub use real::DiagnosticsFace;
 }
 
 /// The REAL `simple_clock` face, pulled in verbatim and re-exported so host
@@ -989,6 +1005,11 @@ pub fn button_should_sound() -> bool {
 /// Plays `rounds` of `alarm_note`. Host: no-op.
 pub fn play_alarm_beeps(_rounds: u8, _alarm_note: types::BuzzerNote) {}
 
+/// Host model: no physical accelerometer is attached to `MockHw`.
+pub fn accelerometer_begin() -> bool {
+    false
+}
+
 /// Saves the current settings so they survive a reset. Host: no-op (the mock
 /// keeps settings in memory only). Mirrors `movement::save_settings`.
 pub fn save_settings() {}
@@ -1019,6 +1040,9 @@ pub fn get_current_timezone_offset() -> i32 {
 pub fn clock_mode_24h() -> types::ClockMode {
     types::ClockMode::H24
 }
+
+#[cfg(test)]
+mod face_tests_diagnostics;
 
 /// Requests a change in the tick frequency (power of two, 1-128 Hz). Host:
 /// forwards to `set_tick_rate` just like the firmware.

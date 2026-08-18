@@ -12,11 +12,15 @@
 
 pub mod adc;
 pub mod buzzer;
+pub mod crc;
 pub mod deepsleep;
+pub mod ecc;
 pub mod extint;
 pub mod gpio;
 pub mod i2c;
 pub mod led;
+pub mod lis2dw;
+pub mod memory;
 pub mod opt3001;
 pub mod rtc;
 pub mod slcd;

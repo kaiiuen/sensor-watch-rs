@@ -103,6 +103,11 @@ pub enum Note {
     Rest,
 }
 
+/// Host model of the board buzzer voltage configuration.
+pub fn set_voltage(voltage: u8) -> Result<(), ()> {
+    (voltage <= 90).then_some(()).ok_or(())
+}
+
 /// Host: no-op (the mock does not play audio yet).
 pub fn play_signal() {}
 /// Host: no-op.

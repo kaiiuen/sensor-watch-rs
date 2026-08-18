@@ -35,7 +35,7 @@ use sensor_watch::movement::{
     accel_interrupt_count, activity, alarm, alarm_thermometer, astronomy, baby_kicks, beats, beeps,
     blackjack, blinky, breathing, butterfly_game, character_set, chirpy_demo, close_enough,
     couch_to_5k, countdown, counter, databank, day_night_percentage, day_one, days_since, deadline,
-    decimal_time, demo, discgolf, dual_timer, endless_runner, finetune, flashlight,
+    decimal_time, demo, diagnostics, discgolf, dual_timer, endless_runner, finetune, flashlight,
     french_revolutionary, frequency_correction, geomancy, habit, hello_there, higher_lower_game,
     hydration, interval, invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter,
     lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
@@ -403,6 +403,9 @@ impl_real_face_trait!(discgolf::DiscgolfFace);
 impl_real_face_trait!(butterfly_game::ButterflyGameFace);
 
 #[cfg(feature = "real-faces")]
+impl_real_face_trait!(diagnostics::DiagnosticsFace);
+
+#[cfg(feature = "real-faces")]
 impl RealFaceTrait for alarm::AlarmFace {
     fn activate(&mut self, settings: &types::Settings) {
         types::WatchFace::activate(self, settings);
@@ -719,6 +722,92 @@ mod hydration_tests {
 }
 
 #[cfg(all(test, feature = "real-faces"))]
+mod diagnostics_tests {
+    use super::{RealButton, RealButtonEvent, RealFace, REAL_FACE_NAMES};
+
+    fn tap(face: &mut RealFace, button: RealButton) {
+        face.button_event(button, RealButtonEvent::Up);
+    }
+
+    fn enter(face: &mut RealFace, rows: usize) {
+        for _ in 0..rows {
+            tap(face, RealButton::Light);
+        }
+        tap(face, RealButton::Alarm);
+    }
+
+    #[test]
+    fn diagnostics_is_registered_and_activation_resets_to_main_menu() {
+        assert!(REAL_FACE_NAMES.contains(&"DIAGNOSTICS"));
+        let mut face = RealFace::new("diagnostics").expect("Diagnostics seam mapping");
+        assert_eq!(face.face_name(), "DIAGNOSTICS");
+        assert!(face.set_time(2024, 2, 29, 15, 4, 0));
+        face.activate(true);
+        assert!(face.is_activated());
+        assert_eq!(
+            face.snapshot().chars,
+            ['0', '0', '0', '0', 'C', 'P', 'U', ' ', ' ', ' ']
+        );
+
+        enter(&mut face, 5);
+        assert_eq!(
+            face.snapshot().chars,
+            ['0', '1', '0', '0', 'E', 'M', '1', '5', '0', '4']
+        );
+        face.activate(true);
+        assert_eq!(
+            face.snapshot().chars,
+            ['0', '0', '0', '0', 'C', 'P', 'U', ' ', ' ', ' ']
+        );
+    }
+
+    #[test]
+    fn diagnostics_navigation_renders_settings_stats_and_system_and_backs_out() {
+        let mut face = RealFace::new("DIAGNOSTICS").expect("Diagnostics seam mapping");
+        assert!(face.set_time(2024, 2, 29, 15, 4, 0));
+        face.activate(true);
+
+        enter(&mut face, 5); // SYSTEM
+        assert_eq!(
+            face.snapshot().chars,
+            ['0', '1', '0', '0', 'E', 'M', '1', '5', '0', '4']
+        );
+        tap(&mut face, RealButton::Alarm); // breadcrumb/back to menu
+        face.activate(true); // reset cursor to the first menu row
+        enter(&mut face, 6); // SETTINGS
+        assert_eq!(
+            face.snapshot().chars,
+            ['0', '2', '0', '0', ' ', 'G', 'R', 'E', 'E', 'N']
+        );
+        tap(&mut face, RealButton::Alarm); // toggle the board setting
+        assert_eq!(face.snapshot().chars[4..], [' ', 'R', 'E', 'D', ' ', ' ']);
+        tap(&mut face, RealButton::Alarm); // settings row 0 remains a setting, not back
+        tap(&mut face, RealButton::Light);
+        tap(&mut face, RealButton::Alarm); // still settings; deterministic row navigation
+        tap(&mut face, RealButton::Alarm); // exit from the system-like page is covered above
+
+        face.activate(true);
+        enter(&mut face, 7); // STATS
+        assert_eq!(
+            face.snapshot().chars,
+            ['0', '2', '0', '0', 'T', ' ', '0', '0', '0', '0']
+        );
+    }
+
+    #[test]
+    fn diagnostics_resign_is_idempotent_after_button_events() {
+        let mut face = RealFace::new("DIAGNOSTICS").expect("Diagnostics seam mapping");
+        face.activate(true);
+        tap(&mut face, RealButton::Light);
+        tap(&mut face, RealButton::Alarm);
+        face.resign();
+        assert!(!face.is_activated());
+        face.resign();
+        assert!(!face.is_activated());
+    }
+}
+
+#[cfg(all(test, feature = "real-faces"))]
 mod couch_to_5k_tests {
     use super::{RealFace, REAL_FACE_NAMES};
 
@@ -919,6 +1008,7 @@ pub(crate) const REAL_FACE_NAMES: &[&str] = &[
     "STOCK_STOPWATCH",
     "TIMER",
     "COUNTDOWN",
+    "DIAGNOSTICS",
     "DUAL_TIMER",
     "ENDLESS_RUNNER",
     "HYDRATION",
@@ -1036,6 +1126,7 @@ fn new_face(face_name: &str) -> Option<Box<dyn RealFaceTrait>> {
         "STOCK_STOPWATCH" => Some(Box::new(stock_stopwatch::StockStopwatchFace::new())),
         "TIMER" => Some(Box::new(timer::TimerFace::new())),
         "COUNTDOWN" => Some(Box::new(countdown::CountdownFace::new_static())),
+        "DIAGNOSTICS" => Some(Box::new(diagnostics::DiagnosticsFace::new_static())),
         "DUAL_TIMER" => Some(Box::new(dual_timer::DualTimerFace::new_static())),
         "ENDLESS_RUNNER" => Some(Box::new(endless_runner::EndlessRunnerFace::new())),
         "HYDRATION" => Some(Box::new(hydration::HydrationFace::new())),
@@ -1181,6 +1272,7 @@ fn new_face_name(face_name: &str) -> &'static str {
         "STOCK_STOPWATCH" => "STOCK_STOPWATCH",
         "TIMER" => "TIMER",
         "COUNTDOWN" => "COUNTDOWN",
+        "DIAGNOSTICS" => "DIAGNOSTICS",
         "DUAL_TIMER" => "DUAL_TIMER",
         "ENDLESS_RUNNER" => "ENDLESS_RUNNER",
         "HYDRATION" => "HYDRATION",
@@ -1473,8 +1565,8 @@ mod tests {
         ] {
             assert!(RealFace::new(name).is_some(), "{name} should be migrated");
         }
-        assert_eq!(REAL_FACE_NAMES.len(), 107);
-        assert_eq!(111 - REAL_FACE_NAMES.len(), 4);
+        assert_eq!(REAL_FACE_NAMES.len(), 108);
+        assert_eq!(111 - REAL_FACE_NAMES.len(), 3);
         assert!(RealFace::new("ACTIVITY").is_some());
         assert!(RealFace::new("geomancy").is_some());
         assert!(RealFace::new("NOT_A_FACE").is_none());
@@ -1901,7 +1993,7 @@ mod tests {
 
     #[test]
     fn unmigrated_face_falls_back() {
-        assert_eq!(111 - REAL_FACE_NAMES.len(), 4);
+        assert_eq!(111 - REAL_FACE_NAMES.len(), 3);
         assert!(
             render_real_face("NOT_A_FACE", 2023, 1, 6, 15, 4, 0, 5, true, false, false).is_none()
         );

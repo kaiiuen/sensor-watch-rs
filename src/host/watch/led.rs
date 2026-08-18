@@ -8,6 +8,12 @@
 
 use super::seam;
 
+/// Host model of the board LED polarity setting.
+pub fn set_invert_polarity(_invert: bool) {}
+
+/// Host model: enabling LEDs has no physical effect.
+pub fn enable_leds() {}
+
 /// Turns the LED off. Host: forwards to the `Hw` seam (no-op by default).
 pub fn set_led_off() {
     seam::with_current_hw(|hw| hw.set_led_off());
