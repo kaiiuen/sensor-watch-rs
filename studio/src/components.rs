@@ -154,9 +154,11 @@ impl LcdVariant {
 #[cfg(test)]
 mod tests {
     use super::{
-        capabilities, capability_chart_rows, effective_config, resolve_conflict,
-        validate_compatibility, BoardKind, BuildProfile, CapabilityStatus, CompatibilitySeverity,
-        ComponentsConfig, ConflictResolution, LcdVariant,
+        capabilities, capability_chart_cells, capability_chart_rows, effective_config,
+        resolve_conflict, validate_compatibility, BoardKind, BuildProfile, CapabilityStatus,
+        CompatibilitySeverity, ComponentsConfig, ConflictResolution, LcdVariant,
+        CAPABILITY_BOARD_WIDTH, CAPABILITY_CHART, CAPABILITY_CHART_MIN_WIDTH,
+        CAPABILITY_NAME_WIDTH, CAPABILITY_VALUE_WIDTH,
     };
 
     #[test]
@@ -301,6 +303,19 @@ mod tests {
         assert!(!issues(BoardKind::RedLite, config)
             .iter()
             .any(|item| item.component == "UART"));
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn capability_chart_layout_is_compact_and_deterministic() {
+        assert_eq!(capability_chart_cells(&CAPABILITY_CHART[0]).len(), 12);
+        assert_eq!(CAPABILITY_BOARD_WIDTH, 96.0);
+        assert_eq!(CAPABILITY_NAME_WIDTH, 128.0);
+        assert_eq!(CAPABILITY_VALUE_WIDTH, 400.0);
+        assert_eq!(
+            CAPABILITY_CHART_MIN_WIDTH,
+            CAPABILITY_BOARD_WIDTH + CAPABILITY_NAME_WIDTH + CAPABILITY_VALUE_WIDTH + 16.0
+        );
     }
 
     #[test]
@@ -565,6 +580,78 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
 
 pub fn capability_chart_rows() -> &'static [CapabilityChartRow; 4] {
     &CAPABILITY_CHART
+}
+
+const CAPABILITY_BOARD_WIDTH: f32 = 96.0;
+const CAPABILITY_NAME_WIDTH: f32 = 128.0;
+const CAPABILITY_VALUE_WIDTH: f32 = 400.0;
+const CAPABILITY_CHART_MIN_WIDTH: f32 =
+    CAPABILITY_BOARD_WIDTH + CAPABILITY_NAME_WIDTH + CAPABILITY_VALUE_WIDTH + 16.0;
+
+fn capability_chart_cells(row: &CapabilityChartRow) -> [(&'static str, &'static str); 12] {
+    [
+        ("LCD", row.lcd),
+        ("LED channels/type", row.led),
+        ("Light sensor", row.light_sensor),
+        ("Thermistor", row.thermistor),
+        ("Accelerometer", row.accelerometer),
+        ("Buzzer", row.buzzer),
+        ("Buses", row.buses),
+        ("UART", row.uart),
+        ("Confidence", row.confidence),
+        ("Source", row.source),
+        ("Revision notes", row.revision_notes),
+        ("Verification", row.verification),
+    ]
+}
+
+/// Renders the capability facts as a compact vertical table. The inner
+/// horizontal scroll is intentional: it keeps the evidence column readable
+/// without allowing the chart to widen the Build & Flash panel itself.
+pub fn show_capability_chart(ui: &mut Ui) {
+    ui.label("Capability status is authoritative for Studio review; uncertain hardware is never assumed buildable.");
+    egui::ScrollArea::horizontal()
+        .id_source("board_capability_chart_scroll")
+        .auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.set_min_width(CAPABILITY_CHART_MIN_WIDTH);
+            egui::Grid::new("board_capability_chart")
+                .striped(true)
+                .spacing([8.0, 4.0])
+                .show(ui, |ui| {
+                    ui.add_sized(
+                        [CAPABILITY_BOARD_WIDTH, 0.0],
+                        egui::Label::new(egui::RichText::new("Board").strong()),
+                    );
+                    ui.add_sized(
+                        [CAPABILITY_NAME_WIDTH, 0.0],
+                        egui::Label::new(egui::RichText::new("Capability").strong()),
+                    );
+                    ui.add_sized(
+                        [CAPABILITY_VALUE_WIDTH, 0.0],
+                        egui::Label::new(egui::RichText::new("Evidence / status").strong()),
+                    );
+                    ui.end_row();
+
+                    for row in capability_chart_rows() {
+                        for (name, value) in capability_chart_cells(row) {
+                            ui.add_sized(
+                                [CAPABILITY_BOARD_WIDTH, 0.0],
+                                egui::Label::new(egui::RichText::new(row.board).strong()),
+                            );
+                            ui.add_sized(
+                                [CAPABILITY_NAME_WIDTH, 0.0],
+                                egui::Label::new(name).wrap(true),
+                            );
+                            ui.add_sized(
+                                [CAPABILITY_VALUE_WIDTH, 0.0],
+                                egui::Label::new(value).wrap(true),
+                            );
+                            ui.end_row();
+                        }
+                    }
+                });
+        });
 }
 
 fn issue(

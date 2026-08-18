@@ -4368,15 +4368,7 @@ impl StudioApp {
                 ui.add_space(8.0);
                 let profile_start = ui.min_rect();
                 ui.collapsing("Board capability chart", |ui| {
-                    ui.label("Capability status is authoritative for Studio review; uncertain hardware is never assumed buildable.");
-                    egui::Grid::new("board_capability_chart").striped(true).show(ui, |ui| {
-                        for heading in ["Board", "LCD", "LED channels/type", "Light sensor", "Thermistor", "Accelerometer", "Buzzer", "Buses", "UART", "Confidence", "Source", "Revision notes", "Verification"] { ui.strong(heading); }
-                        ui.end_row();
-                        for row in components::capability_chart_rows() {
-                            for value in [row.board, row.lcd, row.led, row.light_sensor, row.thermistor, row.accelerometer, row.buzzer, row.buses, row.uart, row.confidence, row.source, row.revision_notes, row.verification] { ui.label(value); }
-                            ui.end_row();
-                        }
-                    });
+                    components::show_capability_chart(ui);
                 });
                 let (config_changed, profile_selection) = components::show_configurator(
                     ui,
