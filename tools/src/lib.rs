@@ -61,7 +61,7 @@ pub type Manifest = Map<String, Value>;
 pub type ToolResult<T> = Result<T, String>;
 pub use studio_package::{
     StudioPackageResult, package_studio, package_studio_artifacts,
-    package_studio_artifacts_with_launcher,
+    package_studio_artifacts_with_launcher, package_studio_with_launcher,
 };
 
 #[derive(Debug, Clone)]

@@ -4,7 +4,9 @@ use sha2::{Digest, Sha256};
 use std::{
     env, fs,
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
@@ -33,24 +35,67 @@ struct PackageEntry {
     sha256: String,
 }
 
-/// Builds Studio in release mode and packages only the known distribution inputs.
+/// Builds the release launcher and Studio, then packages only the known distribution inputs.
 pub fn package_studio(output: Option<&Path>) -> ToolResult<StudioPackageResult> {
+    package_studio_with_launcher(output, None)
+}
+
+pub fn package_studio_with_launcher(
+    output: Option<&Path>,
+    launcher_override: Option<&Path>,
+) -> ToolResult<StudioPackageResult> {
     let root = crate::workspace_root()?;
     let target = target_directory(&root);
-    let mut command = Command::new("cargo");
-    command.args(["build", "-p", "sensor-watch-studio", "--release"]);
-    command.current_dir(&root);
-    let status = command
-        .status()
-        .map_err(|e| format!("cannot start Studio release build: {e}"))?;
-    if !status.success() {
-        return Err(format!("Studio release build failed with {status}"));
+    if launcher_override.is_none() {
+        build_release_artifact(&root, "sensor-watch-launcher", "launcher")?;
     }
+    build_release_artifact(&root, "sensor-watch-studio", "Studio")?;
     let executable = target
         .join("release")
         .join(format!("sensor-watch-studio{EXE_SUFFIX}"));
-    let launcher = find_launcher_artifact(&target.join("release"))?;
+    let launcher = resolve_launcher_artifact(&target.join("release"), launcher_override)?;
     package_studio_artifacts_with_launcher(&root, &executable, &launcher, output)
+}
+
+const LAUNCHER_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+fn build_release_artifact(root: &Path, package: &str, label: &str) -> ToolResult<()> {
+    let mut command = Command::new("cargo");
+    command.args(["build", "-p", package, "--release"]);
+    command.current_dir(root);
+    bounded_status(&mut command, label, LAUNCHER_BUILD_TIMEOUT)
+}
+
+fn bounded_status(command: &mut Command, label: &str, timeout: Duration) -> ToolResult<()> {
+    command.stdout(Stdio::inherit()).stderr(Stdio::inherit());
+    let mut child = command
+        .spawn()
+        .map_err(|e| format!("cannot start {label} release build: {e}"))?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) if status.success() => return Ok(()),
+            Ok(Some(status)) => {
+                return Err(format!(
+                    "{label} release build failed with {status}; fix the build errors and retry package-studio"
+                ));
+            }
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!(
+                    "{label} release build exceeded the {} second timeout; retry package-studio after resolving the build environment",
+                    timeout.as_secs()
+                ));
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(100)),
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("cannot monitor {label} release build: {e}"));
+            }
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -97,16 +142,13 @@ pub fn package_studio_artifacts_with_launcher(
     let launcher = regular_file(launcher, "required launcher/bootstrapper artifact")?
         .canonicalize()
         .map_err(|e| format!("cannot resolve launcher/bootstrapper artifact: {e}"))?;
-    let target_root = root
-        .join("target")
+    let target_root = target_directory(&root)
         .canonicalize()
         .map_err(|e| format!("cannot resolve workspace target directory: {e}"))?;
     if !executable.starts_with(&target_root) {
         return Err("Studio executable must be inside the workspace target directory".into());
     }
-    if !launcher.starts_with(&target_root) {
-        return Err("launcher/bootstrapper must be inside the workspace target directory".into());
-    }
+
     let version = studio_version(&root)?;
     let package_directory = format!("sensor-watch-studio-{version}");
     let app_directory = format!("app/{version}");
@@ -193,7 +235,7 @@ pub fn package_studio_artifacts_with_launcher(
     let capabilities = serde_json::to_vec_pretty(&json!({
         "schema_version": PACKAGE_SCHEMA,
         "capabilities": {
-            "launcher": { "available": true, "path": "launcher/sensor-watch-studio.exe" },
+            "launcher": { "available": true, "path": format!("launcher/sensor-watch-studio{EXE_SUFFIX}") },
             "versioned_app": { "available": true, "path": format!("{app_directory}/sensor-watch-studio{EXE_SUFFIX}") },
             "resources": { "available": true, "path": "resources" },
             "templates": { "available": true, "path": "templates" },
@@ -285,6 +327,19 @@ fn bytes_path(bytes: &[u8]) -> PathBuf {
     ));
     fs::write(&path, bytes).expect("temporary package metadata write");
     path
+}
+
+fn resolve_launcher_artifact(
+    release_directory: &Path,
+    override_path: Option<&Path>,
+) -> ToolResult<PathBuf> {
+    if let Some(path) = override_path {
+        return regular_file(path, "launcher override artifact").and_then(|path| {
+            path.canonicalize()
+                .map_err(|e| format!("cannot resolve launcher override artifact: {e}"))
+        });
+    }
+    find_launcher_artifact(release_directory)
 }
 
 fn find_launcher_artifact(release_directory: &Path) -> ToolResult<PathBuf> {
@@ -540,6 +595,43 @@ mod tests {
         assert!(!safe_component(Path::new("a/b")));
         assert!(safe_component(Path::new("safe")));
     }
+    #[test]
+    fn automatic_launcher_resolution_uses_known_release_names() {
+        let (root, _) = fixture("launcher-resolution");
+        let release = root.join("target/release");
+        fs::rename(
+            release.join("sensor-watch-studio-launcher.exe"),
+            release.join("sensor-watch-launcher.exe"),
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_launcher_artifact(&release, None).unwrap(),
+            release.join("sensor-watch-launcher.exe")
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launcher_override_is_used_without_release_search() {
+        let (root, _) = fixture("launcher-override");
+        let override_path = root.join("custom-launcher.exe");
+        fs::write(&override_path, b"override").unwrap();
+        assert_eq!(
+            resolve_launcher_artifact(&root.join("does-not-exist"), Some(&override_path)).unwrap(),
+            override_path.canonicalize().unwrap()
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn launcher_build_failure_is_reported() {
+        let mut command = Command::new("rustc");
+        command.arg("--sensor-watch-invalid-option");
+        let error = bounded_status(&mut command, "launcher", Duration::from_secs(5)).unwrap_err();
+        assert!(error.contains("launcher release build failed"));
+        assert!(error.contains("retry package-studio"));
+    }
+
     #[test]
     fn package_requires_a_separate_launcher() {
         let (root, executable) = fixture("launcher-required");

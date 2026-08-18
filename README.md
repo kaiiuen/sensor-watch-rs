@@ -176,23 +176,27 @@ cargo run -p sensor-watch-studio -- help
 ```
 
 The `sensor-watch-tools` command above produces the stock firmware UF2; it does
-not apply Studio selections. To build a deterministic, offline Studio folder
-package, run this from the repository root after the release build succeeds:
+not apply Studio selections. To build a deterministic, offline Studio folder package, run this from the repository root. The command first builds the release `sensor-watch-launcher` and Studio artifacts through the workspace; a launcher build failure or missing artifact stops packaging:
 
 ```
 cargo run -p sensor-watch-tools -- package-studio
-# or choose the exact destination:
+# choose the exact destination:
 cargo run -p sensor-watch-tools -- package-studio --output target/releases/sensor-watch-studio-0.1.0.zip
+# use an explicitly built launcher instead of building the launcher package:
+cargo run -p sensor-watch-tools -- package-studio --launcher path/to/sensor-watch-studio-launcher.exe
 ```
 
 The default output is `target/studio-package/sensor-watch-studio-<Studio version>.zip`;
 `--output` replaces an existing `.zip` only after the new ZIP has been completely
 written. The archive has one versioned root folder,
-contains the executable, `sensor-watch-package.json`, resources, templates, the
-firmware project sources, `README.txt`, and a sorted `PACKAGE-MANIFEST.json` with
-SHA-256 entries. Firmware tools/cross targets are reported as unavailable rather
-than implied. User settings and mutable projects remain outside the archive. No
-cryptographic signature or network self-update is implemented.
+contains the launcher plus the versioned Studio executable under the A/B layout,
+`sensor-watch-package.json`, resources, templates, the firmware project sources,
+`README.txt`, sorted `PACKAGE-MANIFEST.json` SHA-256 entries, signature placeholders,
+and startup/update pointer contracts. Firmware tools/cross targets are reported as
+unavailable rather than implied. User settings, secrets, `target/`, and `.git/`
+remain outside the archive. The ZIP is written to a temporary file and atomically
+renamed only after completion. No cryptographic signature or network self-update is
+implemented.
 
 With no command, Studio starts the GUI. The CLI is
 host-side tooling: it does not

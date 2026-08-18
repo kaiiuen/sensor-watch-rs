@@ -41,15 +41,21 @@ fn main() -> ExitCode {
         }
         "package-studio" => {
             let mut output = None;
+            let mut launcher = None;
             while let Some(arg) = args.next() {
                 match arg.as_str() {
                     "--output" if output.is_none() => {
                         output = Some(PathBuf::from(required(&mut args)))
                     }
+                    "--launcher" if launcher.is_none() => {
+                        launcher = Some(PathBuf::from(required(&mut args)))
+                    }
                     _ => usage(),
                 }
             }
-            let result = tools::package_studio(output.as_deref()).unwrap_or_else(|e| fail(e));
+            let result =
+                tools::package_studio_with_launcher(output.as_deref(), launcher.as_deref())
+                    .unwrap_or_else(|e| fail(e));
             println!("wrote {}", result.output.display());
         }
         "build" => {
