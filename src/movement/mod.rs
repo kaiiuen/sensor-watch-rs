@@ -818,6 +818,7 @@ fn take_background_task_request() -> bool {
 pub static mut TAP_DETECTION_ACTIVE: bool = false;
 
 /// The physical-presence window for mutating shell commands.
+#[cfg(feature = "shell-auth")]
 pub static mut SHELL_AUTH: shell_auth::ShellAuthorization = shell_auth::ShellAuthorization::new();
 
 /// The serial command shell.
@@ -1860,9 +1861,16 @@ pub fn app_loop() {
         // React to the single pending event. The service-button event is
         // consumed before the shell so a release revokes mutations immediately.
         let event = take_event();
-        SHELL_AUTH.observe(event, FAST_TICKS);
-        let shell_authorized = SHELL_AUTH.is_authorized(FAST_TICKS);
-        SHELL.set_mutation_authorized(shell_authorized);
+        #[cfg(feature = "shell-auth")]
+        {
+            SHELL_AUTH.observe(event, FAST_TICKS);
+            let shell_authorized = SHELL_AUTH.is_authorized(FAST_TICKS);
+            SHELL.set_mutation_authorized(shell_authorized);
+        }
+        #[cfg(not(feature = "shell-auth"))]
+        // Feature-off is intentionally fail-closed: no physical event can
+        // authorize a mutating shell command.
+        SHELL.set_mutation_authorized(false);
         if let Some(face) = WATCH_FACES[MOVEMENT_STATE.current_face_idx].as_deref_mut() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
         }
