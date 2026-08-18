@@ -75,6 +75,29 @@ fn sim_weekday_name(weekday: usize) -> &'static str {
     SIM_WEEKDAY_NAMES[clamp_sim_weekday(weekday)]
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum BuildEstimatorState {
+    NeedsValidation,
+    Building,
+    Verified,
+    Failed(String),
+}
+
+fn configured_estimator_status(state: &BuildEstimatorState, flash: u32, ram: u32) -> String {
+    match state {
+        BuildEstimatorState::NeedsValidation => {
+            "Build estimate pending validation or unsupported configuration".to_string()
+        }
+        BuildEstimatorState::Building => "Building configured UF2...".to_string(),
+        BuildEstimatorState::Verified => format!(
+            "Estimated component impact: +{flash} KiB flash, +{ram} KiB RAM (planning estimate). UF2 verified locally. Approval required"
+        ),
+        BuildEstimatorState::Failed(reason) => {
+            format!("Build estimate unavailable: {reason}")
+        }
+    }
+}
+
 struct StudioApp {
     /// Whether the CJK font has been installed yet.
     fonts_installed: bool,
@@ -82,6 +105,8 @@ struct StudioApp {
     current_panel: Panel,
     /// The last status message shown in the status bar.
     status: String,
+    /// State used by the shared configured-build estimator message.
+    build_estimator_state: BuildEstimatorState,
     /// Package/developer distribution status shown independently of build status.
     package_status: distribution::PackageStatus,
     /// The discovered watch faces.
@@ -957,6 +982,7 @@ impl Default for StudioApp {
             fonts_installed: false,
             current_panel: Panel::Dashboard,
             status: String::new(),
+            build_estimator_state: BuildEstimatorState::NeedsValidation,
             package_status: distribution::active(),
             face_list: Vec::new(),
             building: false,
@@ -1324,6 +1350,7 @@ impl eframe::App for StudioApp {
                                         false,
                                     );
                                     self.pending_artifact_fingerprint = Some(current_fingerprint);
+                                    self.build_estimator_state = BuildEstimatorState::Verified;
                                     self.last_build_time = Some(
                                         std::time::SystemTime::now()
                                             .duration_since(std::time::UNIX_EPOCH)
@@ -1357,21 +1384,27 @@ impl eframe::App for StudioApp {
                                     self.status = "Build configuration changed. Artifact discarded"
                                         .to_string();
                                     self.build_message = self.status.clone();
+                                    self.build_estimator_state =
+                                        BuildEstimatorState::Failed(self.status.clone());
                                 }
                                 (_, Err(error)) => {
                                     self.pending_artifact = None;
                                     self.pending_artifact_fingerprint = None;
-                                    self.status = "Build verification failed".to_string();
                                     self.build_message = format!(
                                         "Built artifact rejected during verification: {error}"
                                     );
+                                    self.status = self.build_message.clone();
+                                    self.build_estimator_state =
+                                        BuildEstimatorState::Failed(self.build_message.clone());
                                     self.push_terminal(
                                         "Output write finished: artifact verification failed",
                                     );
                                 }
                             }
                         } else {
-                            self.status = tr(self.language, Key::BuildFailed).to_string();
+                            self.status = format!("Build failed: {}", result.message);
+                            self.build_estimator_state =
+                                BuildEstimatorState::Failed(result.message.clone());
                             // start_build normally clears this before spawning, but keep
                             // failed completion fail-closed if that invariant changes.
                             self.pending_artifact = None;
@@ -1386,6 +1419,9 @@ impl eframe::App for StudioApp {
                         self.building = false;
                         self.build_message =
                             tr(self.language, Key::BuildThreadPanicked).to_string();
+                        self.status = self.build_message.clone();
+                        self.build_estimator_state =
+                            BuildEstimatorState::Failed(self.build_message.clone());
                         self.log.log("Build thread panicked");
                         self.push_terminal("Build/Output write failed: thread panicked");
                     }
@@ -1580,10 +1616,12 @@ impl eframe::App for StudioApp {
                 ui.label("Watch:");
                 ui.monospace(format!("{selected} faces selected"));
                 ui.separator();
-                ui.monospace(
-                    "Build estimates unavailable: configuration input contract incomplete",
-                )
-                .on_hover_text(build::CONFIGURATION_BUILD_BLOCKED);
+                let (flash, ram) = components::estimate(&self.component_effective);
+                ui.monospace(configured_estimator_status(
+                    &self.build_estimator_state,
+                    flash,
+                    ram,
+                ));
                 ui.separator();
                 // Window size.
                 let size = ctx.screen_rect().size();
@@ -3107,7 +3145,8 @@ impl StudioApp {
         };
         if let Err(reason) = build::preflight_request(&request) {
             self.build_message = format!("Build preflight failed: {reason}");
-            self.status = "Build unavailable: unsupported or invalid configuration".to_string();
+            self.status = self.build_message.clone();
+            self.build_estimator_state = BuildEstimatorState::Failed(reason.to_string());
             self.log.log(&self.build_message);
             self.build_log.log(&self.build_message);
             let message = self.build_message.clone();
@@ -3136,7 +3175,12 @@ impl StudioApp {
     fn begin_compile_session(&mut self, build_fingerprint: String) {
         self.pending_build_fingerprint = Some(build_fingerprint);
         self.current_progress = None;
-        self.status = tr(self.language, Key::Building).to_string();
+        self.build_estimator_state = BuildEstimatorState::Building;
+        self.status = configured_estimator_status(
+            &self.build_estimator_state,
+            components::estimate(&self.component_effective).0,
+            components::estimate(&self.component_effective).1,
+        );
         self.build_message = self.status.clone();
         self.building = true;
     }
@@ -3173,6 +3217,7 @@ impl StudioApp {
         ) {
             self.status = "Artifact discarded: build configuration changed".to_string();
             self.build_message = self.status.clone();
+            self.build_estimator_state = BuildEstimatorState::Failed(self.status.clone());
         }
     }
 
@@ -4470,11 +4515,12 @@ impl StudioApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.heading("Build & Flash");
-                ui.label(
-                    "Build & Flash is unavailable: Studio does not yet provide the\n\
-                     configuration input contract required to produce a configured UF2.\n\
-                     Complete the missing contract inputs below before retrying.",
-                );
+                let (flash, ram) = components::estimate(&self.component_effective);
+                ui.weak(configured_estimator_status(
+                    &self.build_estimator_state,
+                    flash,
+                    ram,
+                ));
                 ui.add_space(8.0);
 
                 // Board selection (which revision the .uf2 targets).
@@ -4536,42 +4582,14 @@ impl StudioApp {
                 );
                 ui.add_space(8.0);
 
-                ui.weak(
-                    "Build and flash estimates are unavailable: the Studio-to-firmware\n\
-                     configuration input contract is incomplete.",
-                )
-                .on_hover_text(build::CONFIGURATION_BUILD_BLOCKED);
-                ui.add_space(8.0);
-
-                // Build is intentionally disabled until Studio supplies the full
-                // configuration input contract consumed by the firmware builder.
                 ui.strong("Build");
                 if self.building {
                     ui.spinner();
-                    ui.label(tr(self.language, Key::Building));
-                } else if build::validate_configuration_inputs().is_err() {
-                    let response = ui.add_enabled(false, egui::Button::new("Build unavailable"));
-                    self.register_anchor(Panel::BuildFlash, AnchorId::BuildUnavailable, &response);
-                    ui.colored_label(
-                        egui::Color32::from_rgb(220, 160, 80),
-                        "Build disabled: complete the Studio-to-firmware configuration input contract first.",
-                    );
-                    ui.collapsing("Why these five items are still shown", |ui| {
-                        ui.label(
-                            "These are firmware-build requirements, not a beginner checklist. Selecting every UI option does not wire the selection into the firmware build.",
-                        );
-                        for (title, explanation) in build::CONFIGURATION_INPUT_EXPLANATIONS {
-                            ui.strong(*title);
-                            ui.label(*explanation);
-                            ui.add_space(4.0);
-                        }
-                    });
-                    ui.collapsing("What to do next", |ui| {
-                        ui.label("1. Keep your stock preset, matching target/profile, and component choices as Studio planning data.");
-                        ui.label("2. Do not keep changing toggles expecting this gate to clear; there is no beginner action that completes the missing firmware-input generation.");
-                        ui.label("3. For an existing, verified UF2, enter its path, inspect it with its matching .uf2.json and .json.sig sidecars, and review the result.");
-                        ui.label("4. Approve only that exact artifact for this session, refresh bootloader detection, and copy only when exactly one expected watch drive is identified.");
-                    });
+                    ui.label(configured_estimator_status(
+                        &self.build_estimator_state,
+                        flash,
+                        ram,
+                    ));
                 } else {
                     let build_response = ui
                         .button(tr(self.language, Key::BuildUf2))
@@ -8979,6 +8997,7 @@ impl StudioApp {
                     false,
                 );
                 self.pending_artifact_fingerprint = Some(self.build_configuration_fingerprint());
+                self.build_estimator_state = BuildEstimatorState::Verified;
             }
             Err(error) => {
                 // Do not disturb an already approved artifact when a new candidate
@@ -8991,6 +9010,8 @@ impl StudioApp {
                     error,
                 );
                 self.pending_artifact_fingerprint = None;
+                self.build_estimator_state =
+                    BuildEstimatorState::Failed(self.build_message.clone());
             }
         }
     }
@@ -11612,6 +11633,50 @@ mod tests {
         assert!(steps.contains("Build & Flash"));
         assert!(!steps.contains("Build UF2"));
         assert!(!steps.contains("Copy to watch"));
+    }
+
+    #[test]
+    fn estimator_reports_the_actual_unsupported_preflight_reason() {
+        let message = super::configured_estimator_status(
+            &super::BuildEstimatorState::Failed("unsupported component mapping".to_string()),
+            12,
+            4,
+        );
+
+        assert_eq!(
+            message,
+            "Build estimate unavailable: unsupported component mapping"
+        );
+    }
+
+    #[test]
+    fn estimator_reports_configured_build_while_compiling() {
+        assert_eq!(
+            super::configured_estimator_status(&super::BuildEstimatorState::Building, 12, 4),
+            "Building configured UF2..."
+        );
+    }
+
+    #[test]
+    fn estimator_reports_verified_artifact_with_planning_estimate() {
+        assert_eq!(
+            super::configured_estimator_status(&super::BuildEstimatorState::Verified, 12, 4),
+            "Estimated component impact: +12 KiB flash, +4 KiB RAM (planning estimate). UF2 verified locally. Approval required"
+        );
+    }
+
+    #[test]
+    fn estimator_reports_build_failure_reason_and_no_estimate() {
+        let message = super::configured_estimator_status(
+            &super::BuildEstimatorState::Failed("toolchain exited with code 1".to_string()),
+            12,
+            4,
+        );
+
+        assert_eq!(
+            message,
+            "Build estimate unavailable: toolchain exited with code 1"
+        );
     }
 
     #[test]
