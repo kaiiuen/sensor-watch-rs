@@ -19,6 +19,7 @@ mod error_catalog;
 mod face_sim;
 mod faces;
 mod file_browser;
+pub mod firmware_inputs;
 mod flash;
 mod fonts;
 mod fuzz;
@@ -3065,20 +3066,54 @@ impl StudioApp {
             self.status = "Build is disabled while a guided tour is active".to_string();
             return;
         }
-        if let Err(reason) = build::validate_configuration_inputs() {
-            self.build_message = reason.to_string();
-            self.status = "Build unavailable: configuration input contract incomplete".to_string();
-            self.log.log(reason);
-            self.build_log.log(reason);
-            self.push_terminal(reason);
-            return;
-        }
         if self.shutting_down || self.building || self.pending_build.is_some() || self.flash_busy()
         {
             self.push_terminal("Build or flash already running");
             return;
         }
 
+        let profile = self
+            .component_profiles
+            .get(self.component_profile)
+            .cloned()
+            .unwrap_or_else(|| {
+                components::BuildProfile::new("Custom", self.component_effective.clone())
+            });
+        let revision = match self.board {
+            Board::Green | Board::Blue => "OSO-SWAT-A1-05",
+            Board::RedLite => "OSO-SWAT-A1-02",
+            Board::Pro => "OSO-FEAL-A1-00",
+        };
+        let (preset_name, ordered_faces) = self
+            .presets
+            .presets
+            .get(self.presets.active)
+            .map(|preset| (preset.name.clone(), preset.faces.clone()))
+            .unwrap_or_default();
+        let request = firmware_inputs::FirmwareInputRequest {
+            board: self.board,
+            revision: revision.into(),
+            profile,
+            components: self.component_effective.clone(),
+            preset_name,
+            ordered_faces,
+            modules: self
+                .modules
+                .modules
+                .iter()
+                .filter(|module| module.enabled)
+                .map(|module| module.name.clone())
+                .collect(),
+        };
+        if let Err(reason) = build::preflight_request(&request) {
+            self.build_message = format!("Build preflight failed: {reason}");
+            self.status = "Build unavailable: unsupported or invalid configuration".to_string();
+            self.log.log(&self.build_message);
+            self.build_log.log(&self.build_message);
+            let message = self.build_message.clone();
+            self.push_terminal(message);
+            return;
+        }
         let build_fingerprint = self.build_configuration_fingerprint();
         let out = std::path::PathBuf::from(self.output_dir.clone());
         self.log.log("Starting firmware build");
@@ -3088,7 +3123,9 @@ impl StudioApp {
         } else {
             self.begin_compile_session(build_fingerprint);
         }
-        self.pending_build = Some(std::thread::spawn(move || build::build_firmware(&out)));
+        self.pending_build = Some(std::thread::spawn(move || {
+            build::build_firmware(request, &out)
+        }));
     }
 
     /// Resets only transient state owned by the next compile session.
@@ -4598,13 +4635,28 @@ impl StudioApp {
                             .clicked()
                             && self.guided_action_allowed(AnchorId::BuildApprove)
                         {
-                            approve_artifact_state(
-                                &mut self.status,
-                                &mut self.build_message,
-                                &mut self.pending_artifact,
-                                &mut self.approved_artifact,
-                                artifact_actions_blocked,
-                            );
+                            let provenance_ok = self
+                                .pending_artifact
+                                .as_ref()
+                                .map(build::validate_generated_input_digest)
+                                .unwrap_or_else(|| Err("no artifact is awaiting approval".into()));
+                            if let Err(error) = provenance_ok {
+                                set_failed_artifact_state(
+                                    &mut self.status,
+                                    &mut self.build_message,
+                                    &mut self.approved_artifact,
+                                    &mut self.pending_artifact,
+                                    error,
+                                );
+                            } else {
+                                approve_artifact_state(
+                                    &mut self.status,
+                                    &mut self.build_message,
+                                    &mut self.pending_artifact,
+                                    &mut self.approved_artifact,
+                                    artifact_actions_blocked,
+                                );
+                            }
                             let fingerprint = self.build_configuration_fingerprint();
                             if let Some(approved) = &mut self.approved_artifact {
                                 approved.config_fingerprint = fingerprint;
@@ -8967,6 +9019,7 @@ impl StudioApp {
                 sha256: approved.sha256.clone(),
                 payload_sha256: approved.payload_sha256.clone(),
                 manifest_digest: approved.manifest_digest.clone(),
+                generated_input_digest: approved.generated_input_digest.clone(),
             },
             current_inspection.as_ref().map_err(|error| error.as_str()),
             &self.cached_watch,
@@ -8998,6 +9051,7 @@ impl StudioApp {
             sha256: approved.sha256.clone(),
             payload_sha256: approved.payload_sha256.clone(),
             manifest_digest: approved.manifest_digest.clone(),
+            generated_input_digest: approved.generated_input_digest.clone(),
         };
         self.log
             .log(format!("Attempting to flash {}", path.display()));
@@ -10014,7 +10068,9 @@ fn verified_artifact_after_build(
 ) -> Result<build::ArtifactInspection, String> {
     let path = flashable_uf2_after_build(result)
         .ok_or_else(|| "successful build produced no UF2 artifact".to_string())?;
-    build::inspect_artifact(&path)
+    let inspection = build::inspect_artifact(&path)?;
+    build::validate_generated_input_digest(&inspection)?;
+    Ok(inspection)
 }
 
 const ARTIFACT_VERIFIED_PENDING_STATUS: &str = "Artifact verified; approval pending";
@@ -10033,6 +10089,7 @@ struct ApprovedArtifact {
     sha256: String,
     payload_sha256: String,
     manifest_digest: String,
+    generated_input_digest: String,
     config_fingerprint: String,
 }
 
@@ -10048,6 +10105,7 @@ impl ApprovedArtifact {
             sha256: inspection.sha256.clone(),
             payload_sha256: inspection.payload_sha256.clone(),
             manifest_digest: inspection.manifest_digest.clone(),
+            generated_input_digest: inspection.generated_input_digest.clone(),
             config_fingerprint: String::new(),
         }
     }
@@ -10167,6 +10225,11 @@ fn approve_artifact_state(
     let Some(inspection) = pending_artifact.take() else {
         return;
     };
+    if inspection.generated_input_digest.is_empty() {
+        *status = ARTIFACT_VERIFICATION_FAILED_STATUS.to_string();
+        *build_message = "Artifact rejected: generated-input digest is missing".to_string();
+        return;
+    }
     *status = ARTIFACT_APPROVED_STATUS.to_string();
     *approved_artifact = Some(ApprovedArtifact::from_inspection(&inspection));
     *build_message = format!("Approved for flashing: {}", inspection.path.display());
@@ -10196,6 +10259,7 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
         inspection.sha256,
         inspection.payload_sha256,
         inspection.manifest_digest,
+        inspection.generated_input_digest
     )
 }
 
@@ -10958,7 +11022,10 @@ mod tests {
         );
     }
 
-    fn shared_manifest_fixture(name: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+    fn shared_manifest_fixture(
+        name: &str,
+        configured: bool,
+    ) -> (std::path::PathBuf, std::path::PathBuf) {
         let root =
             std::env::temp_dir().join(format!("sensor-watch-studio-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
@@ -10970,13 +11037,50 @@ mod tests {
         )
         .unwrap();
         let manifest_path = artifact.with_extension("uf2.json");
-        let manifest = sensor_watch_tools::create_manifest(
+        let (generated_digest, inputs) = if configured {
+            let inputs = artifact.with_extension("uf2.inputs");
+            std::fs::create_dir_all(&inputs).unwrap();
+            let mut files = std::collections::BTreeMap::new();
+            files.insert("firmware_inputs.json".to_string(), "{}".to_string());
+            files.insert("firmware_inputs.rs".to_string(), "marker".to_string());
+            files.insert("Cargo.config.toml".to_string(), "layer".to_string());
+            files.insert("PROVENANCE.json".to_string(), "provenance".to_string());
+            for (name, contents) in &files {
+                std::fs::write(inputs.join(name), contents).unwrap();
+            }
+            let digest = crate::firmware_inputs::digest_generated_files(&files);
+            std::fs::write(
+                inputs.join("SHA256"),
+                format!("{digest}  firmware_inputs.json\n"),
+            )
+            .unwrap();
+            (Some(digest), Some(inputs))
+        } else {
+            (None, None)
+        };
+        let mut manifest = sensor_watch_tools::create_manifest(
             &artifact,
             Some("studio-test".into()),
             Some(&artifact),
         )
         .unwrap();
+        if let Some(generated_digest) = generated_digest {
+            manifest.insert(
+                "generated_input_digest".into(),
+                serde_json::Value::String(generated_digest),
+            );
+            let manifest_digest = sensor_watch_tools::manifest_digest(&manifest);
+            manifest.insert(
+                "manifest_digest".into(),
+                serde_json::Value::String(manifest_digest.clone()),
+            );
+            manifest.insert(
+                "signature".into(),
+                serde_json::Value::String(manifest_digest),
+            );
+        }
         sensor_watch_tools::write_manifest(&manifest_path, &manifest).unwrap();
+        let _ = inputs;
         (root, artifact)
     }
 
@@ -11043,7 +11147,7 @@ mod tests {
 
     #[test]
     fn flash_revalidation_accepts_shared_tool_manifest_and_sidecar() {
-        let (root, artifact) = shared_manifest_fixture("compatible");
+        let (root, artifact) = shared_manifest_fixture("compatible", false);
         let manifest = artifact.with_extension("uf2.json");
         assert!(verify_artifact_manifest(&artifact, &manifest).is_ok());
         std::fs::remove_dir_all(root).unwrap();
@@ -11051,14 +11155,14 @@ mod tests {
 
     #[test]
     fn flash_revalidation_rejects_missing_or_tampered_sidecar() {
-        let (root, artifact) = shared_manifest_fixture("sidecar");
+        let (root, artifact) = shared_manifest_fixture("sidecar", false);
         let manifest = artifact.with_extension("uf2.json");
         let sidecar = manifest.with_extension("json.sig");
         std::fs::remove_file(&sidecar).unwrap();
         let missing_error = verify_artifact_manifest(&artifact, &manifest).unwrap_err();
         assert!(missing_error.contains("json.sig") || missing_error.contains("No such file"));
 
-        let (root_tampered, artifact_tampered) = shared_manifest_fixture("tampered-sidecar");
+        let (root_tampered, artifact_tampered) = shared_manifest_fixture("tampered-sidecar", false);
         let manifest_tampered = artifact_tampered.with_extension("uf2.json");
         let sidecar_tampered = manifest_tampered.with_extension("json.sig");
         std::fs::write(sidecar_tampered, "sha256:tampered").unwrap();
@@ -11103,7 +11207,7 @@ mod tests {
 
     #[test]
     fn successful_build_with_verified_artifact_is_accepted() {
-        let (root, artifact) = shared_manifest_fixture("build-success");
+        let (root, artifact) = shared_manifest_fixture("build-success", true);
         let result = super::build::BuildResult {
             success: true,
             message: String::new(),
@@ -11137,6 +11241,7 @@ mod tests {
             sha256: "uf2-sha".to_string(),
             payload_sha256: "payload-sha".to_string(),
             manifest_digest: "manifest-sha".to_string(),
+            generated_input_digest: "inputs-sha".to_string(),
         }
     }
 

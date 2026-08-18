@@ -4,14 +4,13 @@
 //! binary to a `.uf2` file using the `sensor-watch-core` UF2 encoder. This is
 //! the "assembler" part of Firmware Studio.
 //!
-//! The Studio UI currently does not pass its selected preset, faces, board, or
-//! component profile into this module. Builds therefore fail closed rather than
-//! publishing a stock artifact that could be mistaken for a configured one.
-
 use sha2::{Digest, Sha256};
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+
+use super::firmware_inputs::{self, FirmwareInputRequest, GeneratedFirmwareInputs};
 
 struct BuildLock {
     path: PathBuf,
@@ -151,6 +150,7 @@ pub struct ArtifactInspection {
     pub sha256: String,
     pub payload_sha256: String,
     pub manifest_digest: String,
+    pub generated_input_digest: String,
 }
 
 /// Inspects an explicitly selected UF2 and requires both manifest sidecars.
@@ -158,7 +158,51 @@ pub struct ArtifactInspection {
 /// the shared verifier then requires the matching `.json.sig` sidecar as well.
 pub fn inspect_artifact(path: &Path) -> Result<ArtifactInspection, String> {
     let manifest_path = path.with_extension("uf2.json");
-    let manifest = sensor_watch_tools::verify_uf2(path, Some(&manifest_path), None)?;
+    // Validate UF2 bytes with the shared verifier, then validate the extended
+    // Studio manifest locally. The shared tool verifier intentionally compares
+    // its stock manifest digest, while configured manifests contain the extra
+    // generated-input provenance field.
+    sensor_watch_core::uf2::validate(
+        &std::fs::read(path).map_err(|e| format!("cannot read UF2 {}: {e}", path.display()))?,
+    )
+    .map_err(|e| format!("invalid UF2: {e}"))?;
+    let manifest: sensor_watch_tools::Manifest = serde_json::from_slice(
+        &std::fs::read(&manifest_path)
+            .map_err(|e| format!("cannot read manifest {}: {e}", manifest_path.display()))?,
+    )
+    .map_err(|e| format!("cannot parse manifest: {e}"))?;
+    let generation = sensor_watch_tools::manifest_value(&manifest, "generation_id");
+    let baseline = sensor_watch_tools::create_manifest(
+        path,
+        (!generation.is_empty()).then(|| generation.clone()),
+        None,
+    )?;
+    let digest = sensor_watch_tools::manifest_value(&manifest, "manifest_digest");
+    if digest.is_empty() || digest != sensor_watch_tools::manifest_digest(&manifest) {
+        return Err("manifest local digest is invalid".into());
+    }
+    let sidecar = manifest_path.with_extension("json.sig");
+    if std::fs::read_to_string(&sidecar)
+        .map_err(|e| format!("cannot read manifest sidecar: {e}"))?
+        .trim()
+        != digest
+    {
+        return Err("manifest digest sidecar is invalid".into());
+    }
+    for key in [
+        "format",
+        "generation_id",
+        "family_id",
+        "uf2_bytes",
+        "uf2_blocks",
+        "payload_bytes",
+        "sha256",
+        "payload_sha256",
+    ] {
+        if manifest.get(key) != baseline.get(key) {
+            return Err(format!("manifest mismatch for {key}"));
+        }
+    }
     let value = |key: &str| sensor_watch_tools::manifest_value(&manifest, key);
     Ok(ArtifactInspection {
         path: path.to_path_buf(),
@@ -170,6 +214,10 @@ pub fn inspect_artifact(path: &Path) -> Result<ArtifactInspection, String> {
         sha256: value("sha256"),
         payload_sha256: value("payload_sha256"),
         manifest_digest: sensor_watch_tools::manifest_value(&manifest, "manifest_digest"),
+        generated_input_digest: sensor_watch_tools::manifest_value(
+            &manifest,
+            "generated_input_digest",
+        ),
     })
 }
 
@@ -238,14 +286,36 @@ pub fn missing_configuration_inputs() -> &'static [&'static str] {
 
 /// Runs the full firmware build: cargo build, extract the raw binary, and
 /// convert it to a `.uf2` file in the given output directory.
-pub fn build_firmware(output_dir: &Path) -> BuildResult {
-    if let Err(error) = validate_configuration_inputs() {
+pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> BuildResult {
+    if let Err(error) = validate_output_dir(output_dir) {
         return BuildResult {
             success: false,
-            message: error.to_string(),
+            message: error,
             uf2_path: None,
         };
     }
+    let source_root = firmware_dir();
+    let workspace = match IsolatedWorkspace::new(&source_root) {
+        Ok(workspace) => workspace,
+        Err(error) => {
+            return BuildResult {
+                success: false,
+                message: error,
+                uf2_path: None,
+            }
+        }
+    };
+    let inputs_dir = workspace.root.join("studio-generated");
+    let generated = match generate_inputs(&request, &source_root, &inputs_dir, &workspace.root) {
+        Ok(generated) => generated,
+        Err(error) => {
+            return BuildResult {
+                success: false,
+                message: error,
+                uf2_path: None,
+            }
+        }
+    };
     if let Err(error) = validate_output_dir(output_dir) {
         return BuildResult {
             success: false,
@@ -385,7 +455,15 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
         };
     }
 
-    match publish_uf2(output_dir, &uf2, &uf2_data) {
+    let input_bundle = uf2.with_extension("uf2.inputs");
+    if let Err(error) = copy_generated_inputs(&generated.directory, &input_bundle) {
+        return BuildResult {
+            success: false,
+            message: format!("failed to publish generated-input provenance: {error}"),
+            uf2_path: None,
+        };
+    }
+    match publish_uf2_with_input_digest(output_dir, &uf2, &uf2_data, &generated.digest) {
         Ok(()) => BuildResult {
             success: true,
             message: format!(
@@ -404,8 +482,17 @@ pub fn build_firmware(output_dir: &Path) -> BuildResult {
 }
 
 fn publish_uf2(output_dir: &Path, uf2: &Path, uf2_data: &[u8]) -> Result<(), String> {
+    publish_uf2_with_input_digest(output_dir, uf2, uf2_data, "")
+}
+
+fn publish_uf2_with_input_digest(
+    output_dir: &Path,
+    uf2: &Path,
+    uf2_data: &[u8],
+    input_digest: &str,
+) -> Result<(), String> {
     publish_uf2_with_manifest_writer(output_dir, uf2, uf2_data, |path, data, generation| {
-        write_manifest(path, data, generation)
+        write_manifest_with_input_digest(path, data, generation, input_digest)
     })
 }
 
@@ -642,9 +729,235 @@ fn hex_sha256(data: &[u8]) -> String {
         .collect()
 }
 
+struct IsolatedWorkspace {
+    root: PathBuf,
+}
+
+impl IsolatedWorkspace {
+    fn new(source: &Path) -> Result<Self, String> {
+        let root = std::env::temp_dir().join(format!("sensor-watch-studio-build-{}", unix_nanos()));
+        copy_tree(source, &root, source.join("target"))?;
+        Ok(Self { root })
+    }
+}
+
+impl Drop for IsolatedWorkspace {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+fn copy_tree(source: &Path, destination: &Path, excluded: PathBuf) -> Result<(), String> {
+    std::fs::create_dir_all(destination)
+        .map_err(|e| format!("cannot create isolated workspace: {e}"))?;
+    for entry in
+        std::fs::read_dir(source).map_err(|e| format!("cannot read firmware source: {e}"))?
+    {
+        let entry = entry.map_err(|e| format!("cannot read firmware source entry: {e}"))?;
+        let from = entry.path();
+        if from == excluded || from.file_name().is_some_and(|name| name == ".git") {
+            continue;
+        }
+        let to = destination.join(entry.file_name());
+        let metadata = std::fs::symlink_metadata(&from)
+            .map_err(|e| format!("cannot inspect firmware source: {e}"))?;
+        if metadata.file_type().is_symlink() {
+            return Err(format!(
+                "refusing symlinked firmware source: {}",
+                from.display()
+            ));
+        }
+        if metadata.is_dir() {
+            copy_tree(&from, &to, excluded.clone())?;
+        } else if metadata.is_file() {
+            std::fs::copy(&from, &to)
+                .map_err(|e| format!("cannot copy firmware source {}: {e}", from.display()))?;
+        }
+    }
+    Ok(())
+}
+
+fn generate_inputs(
+    request: &FirmwareInputRequest,
+    source_root: &Path,
+    inputs_dir: &Path,
+    workspace: &Path,
+) -> Result<GeneratedFirmwareInputs, String> {
+    for face in &request.ordered_faces {
+        let source = source_root
+            .join("src/movement")
+            .join(format!("{}.rs", face.to_ascii_lowercase()));
+        let metadata = std::fs::symlink_metadata(&source)
+            .map_err(|_| format!("missing face source for {face}: {}", source.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!("unsafe or missing face source for {face}"));
+        }
+    }
+    let generated = firmware_inputs::generate(request, inputs_dir).map_err(|e| e.to_string())?;
+    let cargo_config = workspace.join(".cargo");
+    std::fs::create_dir_all(&cargo_config)
+        .map_err(|e| format!("cannot create generated Cargo overlay: {e}"))?;
+    let config_path = cargo_config.join("config.toml");
+    let original = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("cannot read repository Cargo config: {e}"))?;
+    let generated_path = inputs_dir.join("firmware_inputs.rs");
+    // Preserve the repository's linker/flip-link/link.x configuration. The
+    // generated layer is additive and is exposed through Cargo's environment
+    // mechanism, rather than replacing target rustflags.
+    let overlay = format!(
+        "\n[env]\nSENSOR_WATCH_STUDIO_INPUTS = {{ value = {:?}, relative = true }}\nSENSOR_WATCH_STUDIO_INPUT_DIGEST = {:?}\n",
+        generated_path.to_string_lossy(),
+        generated.digest
+    );
+    std::fs::write(&config_path, format!("{original}{overlay}"))
+        .map_err(|e| format!("cannot install generated Cargo input layer: {e}"))?;
+    // Make the generated module part of the actual firmware crate. This edits
+    // only the disposable isolated copy: the repository firmware source stays
+    // untouched. The marker reference prevents an unused, write-only module.
+    let main_path = workspace.join("src/main.rs");
+    let original_main = std::fs::read_to_string(&main_path)
+        .map_err(|e| format!("cannot read isolated firmware entry: {e}"))?;
+    let generated_path = inputs_dir.join("firmware_inputs.rs");
+    let generated_main = insert_generated_module(&original_main, &generated_path)?;
+    std::fs::write(&main_path, generated_main)
+        .map_err(|e| format!("cannot install generated firmware module: {e}"))?;
+
+    // Copy the canonical, case-safe source names into the isolated workspace;
+    // the manifest and the compiler now refer to the same paths.
+    for face in &request.ordered_faces {
+        let source = source_root
+            .join("src/movement")
+            .join(format!("{}.rs", face.to_ascii_lowercase()));
+        let destination = workspace
+            .join("src/movement")
+            .join(format!("{}.rs", face.to_ascii_lowercase()));
+        std::fs::copy(source, destination)
+            .map_err(|e| format!("cannot overlay face source {face}: {e}"))?;
+    }
+    Ok(generated)
+}
+
+/// Inserts generated items after the copied crate-level docs and attributes.
+///
+/// Inner docs and attributes must precede every ordinary item in a Rust crate;
+/// putting the generated module before them changes their meaning or causes a
+/// parser error. Keep the original prefix byte-for-byte and only insert after
+/// the leading crate syntax.
+fn insert_generated_module(original: &str, generated_path: &Path) -> Result<String, String> {
+    let mut prefix_end = 0;
+    let mut attribute_brackets = 0usize;
+
+    for line in original.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if attribute_brackets > 0 {
+            attribute_brackets = attribute_brackets
+                .saturating_add(line.chars().filter(|&character| character == '[').count())
+                .saturating_sub(line.chars().filter(|&character| character == ']').count());
+            prefix_end += line.len();
+            continue;
+        }
+        if trimmed.is_empty() || trimmed.starts_with("//!") || trimmed.starts_with("/*!") {
+            prefix_end += line.len();
+            continue;
+        }
+        if trimmed.starts_with("#![") {
+            attribute_brackets = line
+                .chars()
+                .filter(|&character| character == '[')
+                .count()
+                .saturating_sub(line.chars().filter(|&character| character == ']').count());
+            prefix_end += line.len();
+            continue;
+        }
+        break;
+    }
+
+    if attribute_brackets != 0 {
+        return Err("unterminated crate-level attribute in firmware entry".into());
+    }
+
+    let generated = format!(
+        "mod studio_generated {{ include!(r#\"{}\"#); }}\nconst _: &str = studio_generated::GENERATED_MARKER;\n",
+        generated_path.display()
+    );
+    Ok(format!(
+        "{}{}{}",
+        &original[..prefix_end],
+        generated,
+        &original[prefix_end..]
+    ))
+}
+
 /// Writes the same locally consistent manifest used by sensor-watch-tools.
 /// The resulting digest is not a cryptographic signature or authenticity claim.
+fn copy_generated_inputs(source: &Path, destination: &Path) -> Result<(), String> {
+    if destination.exists() {
+        std::fs::remove_dir_all(destination)
+            .map_err(|e| format!("cannot replace generated-input bundle: {e}"))?;
+    }
+    std::fs::create_dir_all(destination)
+        .map_err(|e| format!("cannot create generated-input bundle: {e}"))?;
+    for entry in std::fs::read_dir(source).map_err(|e| e.to_string())? {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!(
+                "unsafe generated-input entry: {}",
+                entry.path().display()
+            ));
+        }
+        std::fs::copy(entry.path(), destination.join(entry.file_name()))
+            .map_err(|e| format!("cannot copy generated input: {e}"))?;
+    }
+    Ok(())
+}
+
+/// Recomputes the generated-input digest from the final published bundle.
+/// Generic stock-artifact inspection deliberately does not call this function;
+/// configured approval and flashing do.
+pub fn validate_generated_input_digest(inspection: &ArtifactInspection) -> Result<(), String> {
+    if inspection.generated_input_digest.is_empty() {
+        return Err("configured artifact lacks generated-input provenance".into());
+    }
+    let directory = inspection.path.with_extension("uf2.inputs");
+    let mut files = BTreeMap::new();
+    for entry in std::fs::read_dir(&directory)
+        .map_err(|e| format!("generated-input provenance is unavailable: {e}"))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "SHA256" {
+            continue;
+        }
+        let metadata = std::fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("generated-input provenance contains an unsafe entry".into());
+        }
+        files.insert(
+            name,
+            std::fs::read_to_string(entry.path()).map_err(|e| e.to_string())?,
+        );
+    }
+    let actual = super::firmware_inputs::digest_generated_files(&files);
+    if actual != inspection.generated_input_digest {
+        return Err(format!(
+            "generated-input digest changed (manifest {}, files {})",
+            inspection.generated_input_digest, actual
+        ));
+    }
+    Ok(())
+}
+
 fn write_manifest(uf2: &Path, data: &[u8], generation: &str) -> std::io::Result<()> {
+    write_manifest_with_input_digest(uf2, data, generation, "")
+}
+
+fn write_manifest_with_input_digest(
+    uf2: &Path,
+    data: &[u8],
+    generation: &str,
+    input_digest: &str,
+) -> std::io::Result<()> {
     sensor_watch_core::uf2::validate(data).map_err(std::io::Error::other)?;
     let manifest_path = uf2.with_extension("uf2.json");
     let sidecar_path = manifest_path.with_extension("json.sig");
@@ -654,9 +967,15 @@ fn write_manifest(uf2: &Path, data: &[u8], generation: &str) -> std::io::Result<
             std::fs::remove_file(path).map_err(std::io::Error::other)?;
         }
     }
-    let manifest =
+    let mut manifest =
         sensor_watch_tools::create_manifest(uf2, Some(generation.to_string()), Some(uf2))
             .map_err(std::io::Error::other)?;
+    if !input_digest.is_empty() {
+        manifest.insert("generated_input_digest".into(), input_digest.into());
+        let digest = sensor_watch_tools::manifest_digest(&manifest);
+        manifest.insert("manifest_digest".into(), digest.clone().into());
+        manifest.insert("signature".into(), digest.into());
+    }
     sensor_watch_tools::write_manifest(&manifest_path, &manifest).map_err(std::io::Error::other)
 }
 
@@ -688,6 +1007,32 @@ mod tests {
                 .expect("system clock before unix epoch")
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn generated_module_follows_crate_docs_and_attributes() {
+        let fixture = concat!(
+            "//! fixture crate docs\n",
+            "//! remain first\n",
+            "\n",
+            "#![no_std]\n",
+            "#![cfg_attr(test, allow(dead_code))]\n",
+            "\n",
+            "pub fn firmware_item() {}\n",
+        );
+        let generated =
+            insert_generated_module(fixture, Path::new("studio-generated/firmware_inputs.rs"))
+                .unwrap();
+        let generated_offset = generated
+            .find("mod studio_generated")
+            .expect("generated module was inserted");
+        let normal_item_offset = generated
+            .find("pub fn firmware_item")
+            .expect("fixture item was retained");
+        assert!(generated.starts_with("//! fixture crate docs\n//! remain first\n\n#![no_std]\n"));
+        assert!(generated_offset > generated.find("#![cfg_attr").unwrap());
+        assert!(generated_offset < normal_item_offset);
+        assert!(generated.contains("const _: &str = studio_generated::GENERATED_MARKER;"));
     }
 
     #[test]
@@ -751,12 +1096,8 @@ mod tests {
 
     #[test]
     fn blocked_build_message_lists_every_required_preflight_input() {
-        let message = validate_configuration_inputs().unwrap_err();
-
-        assert!(message.starts_with("firmware build refused:"));
-        for input in CONFIGURATION_INPUT_CONTRACT {
-            assert!(message.contains(input), "blocked message omitted: {input}");
-        }
+        assert!(validate_configuration_inputs().is_ok());
+        assert_eq!(missing_configuration_inputs(), CONFIGURATION_INPUT_CONTRACT);
     }
 
     #[test]
@@ -771,31 +1112,35 @@ mod tests {
             .collect::<Vec<_>>();
         let text = all.join(" ").to_ascii_lowercase();
         for phrase in [
-            "planning data",
-            "cannot generate",
-            "ui selection",
+            "isolated build workspace",
+            "validated",
+            "stock component",
             "firmware build",
-            "no beginner action",
-            "opt3001",
+            "fail closed",
             "uf2",
             "provenance",
         ] {
             assert!(text.contains(phrase), "explanations omitted: {phrase}");
         }
-        assert!(text.contains("not firmware wiring"));
+        assert!(text.contains("unknown component"));
     }
 
     #[test]
-    fn configured_builds_are_rejected_before_side_effects() {
-        assert_eq!(
-            validate_configuration_inputs(),
-            Err(CONFIGURATION_BUILD_BLOCKED)
-        );
-
+    fn invalid_configured_build_does_not_fall_back_to_stock() {
+        let profiles = super::super::components::default_profiles();
+        let request = FirmwareInputRequest {
+            board: super::super::components::BoardKind::Green,
+            revision: "unknown-revision".into(),
+            profile: profiles[0].clone(),
+            components: profiles[0].config.clone(),
+            preset_name: "Stock Casio".into(),
+            ordered_faces: vec!["SIMPLE_CLOCK".into()],
+            modules: vec![],
+        };
         let output = temp_root("blocked-output");
-        let result = build_firmware(&output);
+        let result = build_firmware(request, &output);
         assert!(!result.success);
-        assert_eq!(result.message, CONFIGURATION_BUILD_BLOCKED);
+        assert!(result.message.contains("unsupported"));
         assert!(result.uf2_path.is_none());
         assert!(!output.exists());
     }

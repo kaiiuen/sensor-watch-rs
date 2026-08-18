@@ -369,6 +369,19 @@ where
         None,
     );
 
+    if let Err(error) = crate::build::validate_generated_input_digest(&revalidated) {
+        progress.emit(
+            Phase::Failure,
+            format!("Configured artifact provenance failed: {error}"),
+            None,
+            None,
+        );
+        return Err(FlashResult {
+            status: FlashStatus::ArtifactInvalid,
+            message: format!("Refusing to copy configured artifact: {error}"),
+        });
+    }
+
     if inspected != revalidated || revalidated != request.approved {
         progress.emit(
             Phase::Failure,
@@ -772,6 +785,7 @@ mod tests {
             sha256: "approved-digest".into(),
             payload_sha256: "payload".into(),
             manifest_digest: "manifest".into(),
+            generated_input_digest: "inputs".into(),
         };
         let drive = WatchDriveCandidate {
             root: PathBuf::from("E:\\"),
@@ -884,6 +898,7 @@ mod tests {
             sha256: String::new(),
             payload_sha256: String::new(),
             manifest_digest: String::new(),
+            generated_input_digest: String::new(),
         };
         let handle = std::thread::spawn(move || {
             flash_with_start(
