@@ -260,10 +260,10 @@ validation.
       not implemented.
 - [x] Guided clock and drift calibration in Studio. A real watch still needs the
       UART jig path for command execution.
-- [x] Optical command framing and validation exist as a protocol-only core module.
-      no optical receiver integration is claimed.
-- [x] 107 real firmware faces are wired into the Studio host seam, which is
-      enabled by default by Studio's `real-faces` feature. The remaining 4
+- [x] An experimental receive-only optical path exists for Pro hardware, built on
+      the protocol framing and validation core. It has not been tested on hardware.
+- [x] 108 real firmware faces are wired into the Studio host seam, which is
+      enabled by default by Studio's `real-faces` feature. The remaining 3
       firmware faces use the `face_sim` fallback; this is host coverage, not
       hardware coverage.
 - [ ] Firmware component profiles for board-wide hardware presets. Studio has

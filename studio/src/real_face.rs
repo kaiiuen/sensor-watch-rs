@@ -14,8 +14,8 @@
 //!
 //! The host-migrated faces wired up here are the stock Casio set plus the other
 //! faces whose host harness has landed in the firmware seam: `SIMPLE_CLOCK`,
-//! `ALARM`, `COUNTER`, `WORLD_CLOCK`, `STOPWATCH`, `TIMER`, `COUNTDOWN`, and
-//! `FLASHLIGHT`. New faces are added by extending [`new_face`] once their host
+//! `SIMPLE_CLOCK`, `ALARM`, `COUNTER`, `WORLD_CLOCK`, `STOPWATCH`, `TIMER`, `COUNTDOWN`,
+//! `FLASHLIGHT`, and `DIAGNOSTICS`. New faces are added by extending [`new_face`] once their host
 //! harness lands in the firmware seam.
 //!
 //! # Feature gating

@@ -86,8 +86,9 @@ being covered by the passing test counts:
 - UART jig wiring and SWD/RTT probe behavior;
 - Studio configured UF2 generation with user selections. The path is correctly
   fail-closed until selections become firmware build inputs;
-- optical receiver integration. The protocol framing and authentication logic
-  are host-testable, but no receiver integration is claimed.
+- experimental receive-only optical support for Pro hardware. The protocol
+  framing and authentication logic are host-testable, but the optical path has
+  not been tested on hardware.
 
 ## Stale documentation corrected by this audit
 
@@ -97,7 +98,7 @@ being covered by the passing test counts:
   30 = 365`; the separate Studio no-default-features run reports 121 tests.
   The command-scoped firmware runs report 1 test for `usb-cdc` only and 122
   tests for `hostmock,std,optical,shell-auth,usb-cdc`.
-- The current Studio mapping uses 107 real firmware faces and 4 `face_sim`
+- The current Studio mapping uses 108 real firmware faces and 3 `face_sim`
   fallback faces out of 111.
 - `PROJECT_LOG.md` contains historical snapshots that are intentionally not
   part of the public validation baseline. Those entries are retained as dated

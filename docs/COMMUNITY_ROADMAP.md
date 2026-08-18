@@ -23,8 +23,8 @@ traceability, while only genuinely unfinished items belong in the Backburner.
 - Event-driven Movement framework with RTC-owned timekeeping, scheduled tasks,
   debounce, long-press handling, fault tracking, buzzer priority, and primary /
   secondary face registration.
-111 registered firmware faces, with 95 faces currently running through the
-  real Studio host seam and 16 using the simulator fallback.
+- 111 registered firmware faces, with 108 faces currently running through the
+  real Studio host seam and 3 using the `face_sim` fallback.
 - Alarm, advanced alarm, countdown, timer, stopwatch, quick utility, metronome,
   repetition-minute, time-left, deadline, and world-clock families.
 - DST-aware timezones, UTC/local-time conversion, NTP, drift correction,
@@ -60,7 +60,7 @@ traceability, while only genuinely unfinished items belong in the Backburner.
 
 ### Faces and algorithms
 
-- Finish the remaining 20 real-face host migrations with face-specific harnesses
+- Finish the remaining 3 real-face host migrations with face-specific harnesses
   rather than generic activation assumptions.
 - Add a conservative LIS2DW step-counter algorithm using replayable recorded
   samples, bounded FIFO reads, and a power budget.
@@ -119,8 +119,8 @@ traceability, while only genuinely unfinished items belong in the Backburner.
   available.
 - Add pressure/altitude hardware and a dive-computer face only behind an
   explicit external-sensor module.
-- Integrate optical/IrDA receiver/transmitter hardware and measure transfer
-  reliability and current draw.
+- Complete and hardware-test the experimental receive-only optical/IrDA path;
+  transmitter hardware, transfer reliability, and current draw remain open.
 - Integrate NFC flashing/charging only as a separate custom-board project.
 - Integrate BLE only if the project intentionally changes its air-gapped design.
 - Add GPS-assisted calibration only with a defined external fixture.

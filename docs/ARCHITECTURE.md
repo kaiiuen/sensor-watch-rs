@@ -151,8 +151,8 @@ With all 111 faces registered (via the `#[used]` face-retain array), a release
 build is roughly **210-230 KB**, so most of the region is used. Each watch face
 adds roughly 1-3 KB, leaving modest headroom for a few more faces, not dozens.
 Adding faces beyond the current count should be validated against the linker
-region on every build. Studio currently wires 107 of those faces into its
-default-enabled `real-faces` host seam, the remaining 4 faces use the
+region on every build. Studio currently wires 108 of those faces into its
+default-enabled `real-faces` host seam, the remaining 3 faces use the
 `face_sim` fallback engine in Studio.
 
 ### RAM (32 KB)
@@ -402,8 +402,9 @@ flash bit-rot is corrected on read rather than silently corrupting data.
 
 A minimal command interpreter over the debug UART. Provides `time`,
 `settime YYMMDDHHMMSS`, `drift`/`drift N`, `optical`, `panic`, `events`,
-`events clear`, and `help` commands. The optical implementation is protocol-only.
- it does not provide optical receiver hardware integration. RX is nonblocking with
+`events clear`, and `help` commands. Optical support is an experimental,
+receive-only path for Pro hardware and has not been tested on hardware. RX is
+nonblocking with
 a bounded ring and bounded line/error responses. Mutating commands are always
 fail-closed. With the `shell-auth` feature enabled, they are authorized by
 `movement::shell_auth` only while the physical Alarm/service button is held;
