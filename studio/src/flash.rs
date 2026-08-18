@@ -20,6 +20,30 @@ pub(crate) enum WatchDriveSelection {
     Multiple(usize),
 }
 
+/// Copy-time guard used before a flash worker is scheduled. The worker repeats
+/// all checks, but the UI must not queue a copy from stale approval or drive
+/// state either.
+pub(crate) fn validate_copy_guard(
+    approved: &crate::build::ArtifactInspection,
+    current: Result<&crate::build::ArtifactInspection, &str>,
+    selection: &WatchDriveSelection,
+) -> Result<WatchDriveCandidate, String> {
+    let current = current.map_err(|error| format!("artifact is no longer available: {error}"))?;
+    if current != approved {
+        return Err(format!(
+            "approved artifact digest changed (approved {}, current {})",
+            approved.sha256, current.sha256
+        ));
+    }
+    match selection {
+        WatchDriveSelection::One(candidate) => Ok(candidate.clone()),
+        WatchDriveSelection::None => Err("one expected Sensor Watch drive is required".into()),
+        WatchDriveSelection::Multiple(count) => Err(format!(
+            "exactly one expected Sensor Watch drive is required; found {count}"
+        )),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct FlashRequest {
     pub(crate) path: PathBuf,
@@ -734,6 +758,41 @@ mod tests {
         for root in roots {
             let _ = std::fs::remove_dir_all(root);
         }
+    }
+
+    #[test]
+    fn copy_guard_requires_current_artifact_digest_and_one_drive() {
+        let approved = crate::build::ArtifactInspection {
+            path: PathBuf::from("firmware.uf2"),
+            generation: "g1".into(),
+            family_id: "f1".into(),
+            uf2_bytes: "10".into(),
+            uf2_blocks: "1".into(),
+            payload_bytes: "4".into(),
+            sha256: "approved-digest".into(),
+            payload_sha256: "payload".into(),
+            manifest_digest: "manifest".into(),
+        };
+        let drive = WatchDriveCandidate {
+            root: PathBuf::from("E:\\"),
+            info: "UF2 Sensor Watch".into(),
+        };
+        assert!(validate_copy_guard(
+            &approved,
+            Ok(&approved),
+            &WatchDriveSelection::One(drive.clone())
+        )
+        .is_ok());
+        assert!(validate_copy_guard(
+            &approved,
+            Ok(&crate::build::ArtifactInspection {
+                sha256: "changed".into(),
+                ..approved.clone()
+            }),
+            &WatchDriveSelection::One(drive.clone())
+        )
+        .is_err());
+        assert!(validate_copy_guard(&approved, Ok(&approved), &WatchDriveSelection::None).is_err());
     }
 
     #[test]

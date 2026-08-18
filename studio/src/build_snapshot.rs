@@ -23,6 +23,9 @@ pub struct BuildInputSnapshot {
     pub modules: Vec<SnapshotModule>,
     pub selected_profile: SelectedProfile,
     pub component_draft: ComponentsConfig,
+    /// Effective component configuration after board/profile compatibility resolution.
+    /// This identifies planning state; it is not firmware provenance.
+    pub component_effective: ComponentsConfig,
     pub output_identity: String,
     pub completeness: SnapshotCompleteness,
 }
@@ -86,6 +89,7 @@ impl BuildInputSnapshot {
         profiles: &[BuildProfile],
         selected_profile: usize,
         component_draft: &ComponentsConfig,
+        component_effective: &ComponentsConfig,
         output_identity: impl Into<String>,
     ) -> Self {
         let active = presets
@@ -133,6 +137,7 @@ impl BuildInputSnapshot {
                 profile: profiles.get(selected_profile).cloned(),
             },
             component_draft: component_draft.clone(),
+            component_effective: component_effective.clone(),
             output_identity: output_identity.into(),
             completeness: SnapshotCompleteness {
                 build_inputs_complete: false,
@@ -210,6 +215,7 @@ mod tests {
             &profiles,
             0,
             &ComponentsConfig::default(),
+            &ComponentsConfig::default(),
             "output",
         )
     }
@@ -260,6 +266,7 @@ mod tests {
             &[],
             0,
             &ComponentsConfig::default(),
+            &ComponentsConfig::default(),
             "output",
         );
         let right = BuildInputSnapshot::from_state(
@@ -269,6 +276,7 @@ mod tests {
             &reordered,
             &[],
             0,
+            &ComponentsConfig::default(),
             &ComponentsConfig::default(),
             "output",
         );

@@ -3006,7 +3006,7 @@ impl StudioApp {
     }
 
     fn build_configuration_fingerprint(&self) -> String {
-        configuration_fingerprint(
+        configuration_fingerprint_with_effective(
             self.board,
             &self.presets,
             &self.watch_config,
@@ -3014,6 +3014,7 @@ impl StudioApp {
             &self.component_profiles,
             self.component_profile,
             &self.component_draft,
+            &self.component_effective,
             &self.output_dir,
         )
     }
@@ -4472,6 +4473,7 @@ impl StudioApp {
                         self.inspect_artifact_from_input();
                     }
                 });
+
                 if artifact_actions_blocked {
                     ui.weak("Artifact inspection and approval are disabled while a build is in progress.");
                 }
@@ -4503,6 +4505,12 @@ impl StudioApp {
                             self.pending_artifact_fingerprint = None;
                         }
                     });
+                }
+                if self.pending_artifact.is_some() {
+                    ui.weak("Artifact inspected; UF2, sidecars, and hashes verified. Approval is still required.");
+                }
+                if self.approved_artifact.is_some() {
+                    ui.weak("Artifact approved for this session.");
                 }
                 if let Some(uf2) = self.approved_artifact.as_ref().map(|artifact| &artifact.path) {
                     ui.label(
@@ -4551,7 +4559,7 @@ impl StudioApp {
                     WatchDriveSelection::One(candidate) => {
                         ui.colored_label(
                             egui::Color32::from_rgb(80, 200, 120),
-                            format!("Watch detected at {}", candidate.root.display()),
+                            format!("One expected drive detected at {}", candidate.root.display()),
                         );
                     }
                     WatchDriveSelection::Multiple(count) => {
@@ -4575,6 +4583,7 @@ impl StudioApp {
                     ui.weak("Build in progress; flashing is disabled until it finishes.");
                 } else if let Some(approved) = &self.approved_artifact {
                     let approved = approved.clone();
+                    ui.weak("Copy ready: current artifact and drive will be checked again before scheduling.");
                     let copy_response = ui.button(tr(self.language, Key::CopyToWatch));
                     self.register_anchor(Panel::BuildFlash, AnchorId::BuildCopy, &copy_response);
                     if !self.shutting_down
@@ -8688,6 +8697,29 @@ impl StudioApp {
             self.log_error("Flash blocked while another operation is active");
             return;
         }
+        let current_inspection = build::inspect_artifact(&approved.path);
+        let selected_drive = match flash::validate_copy_guard(
+            &build::ArtifactInspection {
+                path: approved.path.clone(),
+                generation: approved.generation.clone(),
+                family_id: approved.family_id.clone(),
+                uf2_bytes: approved.uf2_bytes.clone(),
+                uf2_blocks: approved.uf2_blocks.clone(),
+                payload_bytes: approved.payload_bytes.clone(),
+                sha256: approved.sha256.clone(),
+                payload_sha256: approved.payload_sha256.clone(),
+                manifest_digest: approved.manifest_digest.clone(),
+            },
+            current_inspection.as_ref().map_err(|error| error.as_str()),
+            &self.cached_watch,
+        ) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                self.status = format!("Copy blocked: {error}");
+                self.log_error(&self.status.clone());
+                return;
+            }
+        };
         if !self.flash_worker_state.start_flash() {
             self.status = "Flash is unavailable while another operation is active.".to_string();
             return;
@@ -8696,10 +8728,7 @@ impl StudioApp {
         self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
         let (progress, receiver) = progress::channel(operation_id);
         let path = approved.path.clone();
-        let selected_drive = match &self.cached_watch {
-            WatchDriveSelection::One(candidate) => Some(candidate.clone()),
-            WatchDriveSelection::None | WatchDriveSelection::Multiple(_) => None,
-        };
+        let selected_drive = Some(selected_drive);
 
         let approved_metadata = build::ArtifactInspection {
             path: path.clone(),
@@ -9771,6 +9800,7 @@ impl ApprovedArtifact {
     }
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn configuration_fingerprint(
     board: Board,
     presets: &PresetManager,
@@ -9781,6 +9811,30 @@ fn configuration_fingerprint(
     component_draft: &components::ComponentsConfig,
     output_dir: &str,
 ) -> String {
+    configuration_fingerprint_with_effective(
+        board,
+        presets,
+        watch_config,
+        modules,
+        component_profiles,
+        component_profile,
+        component_draft,
+        component_draft,
+        output_dir,
+    )
+}
+
+fn configuration_fingerprint_with_effective(
+    board: Board,
+    presets: &PresetManager,
+    watch_config: &watch_config::WatchConfig,
+    modules: &modules::ModuleManager,
+    component_profiles: &[components::BuildProfile],
+    component_profile: usize,
+    component_draft: &components::ComponentsConfig,
+    component_effective: &components::ComponentsConfig,
+    output_dir: &str,
+) -> String {
     build_snapshot::BuildInputSnapshot::from_state(
         board.label(),
         presets,
@@ -9789,24 +9843,25 @@ fn configuration_fingerprint(
         component_profiles,
         component_profile,
         component_draft,
+        component_effective,
         output_dir,
     )
     .fingerprint()
 }
 
 fn invalidate_stale_artifact_state(
-    approved_artifact: &mut Option<ApprovedArtifact>,
+    _approved_artifact: &mut Option<ApprovedArtifact>,
     pending_artifact: &mut Option<build::ArtifactInspection>,
     pending_fingerprint: &mut Option<String>,
     current_fingerprint: &str,
 ) -> bool {
-    let approved_stale = approved_artifact
-        .as_ref()
-        .is_some_and(|artifact| artifact.config_fingerprint != current_fingerprint);
+    // A planning fingerprint describes current UI intent, not artifact
+    // provenance. An approved existing artifact remains valid until its UF2,
+    // sidecars, or compatibility checks fail at copy time. Only an unapproved
+    // build candidate is tied to the current planning state.
     let pending_stale =
         pending_artifact.is_some() && pending_fingerprint.as_deref() != Some(current_fingerprint);
-    if approved_stale || pending_stale {
-        *approved_artifact = None;
+    if pending_stale {
         *pending_artifact = None;
         *pending_fingerprint = None;
         true
@@ -10335,7 +10390,7 @@ mod tests {
     }
 
     #[test]
-    fn every_build_configuration_change_clears_approval_and_candidate() {
+    fn planning_changes_clear_only_unapproved_candidate() {
         let base_presets = PresetManager::new();
         let base_watch_config = watch_config::WatchConfig::default();
         let base_modules = modules::ModuleManager::default();
@@ -10381,7 +10436,7 @@ mod tests {
                 &mut pending_fingerprint,
                 &fingerprint,
             ));
-            assert!(approved.is_none());
+            assert!(approved.is_some());
             assert!(pending.is_none());
             assert!(pending_fingerprint.is_none());
         };
