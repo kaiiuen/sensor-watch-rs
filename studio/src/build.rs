@@ -81,6 +81,13 @@ fn trusted_runtime_root(candidate: &Path, trusted: &Path) -> Option<PathBuf> {
 /// to the workspace this binary was compiled from. This prevents an unrelated
 /// ancestor `Cargo.toml` from redirecting firmware builds or source discovery.
 pub fn firmware_dir() -> PathBuf {
+    // Once distribution discovery has run, never reach back into the compiled
+    // checkout unless explicit developer mode selected it.
+    if crate::distribution::initialized() {
+        return crate::distribution::active()
+            .firmware_project_dir()
+            .unwrap_or_else(|| PathBuf::from("."));
+    }
     let Some(trusted) = compiled_workspace_root() else {
         return PathBuf::from(".");
     };

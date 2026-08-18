@@ -197,9 +197,22 @@ probe-rs-compatible SWD probe, the CLI does not add USB CDC, modify the UF2
 bootloader, or provide device-side rollback. With no command, Firmware Studio
 starts its GUI.
 
-The binary is `target/release/sensor-watch-studio`. It is fully self-contained
-(the watch SVG is embedded), so it can be copied anywhere and run. The app
-launches at a 480p (640x480) default window size and is resizable.
+The binary is `target/release/sensor-watch-studio`. A release executable by
+itself is not a full distribution. Folder-based packages must place
+`sensor-watch-package.json` beside the package root and identify the launcher,
+versioned app directory, resources, templates, firmware project, and optional
+tools/targets. Studio reports **Packaged mode** only after validating that
+manifest. Missing project sources or tools are reported as unavailable; Studio
+never claims full self-containment in that case. Mutable settings and user data
+remain under the platform user-data directory, separate from the package.
+
+A binary copied from a developer checkout does not silently use that checkout.
+To opt into checkout paths for local development, set
+`SENSOR_WATCH_STUDIO_DEVELOPER_MODE=1` before launch. Without that explicit
+setting, Studio reports unavailable package resources. In-place updates,
+downloads, and self-update are intentionally outside this foundation.
+
+The app launches at a 480p (640x480) default window size and is resizable.
 
 ## Reusing the firmware logic
 

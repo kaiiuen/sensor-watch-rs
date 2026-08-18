@@ -12,6 +12,7 @@ mod components;
 mod data_dir;
 mod debug;
 mod diagnostics;
+mod distribution;
 mod drift;
 mod editor;
 mod error_catalog;
@@ -76,6 +77,8 @@ struct StudioApp {
     current_panel: Panel,
     /// The last status message shown in the status bar.
     status: String,
+    /// Package/developer distribution status shown independently of build status.
+    package_status: distribution::PackageStatus,
     /// The discovered watch faces.
     face_list: Vec<faces::FaceInfo>,
     /// Whether a build is currently running.
@@ -914,6 +917,7 @@ impl Default for StudioApp {
             fonts_installed: false,
             current_panel: Panel::Dashboard,
             status: String::new(),
+            package_status: distribution::active(),
             face_list: Vec::new(),
             building: false,
             shutting_down: false,
@@ -1525,6 +1529,10 @@ impl eframe::App for StudioApp {
                 // Window size.
                 let size = ctx.screen_rect().size();
                 ui.monospace(format!("Window: {:.0}x{:.0}", size.x, size.y));
+                ui.separator();
+                ui.monospace(self.package_status.display_label()).on_hover_text(
+                    "Packaged mode uses only the distribution manifest. Developer checkout mode requires explicit developer mode.",
+                );
                 ui.separator();
                 // Error/warning counter that jumps to the Bugs tab.
                 let err_count = self.error_log.entries().len();
@@ -7418,9 +7426,22 @@ impl StudioApp {
                 if !self.data_folder_status.is_empty() { ui.weak(&self.data_folder_status); }
                 ui.end_row();
 
-                // Firmware project path.
-                ui.label(tr(self.language, Key::FirmwareProject));
-                ui.monospace(build::firmware_dir().display().to_string());
+                // Packaged firmware is immutable; editing uses the active project.
+                ui.label("Bundled firmware template");
+                ui.monospace(
+                    self.package_status
+                        .firmware_project_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "unavailable".into()),
+                );
+                ui.end_row();
+                ui.label("Active mutable project");
+                ui.monospace(
+                    self.package_status
+                        .active_project_dir()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "unavailable".into()),
+                );
                 ui.end_row();
             });
 
@@ -8939,12 +8960,20 @@ fn ensure_cli_console() {}
 
 fn main() -> eframe::Result<()> {
     // Bootstrap preferences are deliberately unscoped: they must be read
-    // before selecting an executable-hash profile.
+    // before selecting an executable-hash profile. Distribution discovery is
+    // initialized first so all project/resource paths use the same contract.
+    let executable = std::env::current_exe().unwrap_or_default();
+    let developer_mode = distribution::developer_mode_requested();
+    let package_status = distribution::initialize(&executable, developer_mode);
+    if !package_status.warnings.is_empty() {
+        for warning in &package_status.warnings {
+            eprintln!("Studio distribution: {warning}");
+        }
+    }
     let bootstrap = persist::load_runtime_preferences();
     let fresh = bootstrap.fresh_test_executable_profile;
     let requested_root = std::path::PathBuf::from(&bootstrap.data_folder);
     let fallback_root = data_dir::default_path();
-    let executable = std::env::current_exe().unwrap_or_default();
     let firmware = build::firmware_dir();
     // The bootstrap output directory is the only safe output value available
     // before selecting the executable-scoped profile. Do not load that profile

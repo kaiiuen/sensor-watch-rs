@@ -57,7 +57,16 @@ impl FileBrowser {
     }
 
     fn refresh_workspace(&mut self) {
-        let candidate = crate::build::firmware_dir();
+        let candidate = match crate::distribution::active().active_project_dir() {
+            Some(path) => path,
+            None => {
+                self.root.clear();
+                self.current_dir.clear();
+                self.entries.clear();
+                self.message = "Mutable project unavailable; bundled firmware is read-only".into();
+                return;
+            }
+        };
         match candidate.canonicalize() {
             Ok(root) if root.is_dir() => {
                 self.root = root.clone();
@@ -72,6 +81,18 @@ impl FileBrowser {
                 self.message = format!("Workspace not found at {}", candidate.display());
             }
         }
+    }
+
+    #[cfg(test)]
+    fn from_root(root: PathBuf) -> Self {
+        let root = root.canonicalize().unwrap();
+        let mut browser = Self {
+            root: root.clone(),
+            current_dir: root,
+            ..Self::default()
+        };
+        browser.load_entries();
+        browser
     }
 
     fn load_entries(&mut self) {
@@ -353,6 +374,25 @@ fn copy_to_clipboard(text: &str) -> Option<String> {
     match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text.to_string())) {
         Ok(()) => Some("Copied to clipboard".to_string()),
         Err(error) => Some(format!("Clipboard error: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod project_root_tests {
+    use super::*;
+
+    #[test]
+    fn browser_uses_active_project_as_root() {
+        let root = std::env::temp_dir().join(format!("studio-browser-{}", std::process::id()));
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/editable.rs"), b"x").unwrap();
+        let browser = FileBrowser::from_root(root.join("."));
+        assert_eq!(browser.root, root.canonicalize().unwrap());
+        assert!(browser
+            .entries
+            .iter()
+            .any(|entry| entry.path.ends_with("src")));
+        let _ = std::fs::remove_dir_all(root);
     }
 }
 

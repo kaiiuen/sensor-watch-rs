@@ -75,10 +75,31 @@ pub fn validate_face_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Returns a validated face path under the firmware movement directory.
+fn project_dir() -> Result<std::path::PathBuf, String> {
+    if let Some(path) = crate::distribution::active().active_project_dir() {
+        return Ok(path);
+    }
+    if !crate::distribution::initialized() {
+        let path = crate::build::firmware_dir();
+        if path.is_dir() {
+            return Ok(path);
+        }
+    }
+    Err("mutable project is unavailable; bundled firmware is read-only".into())
+}
+
+/// Returns a validated face path under the active mutable project's movement directory.
 fn checked_face_path(name: &str) -> Result<std::path::PathBuf, String> {
     validate_face_name(name)?;
-    let movement = crate::build::firmware_dir().join("src/movement");
+    checked_face_path_in(&project_dir()?, name)
+}
+
+fn checked_face_path_in(
+    project: &std::path::Path,
+    name: &str,
+) -> Result<std::path::PathBuf, String> {
+    validate_face_name(name)?;
+    let movement = project.join("src/movement");
     let root = movement
         .canonicalize()
         .map_err(|e| format!("cannot resolve face directory: {e}"))?;
@@ -102,15 +123,22 @@ fn checked_face_path(name: &str) -> Result<std::path::PathBuf, String> {
 /// The path to a face's source file. Callers performing I/O must use the
 /// checked helpers below; this function is retained for display purposes.
 pub fn face_path(name: &str) -> std::path::PathBuf {
-    crate::build::firmware_dir()
+    crate::distribution::active()
+        .active_project_dir()
+        .or_else(|| (!crate::distribution::initialized()).then(crate::build::firmware_dir))
+        .unwrap_or_default()
         .join("src/movement")
         .join(format!("{name}.rs"))
 }
 
 /// Writes a face source file.
 pub fn write_face(name: &str, source: &str) -> Result<(), String> {
-    let path = checked_face_path(name)?;
-    std::fs::write(&path, source).map_err(|e| format!("cannot write face: {e}"))
+    write_face_in(&project_dir()?, name, source)
+}
+
+fn write_face_in(project: &std::path::Path, name: &str, source: &str) -> Result<(), String> {
+    let path = checked_face_path_in(project, name)?;
+    atomic_write(&path, source.as_bytes()).map_err(|e| format!("cannot write face: {e}"))
 }
 
 /// Reads a face source file.
@@ -135,7 +163,7 @@ pub fn delete_face(name: &str) -> Result<(), String> {
 /// is already the desired state, while malformed or unsafe module files fail.
 pub fn unregister_face(name: &str) -> Result<(), String> {
     validate_face_name(name)?;
-    let movement = crate::build::firmware_dir().join("src/movement");
+    let movement = project_dir()?.join("src/movement");
     let root = movement
         .canonicalize()
         .map_err(|e| format!("cannot resolve face directory: {e}"))?;
@@ -157,7 +185,8 @@ pub fn unregister_face(name: &str) -> Result<(), String> {
     if updated == content {
         return Ok(());
     }
-    std::fs::write(&path, updated).map_err(|e| format!("cannot update movement module: {e}"))
+    atomic_write(&path, updated.as_bytes())
+        .map_err(|e| format!("cannot update movement module: {e}"))
 }
 
 /// Registers a face so it becomes visible to `discover_faces` and compiles into
@@ -171,7 +200,7 @@ pub fn unregister_face(name: &str) -> Result<(), String> {
 /// already present, this is treated as success.
 pub fn register_face(name: &str) -> Result<(), String> {
     validate_face_name(name)?;
-    let movement = crate::build::firmware_dir().join("src/movement");
+    let movement = project_dir()?.join("src/movement");
     let root = movement
         .canonicalize()
         .map_err(|e| format!("cannot resolve face directory: {e}"))?;
@@ -251,7 +280,20 @@ pub fn register_face(name: &str) -> Result<(), String> {
         s
     };
 
-    std::fs::write(&path, updated).map_err(|e| e.to_string())
+    atomic_write(&path, updated.as_bytes()).map_err(|e| e.to_string())
+}
+
+fn atomic_write(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    let temp = path.with_extension("rs.studio-writing");
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    use std::io::Write;
+    file.write_all(contents)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(temp, path)
 }
 
 #[cfg(test)]
@@ -262,5 +304,20 @@ mod tests {
     fn registration_rejects_case_only_existing_module_collision() {
         let error = register_face("SIMPLE_CLOCK").expect_err("case-only collision must fail");
         assert!(error.contains("simple_clock"));
+    }
+
+    #[test]
+    fn editor_write_uses_mutable_project_root() {
+        let root = std::env::temp_dir().join(format!("studio-editor-{}", std::process::id()));
+        let movement = root.join("src/movement");
+        std::fs::create_dir_all(&movement).unwrap();
+        std::fs::write(movement.join("mod.rs"), "use crate::movement::types::*;\n").unwrap();
+        let source = "//! edited\n";
+        write_face_in(&root, "edited", source).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(movement.join("edited.rs")).unwrap(),
+            source
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 }
