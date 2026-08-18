@@ -13,6 +13,11 @@ use crate::ToolResult;
 const PACKAGE_SCHEMA: u32 = 1;
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const STUDIO_VERSION: &str = env!("CARGO_PKG_VERSION");
+const LAUNCHER_ARTIFACT_NAMES: &[&str] = &[
+    "sensor-watch-studio-launcher",
+    "sensor-watch-launcher",
+    "sensor-watch-bootstrapper",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StudioPackageResult {
@@ -44,7 +49,8 @@ pub fn package_studio(output: Option<&Path>) -> ToolResult<StudioPackageResult> 
     let executable = target
         .join("release")
         .join(format!("sensor-watch-studio{EXE_SUFFIX}"));
-    package_studio_artifacts(&root, &executable, output)
+    let launcher = find_launcher_artifact(&target.join("release"))?;
+    package_studio_artifacts_with_launcher(&root, &executable, &launcher, output)
 }
 
 #[cfg(windows)]
@@ -68,12 +74,29 @@ pub fn package_studio_artifacts(
     executable: &Path,
     output: Option<&Path>,
 ) -> ToolResult<StudioPackageResult> {
+    let target = root.join("target");
+    let launcher = find_launcher_artifact(&target.join("release"))?;
+    package_studio_artifacts_with_launcher(root, executable, &launcher, output)
+}
+
+/// Packages a Studio executable with a separately built launcher/bootstrapper.
+/// The explicit launcher parameter keeps tests and release pipelines independent
+/// from the launcher implementation while preserving the package boundary.
+pub fn package_studio_artifacts_with_launcher(
+    root: &Path,
+    executable: &Path,
+    launcher: &Path,
+    output: Option<&Path>,
+) -> ToolResult<StudioPackageResult> {
     let root = root
         .canonicalize()
         .map_err(|e| format!("cannot resolve workspace root: {e}"))?;
     let executable = regular_file(executable, "Studio release executable")?
         .canonicalize()
         .map_err(|e| format!("cannot resolve Studio release executable: {e}"))?;
+    let launcher = regular_file(launcher, "required launcher/bootstrapper artifact")?
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve launcher/bootstrapper artifact: {e}"))?;
     let target_root = root
         .join("target")
         .canonicalize()
@@ -81,8 +104,12 @@ pub fn package_studio_artifacts(
     if !executable.starts_with(&target_root) {
         return Err("Studio executable must be inside the workspace target directory".into());
     }
+    if !launcher.starts_with(&target_root) {
+        return Err("launcher/bootstrapper must be inside the workspace target directory".into());
+    }
     let version = studio_version(&root)?;
     let package_directory = format!("sensor-watch-studio-{version}");
+    let app_directory = format!("app/{version}");
     let output = output.map(PathBuf::from).unwrap_or_else(|| {
         root.join("target/studio-package")
             .join(format!("{package_directory}.zip"))
@@ -103,8 +130,12 @@ pub fn package_studio_artifacts(
 
     let mut files = Vec::<(String, PathBuf)>::new();
     files.push((
-        format!("{package_directory}/app/sensor-watch-studio{EXE_SUFFIX}"),
+        format!("{package_directory}/{app_directory}/sensor-watch-studio{EXE_SUFFIX}"),
         executable,
+    ));
+    files.push((
+        format!("{package_directory}/launcher/sensor-watch-studio{EXE_SUFFIX}"),
+        launcher,
     ));
     add_tree(
         &mut files,
@@ -126,6 +157,13 @@ pub fn package_studio_artifacts(
 
     let manifest_path = format!("{package_directory}/sensor-watch-package.json");
     let readme_path = format!("{package_directory}/README.txt");
+    let capabilities_path = format!("{package_directory}/PACKAGE-CAPABILITIES.json");
+    let release_metadata_path = format!("{package_directory}/release/metadata.json");
+    let release_signature_path = format!("{package_directory}/release/metadata.json.sig");
+    let update_policy_path = format!("{package_directory}/update-policy.json");
+    let startup_marker_path = format!("{package_directory}/startup-marker.json");
+    let current_pointer_path = format!("{package_directory}/versions/current.json");
+    let previous_pointer_path = format!("{package_directory}/versions/previous.json");
     let mut entries = files
         .iter()
         .map(|(path, source)| package_entry(path, source))
@@ -134,19 +172,76 @@ pub fn package_studio_artifacts(
     let manifest = serde_json::to_vec_pretty(&json!({
         "schema_version": PACKAGE_SCHEMA,
         "current_version": { "version": version },
-        "launcher_executable": format!("app/sensor-watch-studio{EXE_SUFFIX}"),
-        "app_directory": "app",
+        "previous_version": null,
+        "launcher_executable": format!("launcher/sensor-watch-studio{EXE_SUFFIX}"),
+        "app_directory": app_directory,
         "resources_directory": "resources",
         "templates_directory": "templates",
         "firmware_project_directory": "firmware",
-        "user_data_directory": "(platform user-data directory; not included)"
+        "tools_directory": "tools",
+        "targets_directory": "targets",
+        "user_data_directory": "(platform user-data directory; not included)",
+        "capability_manifest": "PACKAGE-CAPABILITIES.json",
+        "update_policy": "update-policy.json",
+        "startup_marker": "startup-marker.json",
+        "current_pointer": "versions/current.json",
+        "previous_pointer": "versions/previous.json",
+        "release_metadata": "release/metadata.json",
+        "release_signature": "release/metadata.json.sig"
     }))
     .map_err(|e| format!("cannot serialize package metadata: {e}"))?;
+    let capabilities = serde_json::to_vec_pretty(&json!({
+        "schema_version": PACKAGE_SCHEMA,
+        "capabilities": {
+            "launcher": { "available": true, "path": "launcher/sensor-watch-studio.exe" },
+            "versioned_app": { "available": true, "path": format!("{app_directory}/sensor-watch-studio{EXE_SUFFIX}") },
+            "resources": { "available": true, "path": "resources" },
+            "templates": { "available": true, "path": "templates" },
+            "firmware_project": { "available": true, "path": "firmware" },
+            "tools": { "available": false, "path": "tools", "reason": "not bundled by this builder" },
+            "targets": { "available": false, "path": "targets", "reason": "not bundled by this builder" }
+        }
+    })).map_err(|e| format!("cannot serialize capability metadata: {e}"))?;
+    let release_metadata = serde_json::to_vec_pretty(&json!({
+        "schema_version": 1,
+        "version": version,
+        "signature_status": "placeholder-required-before-publishing",
+        "signature_algorithm": "ed25519",
+        "signature_file": "metadata.json.sig"
+    }))
+    .map_err(|e| format!("cannot serialize release metadata: {e}"))?;
+    let release_signature = b"SIGNATURE_PLACEHOLDER_REPLACE_FOR_SIGNED_RELEASE\n".to_vec();
+    let update_policy = serde_json::to_vec_pretty(&json!({
+        "schema_version": 1,
+        "mode": "offline",
+        "network_downloads": false,
+        "in_place_replacement": false,
+        "verification": "required-before-activation",
+        "launcher_owns_switching": true
+    }))
+    .map_err(|e| format!("cannot serialize update policy: {e}"))?;
+    let startup_marker = serde_json::to_vec_pretty(&json!({
+        "schema_version": 1,
+        "path": "user-data/startup.marker",
+        "contract": { "written_before_launch": true, "cleared_after_success": true, "stale_marker_means_recovery": true },
+        "user_data_only": true
+    })).map_err(|e| format!("cannot serialize startup marker contract: {e}"))?;
+    let current_pointer =
+        serde_json::to_vec_pretty(&json!({ "version": version, "app_directory": app_directory }))
+            .unwrap();
+    let previous_pointer = b"{\n  \"version\": null,\n  \"app_directory\": null\n}\n".to_vec();
     let readme = format!(
-        "Sensor-Watch Studio {version}\n\nThis is an offline folder package. Mutable settings and user projects stay\noutside this ZIP in the platform user-data directory.\n\nCapabilities:\n- Studio executable: available\n- Bundled resources: available\n- Bundled templates: available\n- Firmware project template: available\n- Firmware tools and cross-compilation targets: not bundled\n- Network self-update or cryptographic signature: not provided\n\nPACKAGE-MANIFEST.json lists the SHA-256 digest of every packaged file.\n"
+        "Sensor-Watch Studio {version}\n\nThe launcher is the only supported entry point. It owns startup markers,\nverification, and current/previous version selection. Mutable settings and\nuser projects stay outside this ZIP in the platform user-data directory.\n\nSigned-release metadata is a placeholder and must be replaced before publishing.\nPACKAGE-CAPABILITIES.json describes bundled and unavailable capabilities.\nPACKAGE-MANIFEST.json lists the SHA-256 digest of every packaged file.\n"
     );
     files.push((manifest_path, bytes_path(&manifest)));
     files.push((readme_path, bytes_path(readme.as_bytes())));
+    files.push((capabilities_path, bytes_path(&capabilities)));
+    files.push((release_metadata_path, bytes_path(&release_metadata)));
+    files.push((release_signature_path, bytes_path(&release_signature)));
+    files.push((update_policy_path, bytes_path(&update_policy)));
+    files.push((startup_marker_path, bytes_path(&startup_marker)));
+    files.push((current_pointer_path, bytes_path(&current_pointer)));
+    files.push((previous_pointer_path, bytes_path(&previous_pointer)));
     let mut all_entries = entries;
     all_entries.push(PackageEntry {
         path: format!("{package_directory}/sensor-watch-package.json"),
@@ -183,9 +278,31 @@ fn process_id() -> u32 {
     std::process::id()
 }
 fn bytes_path(bytes: &[u8]) -> PathBuf {
-    let path = env::temp_dir().join(format!("sensor-watch-package-bytes-{}", process_id()));
+    let path = env::temp_dir().join(format!(
+        "sensor-watch-package-bytes-{}-{}",
+        process_id(),
+        digest(bytes)
+    ));
     fs::write(&path, bytes).expect("temporary package metadata write");
     path
+}
+
+fn find_launcher_artifact(release_directory: &Path) -> ToolResult<PathBuf> {
+    for name in LAUNCHER_ARTIFACT_NAMES {
+        let candidate = release_directory.join(format!("{name}{EXE_SUFFIX}"));
+        if candidate.is_file() {
+            return regular_file(&candidate, "required launcher/bootstrapper artifact");
+        }
+    }
+    Err(format!(
+        "required launcher/bootstrapper artifact is absent from {}. Build a separate launcher executable named one of: {} and place it in target/release before packaging; the Studio executable alone is not a full distribution",
+        release_directory.display(),
+        LAUNCHER_ARTIFACT_NAMES
+            .iter()
+            .map(|name| format!("{name}{EXE_SUFFIX}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    ))
 }
 
 fn studio_version(root: &Path) -> ToolResult<String> {
@@ -392,6 +509,11 @@ mod tests {
         fs::create_dir_all(root.join("target/release")).unwrap();
         let executable = root.join("target/release/sensor-watch-studio.exe");
         fs::write(&executable, b"exe").unwrap();
+        fs::write(
+            root.join("target/release/sensor-watch-studio-launcher.exe"),
+            b"launcher",
+        )
+        .unwrap();
         (root, executable)
     }
     fn zip_names(path: &Path) -> Vec<String> {
@@ -401,11 +523,32 @@ mod tests {
             .map(|i| archive.by_index(i).unwrap().name().to_owned())
             .collect()
     }
+    fn zip_text(path: &Path, name: &str) -> String {
+        let file = fs::File::open(path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let mut contents = String::new();
+        archive
+            .by_name(name)
+            .unwrap()
+            .read_to_string(&mut contents)
+            .unwrap();
+        contents
+    }
     #[test]
     fn traversal_components_are_rejected() {
         assert!(!safe_component(Path::new("../secret")));
         assert!(!safe_component(Path::new("a/b")));
         assert!(safe_component(Path::new("safe")));
+    }
+    #[test]
+    fn package_requires_a_separate_launcher() {
+        let (root, executable) = fixture("launcher-required");
+        fs::remove_file(root.join("target/release/sensor-watch-studio-launcher.exe")).unwrap();
+        let error =
+            package_studio_artifacts(&root, &executable, Some(&root.join("out.zip"))).unwrap_err();
+        assert!(error.contains("required launcher/bootstrapper artifact is absent"));
+        assert!(error.contains("target/release"));
+        let _ = fs::remove_dir_all(root);
     }
     #[test]
     fn package_is_deterministic_and_excludes_unallowlisted_files() {
@@ -425,6 +568,16 @@ mod tests {
             names
                 .iter()
                 .any(|name| name.ends_with("/PACKAGE-MANIFEST.json"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name.ends_with("/launcher/sensor-watch-studio.exe"))
+        );
+        assert!(
+            names
+                .iter()
+                .any(|name| name.ends_with("/app/9.8.7/sensor-watch-studio.exe"))
         );
         assert!(!names.iter().any(|name| name.contains("target/")
             || name.contains(".git/")
@@ -466,6 +619,40 @@ mod tests {
             .unwrap();
         assert!(contents.contains("sha256"));
         assert!(!contents.contains("signature"));
+        let package_root = "sensor-watch-studio-9.8.7";
+        let metadata = zip_text(
+            &output,
+            &format!("{package_root}/sensor-watch-package.json"),
+        );
+        let value: serde_json::Value = serde_json::from_str(&metadata).unwrap();
+        assert_eq!(value["schema_version"], 1);
+        assert_eq!(
+            value["launcher_executable"],
+            "launcher/sensor-watch-studio.exe"
+        );
+        assert_eq!(value["app_directory"], "app/9.8.7");
+        assert_eq!(value["current_pointer"], "versions/current.json");
+        assert!(
+            zip_names(&output)
+                .iter()
+                .any(|name| name.ends_with("/PACKAGE-CAPABILITIES.json"))
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+    #[test]
+    fn package_contains_ab_pointers_and_startup_update_contracts() {
+        let (root, executable) = fixture("ab-layout");
+        let output = root.join("out.zip");
+        package_studio_artifacts(&root, &executable, Some(&output)).unwrap();
+        let base = "sensor-watch-studio-9.8.7";
+        let current = zip_text(&output, &format!("{base}/versions/current.json"));
+        let previous = zip_text(&output, &format!("{base}/versions/previous.json"));
+        let marker = zip_text(&output, &format!("{base}/startup-marker.json"));
+        let policy = zip_text(&output, &format!("{base}/update-policy.json"));
+        assert!(current.contains("app/9.8.7"));
+        assert!(previous.contains("null"));
+        assert!(marker.contains("stale_marker_means_recovery"));
+        assert!(policy.contains("verification"));
         let _ = fs::remove_dir_all(root);
     }
 }
