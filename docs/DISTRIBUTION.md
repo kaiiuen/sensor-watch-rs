@@ -1,8 +1,8 @@
 # Studio folder distribution foundation
 
 This repository defines a bounded, folder-based Windows distribution contract
-for Firmware Studio. It now includes an offline/self-update foundation, but it
-does not implement network downloads or in-place replacement of the running
+for Firmware Studio. It includes an offline/self-update foundation, but it does
+not implement network downloads or in-place replacement of the running
 executable.
 
 ## Package manifest
@@ -30,7 +30,10 @@ All manifest paths are package-relative and may not be absolute or contain
 `..`. The launcher path must resolve to the executable that is running. Studio
 searches only the executable directory and its ancestors for this manifest.
 The package root, launcher, version metadata, and each capability are exposed
-through the typed `distribution` contract in `studio/src/distribution.rs`.
+through the typed `distribution` contract in `studio/src/distribution.rs`. The
+supported entry point is the packaged launcher at
+`launcher/sensor-watch-studio.exe`; users should not launch the versioned Studio
+executable directly.
 
 `resources`, `templates`, and `firmware_project` are reported independently.
 `tools` and `targets` are optional paths but are still reported as capabilities
@@ -68,3 +71,39 @@ The launcher remains responsible for its bounded startup timeout and final
 launcher-state pointer rollback. Studio never replaces the running executable;
 new packages remain immutable version directories, while settings and projects
 remain under user data.
+
+## Signed release metadata and A/B versions
+
+Before selecting or starting a version, the launcher authenticates the signed
+`release/metadata.json` using its configured key ring, checks the requested
+version against that signed metadata, and verifies the selected executable's
+artifact digest. Missing authentication, an invalid signature, an untrusted
+version, a downgrade that is not allowed by policy, or a digest mismatch fails
+closed. The package builder emits a metadata/signature placeholder for local
+artifacts; it must be replaced with a real signed release before publishing.
+
+Installed Studio versions are immutable sibling directories under
+`versions/<version>`. The launcher keeps A/B-style `current` and `previous`
+pointers in `user-data/launcher-state.json`, updates that small state file
+atomically, and
+switches the pointers only after verification. A version that fails the startup
+handshake is terminated and the previous verified version is restored. The
+launcher itself is installed once and is not replaced while it is running.
+
+## Building a package
+
+`package-studio` automatically runs release builds for both the launcher package
+`sensor-watch-launcher` and the Studio package `sensor-watch-studio`, then places
+both artifacts in the package. A separately supplied launcher is supported for
+tests or a release pipeline, but the normal command does not require a manual
+launcher build.
+
+## Limitations
+
+This is an offline, folder-based distribution foundation. It does not download
+updates, discover releases, or replace the running executable in place. The
+package builder does not sign release metadata or bundle optional `tools` and
+`targets` by default; publishing still requires an external signing step and
+any required optional bundles must be supplied separately. The launcher owns
+selection, verification, startup timeout, and rollback; Studio does not perform
+those operations itself.
