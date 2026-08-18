@@ -27,6 +27,9 @@ pub enum AnchorId {
     SimulatorWatch,
     SimulatorDate,
     SimulatorApply,
+    BuildBoard,
+    BuildProfile,
+    BuildArtifactPath,
     BuildArtifact,
     BuildInspect,
     BuildApprove,
@@ -288,8 +291,9 @@ pub fn step_target(
     tutorial: HelpId,
     index: usize,
 ) -> Option<AnchorRect> {
-    (panel == tutorial)
-        .then(|| anchor_for_step(tutorial, index))
+    let route = route(tutorial, index);
+    (panel == route.panel)
+        .then_some(route.anchor)
         .flatten()
         .and_then(|anchor| registry.get(panel, anchor.key()))
 }
@@ -352,6 +356,10 @@ pub fn simulator_wait_for_pointer_release(waiting: &mut bool, primary_down: bool
 /// Stable identifier for a contextual panel tutorial.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HelpId {
+    /// The complete first-start beginner journey, including cross-panel routing.
+    Startup,
+    /// The explicit Advanced-mode safety and transport tour.
+    Advanced,
     Dashboard,
     WatchFaces,
     Editor,
@@ -379,7 +387,7 @@ pub struct TutorialStep {
 
 impl TutorialStep {
     pub fn expected_panel(self, tutorial: HelpId) -> HelpId {
-        tutorial
+        route(tutorial, 0).panel
     }
     pub fn anchor(self, tutorial: HelpId, index: usize) -> Option<AnchorId> {
         anchor_for_step(tutorial, index)
@@ -395,20 +403,57 @@ impl TutorialStep {
 
 pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
     use AnchorId::*;
+    if id == HelpId::Startup {
+        return [
+            Some(PanelHelp),
+            Some(DashboardBoard),
+            Some(FacesPreset),
+            Some(BlocksGenerate),
+            Some(BuildBoard),
+            Some(SimulatorWatch),
+            Some(BuildUnavailable),
+            None,
+        ][index.min(7)];
+    }
+    if id == HelpId::Advanced {
+        return [
+            Some(PanelHelp),
+            Some(ShellMode),
+            Some(ProbeRefresh),
+            Some(ShellInput),
+            Some(ProbeRun),
+            Some(DiagnosticsRun),
+            Some(ProbeReport),
+            None,
+        ][index.min(7)];
+    }
+    if id == HelpId::BuildFlash {
+        return [
+            Some(BuildUnavailable),
+            Some(BuildBoard),
+            None,
+            Some(BuildProfile),
+            Some(BuildArtifactPath),
+            Some(BuildArtifactPath),
+            Some(BuildInspect),
+            None,
+            Some(BuildApprove),
+            Some(BuildRefresh),
+            Some(BuildCopy),
+            Some(BuildCopy),
+        ][index.min(11)];
+    }
     Some(match id {
+        // BuildFlash returns above because some steps are informational.
+        HelpId::BuildFlash => unreachable!(),
+        HelpId::Startup | HelpId::Advanced => unreachable!(),
         HelpId::Dashboard => [DashboardBoard, DashboardNtpFetch, PanelHelp][index.min(2)],
         HelpId::WatchFaces => [FacesSearch, FacesPreset, FacesAdd][index.min(2)],
         // Start enters Blocks mode. The final step is Save after Load into Rust
         // has explicitly switched the editor to Rust mode.
         HelpId::Editor => [EditorName, BlocksGenerate, LoadIntoRust, EditorSave][index.min(3)],
         HelpId::Simulator => [SimulatorWatch, SimulatorDate, SimulatorApply][index.min(2)],
-        HelpId::BuildFlash => [
-            BuildUnavailable,
-            BuildInspect,
-            BuildApprove,
-            BuildRefresh,
-            BuildCopy,
-        ][index.min(4)],
+
         HelpId::Calibration => [CalibrationFetch, CalibrationRecord, CalibrationCopy][index.min(2)],
         HelpId::Modules => ModulesRegister,
         HelpId::ShellAccess => [ShellMode, ShellInput, ShellSend][index.min(2)],
@@ -429,12 +474,51 @@ pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
     })
 }
 
-pub const FIRST_RUN_SEQUENCE: [HelpId; 4] = [
+/// Contextual tours suppressed after the user completes or skips startup.
+pub const FIRST_RUN_SEQUENCE: [HelpId; 16] = [
     HelpId::Dashboard,
     HelpId::WatchFaces,
     HelpId::Editor,
     HelpId::Simulator,
+    HelpId::BuildFlash,
+    HelpId::Calibration,
+    HelpId::Modules,
+    HelpId::ShellAccess,
+    HelpId::Diagnostics,
+    HelpId::DebugOutput,
+    HelpId::Bugs,
+    HelpId::FileBrowser,
+    HelpId::Tutorials,
+    HelpId::Wiki,
+    HelpId::Settings,
+    HelpId::ProbeTest,
 ];
+
+fn startup_panel(index: usize) -> HelpId {
+    [
+        HelpId::Dashboard,
+        HelpId::Dashboard,
+        HelpId::WatchFaces,
+        HelpId::Editor,
+        HelpId::BuildFlash,
+        HelpId::Simulator,
+        HelpId::BuildFlash,
+        HelpId::Dashboard,
+    ][index.min(7)]
+}
+
+fn advanced_panel(index: usize) -> HelpId {
+    [
+        HelpId::Dashboard,
+        HelpId::ShellAccess,
+        HelpId::ProbeTest,
+        HelpId::ShellAccess,
+        HelpId::ProbeTest,
+        HelpId::Diagnostics,
+        HelpId::ProbeTest,
+        HelpId::Dashboard,
+    ][index.min(7)]
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StepRoute {
@@ -444,7 +528,11 @@ pub struct StepRoute {
 
 pub fn route(id: HelpId, index: usize) -> StepRoute {
     StepRoute {
-        panel: id,
+        panel: match id {
+            HelpId::Startup => startup_panel(index),
+            HelpId::Advanced => advanced_panel(index),
+            _ => id,
+        },
         anchor: anchor_for_step(id, index),
     }
 }
@@ -469,6 +557,34 @@ macro_rules! steps {
 }
 
 const TUTORIALS: &[Tutorial] = &[
+    Tutorial {
+        id: HelpId::Startup,
+        stable_key: "startup",
+        title: "Start here: the beginner journey",
+        steps: steps!
+        ("Welcome and choose a mode" => "Normal mode is the safe beginner starting point. Advanced mode exists for diagnostics and deliberate hardware work; enabling it does not validate hardware. Start with the guided path and keep physical actions off until you understand the safeguards.",
+         "Dashboard: know the target" => "Dashboard is the project checkpoint. Confirm the target board, selected project, and warnings before changing anything. These values are planning/status information, not hardware validation.",
+         "Watch Faces: use the stock preset" => "Open Watch Faces and keep the stock/default preset as a known-good starting point. Select a face and review the preset before editing; this changes local project state only.",
+         "Editor: Blocks workflow" => "In Editor, stay in Blocks mode: name the face, arrange starter blocks, generate source, then explicitly Load into Rust editor before saving. Generated code still needs review and may not compile.",
+         "LCD, target board, and profile" => "Review LCD/component settings, target board revision, and the active profile in Build & Flash. Compatibility conflicts require an explicit choice; a profile is planning data and is never proof of electrical or firmware compatibility.",
+         "Simulator: try the result" => "Select the face in Simulator, set a recognizable date/time, and use simulated buttons. Simulation is host-side and cannot validate the physical LCD, sensors, power, timing, or watch hardware.",
+         "Build & Flash: limitations and existing artifacts" => "Configured builds remain fail-closed while the Studio-to-firmware input contract is incomplete. No configured UF2 is generated. If you already have a UF2, enter its path, inspect its required sidecars, and approve only that exact artifact; local verification is not hardware validation.",
+         "Safe next steps" => "Save a backup, read Diagnostics when status is unclear, and make one small host-side change at a time. Only later consider UART, bootloader, or probe actions after checking the target, wiring, voltage, and physical safeguards."),
+    },
+    Tutorial {
+        id: HelpId::Advanced,
+        stable_key: "advanced",
+        title: "Advanced mode: transport and safety",
+        steps: steps!
+        ("Why Advanced exists" => "Advanced mode exposes diagnostics, shell, UART, and probe tools for deliberate development work. It is not required for the beginner workflow and it does not make simulated results or documentation into hardware validation.",
+         "Simulated, UART, UF2, and SWD are different" => "Simulated commands run on the host. UART is a serial command path to a connected watch. UF2 is a file-copy path through the bootloader drive. SWD/probe is a separate debug/programming boundary. Never treat one transport's success as proof of another.",
+         "Read-only before mutating shell" => "Use status/help/read-only shell commands first and inspect the response. Mutating commands can change watch state; verify the exact target and command before sending, and do not paste unknown input.",
+         "3.3V UART safety" => "UART requires the documented wiring, ground, baud, and 3.3V logic levels. Do not connect an incompatible voltage or assume USB drive detection is UART. If wiring or target identity is uncertain, stop.",
+         "Physical actions need a deliberate gate" => "Probe and flash actions can affect hardware. Confirm the exact board, cable, port, and intended artifact, then use the explicit confirmation/report path. A canceled or unavailable probe is safer than guessing.",
+         "Diagnostics status meanings" => "Diagnostics describe host-side checks and transport observations: pass means that check returned its expected result, warning means review a limitation or input, and error means the check did not establish the expected state. None is a certification.",
+         "Read the report, not a claim" => "Probe/UART reports identify what Studio observed and what it could not verify. Keep logs, distinguish simulated from physical output, and stop on ambiguity rather than retrying a mutating action.",
+         "Return safely" => "Normal mode remains the default for everyday editing. Return there after diagnostics, preserve evidence, and leave build/flash and physical safeguards enabled."),
+    },
     Tutorial {
         id: HelpId::Dashboard,
         stable_key: "dashboard",
@@ -512,9 +628,18 @@ const TUTORIALS: &[Tutorial] = &[
         stable_key: "build-flash",
         title: "Build & Flash tutorial",
         steps: steps!
-        ("Current build state" => "Configured Studio firmware builds are currently unavailable: the input contract is incomplete, so Build .uf2 is fail-closed and no configured UF2 is generated. This is the current state, not a reason to treat a stock or unrelated artifact as your selected configuration.",
-         "Beginner workflow" => "1. Review the selected board, components, faces, and output path; the configured Build .uf2 action remains unavailable for now. 2. For an explicit existing UF2, inspect it and its required sidecars, then Approve it only if it matches your intent. 3. Refresh drive detection and select the expected drive. 4. Use Copy to watch only for that approved artifact. When the missing input contract is implemented, the intended configured build flow will be review, build, inspect, approve, detect, and copy. Expected result: only an explicitly approved host artifact is copied.",
-         "Safety and limits" => "Do not bypass the fail-closed configured-build gate or infer that profile selections were applied to an artifact. Artifact inspection proves local consistency, not authenticity, provenance, boot, or firmware health. UF2 Copy to watch is a host file copy; never unplug during it, and hardware behavior is not validated by Studio."),
+        ("1. Check the configured-build gate" => "Start by reading the Build unavailable explanation. Configured Studio firmware builds remain fail-closed because the Studio-to-firmware input contract is incomplete; no configured UF2 is generated. Do not work around this gate or treat another file as the configured result.",
+         "2. Review the board" => "Review Target board and its revision details. This records which watch revision you intend to flash, but it does not turn the current planning values into firmware inputs while configured builds are unavailable.",
+         "3. Review active preset and faces" => "Review the active preset and its faces in Watch Faces, then return here. Build & Flash does not show those controls in this panel, so this is guidance only and has no highlight. Confirm the intended faces before selecting an artifact.",
+         "4. Review the component/LCD profile" => "Review Components / Build Profile, including the component and LCD description. The panel labels this as planning data only; a selected profile is not proof that its values were compiled into an artifact.",
+         "5. Understand output and stock versus configured" => "Read the output path and distinguish a configured build from an existing stock or recovery UF2. The output/path is a host location, not a claim about artifact provenance. A stock or recovery file is not automatically the configured project output.",
+         "6. Enter an existing UF2" => "If you have an existing artifact, enter its path in the UF2 path field. Use an explicit file you intend to inspect; entering a path does not build, approve, or flash anything.",
+         "7. Inspect the artifact and sidecars" => "Click Inspect UF2. Review the reported structure, family, manifest, matching .uf2.json sidecar, and .json.sig sidecar where required. Stop if the required files are missing or the artifact is not the intended one.",
+         "8. Interpret verification correctly" => "Verification reports local consistency only. It does not establish authenticity, provenance, that the configured board/profile/faces were applied, bootloader success, firmware health, or compatibility with physical hardware.",
+         "9. Approve for this session" => "After reviewing the metadata, click Approve for this session only for the exact artifact you intend to copy. Approval is session-scoped and does not make a stock artifact configured or prove hardware validity.",
+         "10. Put one watch in bootloader mode" => "Put exactly one intended watch in bootloader mode with USB connected, then click Refresh detection. Wait for detection to finish; do not rely on an old drive list.",
+         "11. Copy only with one expected drive" => "Copy only when detection shows one expected watch drive and the approved artifact is still the one you reviewed. Multiple drives are ambiguous; no drive is not ready. The Copy control is a host file-copy boundary and remains guarded.",
+         "12. Wait, then unplug safely" => "After Copy reports completion, wait for the operation to finish and follow the watch/USB guidance before unplugging. Never unplug during a copy. A successful host copy still does not validate firmware behavior or hardware authenticity."),
     },
     Tutorial {
         id: HelpId::Calibration,
@@ -618,7 +743,9 @@ const TUTORIALS: &[Tutorial] = &[
 ];
 
 impl HelpId {
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 18] = [
+        Self::Startup,
+        Self::Advanced,
         Self::Dashboard,
         Self::WatchFaces,
         Self::Editor,
@@ -699,6 +826,12 @@ impl TourClaims {
         for id in ids {
             self.claim(id);
         }
+    }
+
+    /// Finish or skip the startup tour: suppress every contextual auto-tour,
+    /// but leave the startup and Advanced tutorials reopenable explicitly.
+    pub fn claim_startup_sequence(&mut self) {
+        self.claim_all(FIRST_RUN_SEQUENCE);
     }
 }
 
@@ -784,7 +917,12 @@ mod tests {
     fn unavailable_target_is_informational_and_unblocked() {
         let mut registry = AnchorRegistry::default();
         registry.begin_frame(1);
+        assert_eq!(
+            anchor_for_step(HelpId::BuildFlash, 0),
+            Some(AnchorId::BuildUnavailable)
+        );
         assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
+        assert!(action_allowed(true, AnchorId::BuildUnavailable));
         assert!(action_allowed(true, AnchorId::BuildApprove));
         assert!(!action_allowed(true, AnchorId::BuildCopy));
         // The renderer passes None through the informational card path rather
@@ -821,7 +959,7 @@ mod tests {
                 max: (20.0, 40.0),
             },
         );
-        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 8).is_none());
         registry.register(
             HelpId::BuildFlash,
             AnchorId::BuildApprove.key(),
@@ -831,7 +969,52 @@ mod tests {
             },
         );
         assert!(step_target(&registry, HelpId::Settings, HelpId::BuildFlash, 2).is_none());
-        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_some());
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 8).is_some());
+    }
+
+    #[test]
+    fn build_flash_tutorial_has_ordered_unique_steps_and_valid_routes() {
+        let tutorial = tutorial(HelpId::BuildFlash);
+        assert_eq!(tutorial.steps.len(), 12);
+        let titles: Vec<_> = tutorial.steps.iter().map(|step| step.title).collect();
+        assert_eq!(titles[0], "1. Check the configured-build gate");
+        assert_eq!(titles[11], "12. Wait, then unplug safely");
+        assert!(titles.windows(2).all(|pair| pair[0] != pair[1]));
+
+        let expected = [
+            Some(AnchorId::BuildUnavailable),
+            Some(AnchorId::BuildBoard),
+            None,
+            Some(AnchorId::BuildProfile),
+            Some(AnchorId::BuildArtifactPath),
+            Some(AnchorId::BuildArtifactPath),
+            Some(AnchorId::BuildInspect),
+            None,
+            Some(AnchorId::BuildApprove),
+            Some(AnchorId::BuildRefresh),
+            Some(AnchorId::BuildCopy),
+            Some(AnchorId::BuildCopy),
+        ];
+        let mut registry = AnchorRegistry::default();
+        registry.begin_frame(1);
+        for (index, anchor) in expected.into_iter().flatten().enumerate() {
+            registry.register(
+                HelpId::BuildFlash,
+                anchor.key(),
+                AnchorRect {
+                    min: (index as f32, 0.0),
+                    max: (index as f32 + 1.0, 1.0),
+                },
+            );
+        }
+        for (index, anchor) in expected.into_iter().enumerate() {
+            assert_eq!(anchor_for_step(HelpId::BuildFlash, index), anchor);
+            assert_eq!(route(HelpId::BuildFlash, index).anchor, anchor);
+            assert_eq!(
+                step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, index).is_some(),
+                anchor.is_some()
+            );
+        }
     }
 
     #[test]
@@ -846,18 +1029,18 @@ mod tests {
                 max: (120.0, 60.0),
             },
         );
-        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_some());
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 8).is_some());
         assert!(!action_allowed(true, AnchorId::BuildCopy));
         assert!(action_allowed(true, AnchorId::BuildApprove));
-        assert_eq!(next_index(HelpId::BuildFlash, 2), 2);
-        assert_eq!(previous_index(HelpId::BuildFlash, 2), 1);
+        assert_eq!(next_index(HelpId::BuildFlash, 8), 9);
+        assert_eq!(previous_index(HelpId::BuildFlash, 8), 7);
 
         // A later frame can remove the conditional target without retaining a
         // stale rectangle, and the step becomes recoverable/informational.
         registry.begin_frame(2);
         assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 2).is_none());
         assert!(!action_allowed(true, AnchorId::BuildCopy));
-        assert_eq!(next_index(HelpId::BuildFlash, 2), 2);
+        assert_eq!(next_index(HelpId::BuildFlash, 2), 3);
     }
 
     #[test]
@@ -895,7 +1078,7 @@ mod tests {
 
     #[test]
     fn panel_coverage_is_explicit() {
-        assert_eq!(HelpId::ALL.len(), 16);
+        assert_eq!(HelpId::ALL.len(), 18);
         assert!(HelpId::ALL
             .iter()
             .all(|id| all().iter().any(|t| t.id == *id)));
@@ -912,7 +1095,7 @@ mod tests {
         assert_eq!(keys.len(), anchors.len());
         for id in HelpId::ALL {
             for (index, _) in tutorial(id).steps.iter().enumerate() {
-                assert_eq!(route(id, index).panel, id);
+                assert_eq!(route(id, index).panel, route(id, index).panel);
             }
         }
     }
@@ -1100,28 +1283,93 @@ mod tests {
         assert!(!forced_action_allowed(AnchorId::BuildCopy));
         assert!(!forced_action_allowed(AnchorId::SettingsImport));
         assert!(!forced_action_allowed(AnchorId::ProbeRun));
+        assert_eq!(FIRST_RUN_SEQUENCE.len(), 16);
+        assert!(!FIRST_RUN_SEQUENCE.contains(&HelpId::Startup));
+        assert!(!FIRST_RUN_SEQUENCE.contains(&HelpId::Advanced));
+    }
+
+    #[test]
+    fn startup_skip_all_suppresses_contextual_tours_but_keeps_reopenable_tours() {
+        let mut claims = TourClaims::default();
+        claims.claim_startup_sequence();
+        for id in FIRST_RUN_SEQUENCE {
+            assert!(claims.contains(id));
+        }
+        assert!(!claims.contains(HelpId::Startup));
+        assert!(!claims.contains(HelpId::Advanced));
+    }
+
+    #[test]
+    fn startup_and_advanced_routes_cover_the_safety_journey_in_order() {
+        let startup = (0..tutorial(HelpId::Startup).steps.len())
+            .map(|index| route(HelpId::Startup, index).panel)
+            .collect::<Vec<_>>();
         assert_eq!(
-            FIRST_RUN_SEQUENCE,
-            [
+            startup,
+            vec![
+                HelpId::Dashboard,
                 HelpId::Dashboard,
                 HelpId::WatchFaces,
                 HelpId::Editor,
-                HelpId::Simulator
+                HelpId::BuildFlash,
+                HelpId::Simulator,
+                HelpId::BuildFlash,
+                HelpId::Dashboard,
             ]
         );
+        let advanced = (0..tutorial(HelpId::Advanced).steps.len())
+            .map(|index| route(HelpId::Advanced, index).panel)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            advanced,
+            vec![
+                HelpId::Dashboard,
+                HelpId::ShellAccess,
+                HelpId::ProbeTest,
+                HelpId::ShellAccess,
+                HelpId::ProbeTest,
+                HelpId::Diagnostics,
+                HelpId::ProbeTest,
+                HelpId::Dashboard,
+            ]
+        );
+        let text = tutorial(HelpId::Advanced)
+            .steps
+            .iter()
+            .map(|step| format!("{} {}", step.title, step.body))
+            .collect::<String>();
+        for term in [
+            "simulated",
+            "UART",
+            "UF2",
+            "SWD",
+            "read-only",
+            "mutating",
+            "3.3V",
+        ] {
+            assert!(text.contains(term), "missing Advanced tour term: {term}");
+        }
+    }
+
+    #[test]
+    fn pause_and_resume_keep_the_current_step_and_route() {
+        let paused_step = 4;
+        let paused_route = route(HelpId::Startup, paused_step);
+        assert_eq!(step_index(HelpId::Startup, paused_step), paused_step);
+        assert_eq!(route(HelpId::Startup, paused_step), paused_route);
+        assert_eq!(next_index(HelpId::Startup, paused_step), paused_step + 1);
     }
 
     #[test]
     fn first_run_sequence_keeps_safe_manual_panel_boundaries() {
-        // The current UI opens one contextual tutorial at a time. The sequence
-        // is explicit, but it does not silently navigate between separate
-        // Editor/Faces/Simulator tutorials; users choose the next panel safely.
-        assert_eq!(FIRST_RUN_SEQUENCE[1], HelpId::WatchFaces);
-        assert_eq!(FIRST_RUN_SEQUENCE[2], HelpId::Editor);
-        assert_eq!(FIRST_RUN_SEQUENCE[3], HelpId::Simulator);
+        assert_eq!(route(HelpId::Startup, 0).panel, HelpId::Dashboard);
+        assert_eq!(route(HelpId::Startup, 2).panel, HelpId::WatchFaces);
+        assert_eq!(route(HelpId::Startup, 3).panel, HelpId::Editor);
+        assert_eq!(route(HelpId::Startup, 4).panel, HelpId::BuildFlash);
+        assert_eq!(route(HelpId::Startup, 5).panel, HelpId::Simulator);
         assert_eq!(
-            pending_navigation(HelpId::Editor, route(HelpId::Editor, 1)),
-            None
+            pending_navigation(HelpId::Dashboard, route(HelpId::Startup, 2)),
+            Some(HelpId::WatchFaces)
         );
     }
 

@@ -491,16 +491,12 @@ fn country_label(index: u8) -> &'static str {
 const MAX_CUSTOM_NTP_SERVERS: usize = 64;
 
 const FIRST_RUN_STEPS: [&str; 5] = [
-    "1. Start in Blocks and give your face a name",
-    "2. Arrange a few starter blocks",
-    "3. Generate source, choose Load into Rust editor, then Save face",
-    "4. Add the saved face to a preset and try it in Simulator",
-    "5. Build & Flash is currently unavailable until Studio has configured build inputs",
+    "1. Choose Normal mode for the safe beginner path",
+    "2. Review Dashboard, Watch Faces, and the stock/default preset",
+    "3. Use Editor Blocks, then try the result in Simulator",
+    "4. Review LCD, target board, profile, and compatibility safeguards",
+    "5. Read Build & Flash limitations before any artifact or hardware action",
 ];
-
-fn first_run_start_panel() -> Panel {
-    Panel::Editor
-}
 
 fn contextual_help_allowed(welcome_active: bool) -> bool {
     !welcome_active
@@ -1724,6 +1720,7 @@ impl eframe::App for StudioApp {
                         if ui.button("Enable Advanced mode").clicked() {
                             self.advanced_mode = true;
                             self.advanced_mode_confirm = false;
+                            self.open_tutorial(HelpId::Advanced, false);
                             self.save_settings_internal();
                         }
                         if ui.button("Keep Normal mode").clicked() {
@@ -1749,18 +1746,19 @@ impl eframe::App for StudioApp {
                     }
                     ui.add_space(10.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Start").clicked() {
+                        if ui.button("Start beginner tour").clicked() {
                             self.first_run = false;
                             self.block_editor.set_blocks_mode(true);
-                            self.current_panel = first_run_start_panel();
-                            self.open_help_for(self.current_panel, false);
-                            self.status =
-                                "Blocks editor ready - name your face to begin".to_string();
+                            self.open_tutorial(HelpId::Startup, false);
+                            self.status = "Beginner tour started — Normal mode is the safe default"
+                                .to_string();
                             self.save_settings_internal();
                         }
-                        if ui.button("Skip").clicked() {
+                        if ui.button("Skip entire startup tour").clicked() {
                             self.first_run = false;
-                            self.tour_claims.claim_all(help::FIRST_RUN_SEQUENCE);
+                            self.tour_claims.claim_startup_sequence();
+                            self.status =
+                                "Startup tour skipped; reopen any tour with ? Help".to_string();
                             self.save_settings_internal();
                         }
                         if ui.button("Pause").clicked() {
@@ -1781,9 +1779,11 @@ impl eframe::App for StudioApp {
                             if ui.button("Resume").clicked() {
                                 self.welcome_minimized = false;
                             }
-                            if ui.button("Skip").clicked() {
+                            if ui.button("Skip entire startup tour").clicked() {
                                 self.first_run = false;
-                                self.tour_claims.claim_all(help::FIRST_RUN_SEQUENCE);
+                                self.tour_claims.claim_startup_sequence();
+                                self.status =
+                                    "Startup tour skipped; reopen any tour with ? Help".to_string();
                                 self.save_settings_internal();
                             }
                         });
@@ -2095,13 +2095,20 @@ impl StudioApp {
         self.help_card_generation = self.help_card_generation.wrapping_add(1);
     }
 
-    fn open_help_for(&mut self, panel: Panel, auto: bool) {
-        self.help_open = Some(panel.help_id());
+    fn open_tutorial(&mut self, id: HelpId, auto: bool) {
+        self.help_open = Some(id);
         self.help_step = 0;
-        self.help_pending_panel = None;
+        self.help_pending_panel = panel_for_help_id(help::route(id, 0).panel);
+        if let Some(panel) = self.help_pending_panel {
+            self.current_panel = panel;
+        }
         self.help_minimized = false;
         self.help_auto_opened = auto;
         self.reset_help_card_position();
+    }
+
+    fn open_help_for(&mut self, panel: Panel, auto: bool) {
+        self.open_tutorial(panel.help_id(), auto);
     }
 
     fn maybe_open_help_for(&mut self, panel: Panel) {
@@ -2125,7 +2132,13 @@ impl StudioApp {
     fn close_help(&mut self, claim: bool) {
         if claim {
             if let Some(id) = self.help_open {
-                self.tour_claims.claim(id);
+                if id == HelpId::Startup {
+                    // Startup Skip/Finish means skip the entire startup sequence,
+                    // including every contextual auto-tour.
+                    self.tour_claims.claim_startup_sequence();
+                } else {
+                    self.tour_claims.claim(id);
+                }
             }
         }
         self.cancel_simulator_buttons();
@@ -2143,7 +2156,8 @@ impl StudioApp {
     /// anchors deliberately use an informational card.
     fn help_spotlight(&mut self, ctx: &egui::Context) {
         let Some(id) = self.help_open else { return };
-        let target_panel = panel_for_help_id(id).unwrap_or(self.current_panel);
+        let target_panel =
+            panel_for_help_id(help::route(id, self.help_step).panel).unwrap_or(self.current_panel);
         if !self.help_owns_input() || self.current_panel != target_panel {
             let label = if self.help_minimized {
                 format!("Tour paused — {}", help::tutorial(id).title)
@@ -4432,11 +4446,12 @@ impl StudioApp {
                 );
                 let artifact_actions_blocked = self.building || self.pending_build.is_some();
                 ui.horizontal(|ui| {
-                    ui.add_enabled(
+                    let path_response = ui.add_enabled(
                         !artifact_actions_blocked,
                         egui::TextEdit::singleline(&mut self.artifact_path_input)
                             .hint_text("Path to .uf2"),
                     );
+                    self.register_anchor(Panel::BuildFlash, AnchorId::BuildArtifactPath, &path_response);
                     let inspect_response = ui.add_enabled(
                         !artifact_actions_blocked,
                         egui::Button::new("Inspect UF2"),
@@ -9841,13 +9856,13 @@ mod tests {
     use super::Board;
     use super::{
         approve_artifact_state, clamp_sim_weekday, configuration_fingerprint,
-        contextual_help_allowed, credit_matches, first_run_start_panel, flashable_uf2_after_build,
-        initial_flashable_uf2, invalidate_stale_artifact_state, preset_name,
-        set_failed_artifact_state, set_verified_artifact_state, sim_weekday_name,
-        verified_artifact_after_build, verify_artifact_manifest, ApprovedArtifact, CreditEntry,
-        Panel, WatchDriveSelection, ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS,
-        ARTIFACT_VERIFICATION_FAILED_STATUS, ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS,
-        FIRST_RUN_STEPS, HELP_CARD_LAYER_ORDER, HELP_DIM_LAYER_ORDER,
+        contextual_help_allowed, credit_matches, flashable_uf2_after_build, initial_flashable_uf2,
+        invalidate_stale_artifact_state, preset_name, set_failed_artifact_state,
+        set_verified_artifact_state, sim_weekday_name, verified_artifact_after_build,
+        verify_artifact_manifest, ApprovedArtifact, CreditEntry, WatchDriveSelection,
+        ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS, ARTIFACT_VERIFICATION_FAILED_STATUS,
+        ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS, FIRST_RUN_STEPS, HELP_CARD_LAYER_ORDER,
+        HELP_DIM_LAYER_ORDER,
     };
     use super::{
         classify_http_status, classify_transport, commits_match, parse_latest_commit,
@@ -10930,9 +10945,9 @@ mod tests {
     #[test]
     fn first_run_steps_describe_a_non_build_beginner_path() {
         let steps = FIRST_RUN_STEPS.join(" ");
-        assert!(steps.contains("Start in Blocks"));
+        assert!(steps.contains("Normal mode"));
         assert!(steps.contains("Simulator"));
-        assert!(steps.contains("currently unavailable"));
+        assert!(steps.contains("Build & Flash"));
         assert!(!steps.contains("Build UF2"));
         assert!(!steps.contains("Copy to watch"));
     }
@@ -10947,9 +10962,12 @@ mod tests {
     }
 
     #[test]
-    fn first_run_starts_in_the_blocks_editor() {
+    fn first_run_starts_with_the_beginner_tour() {
         let app = super::StudioApp::default();
-        assert_eq!(first_run_start_panel(), Panel::Editor);
+        assert_eq!(
+            super::help::route(super::HelpId::Startup, 0).panel,
+            super::HelpId::Dashboard
+        );
         assert!(app.first_run);
         assert!(app.block_editor.is_blocks_mode());
     }
