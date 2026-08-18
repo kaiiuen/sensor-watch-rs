@@ -5,6 +5,7 @@ members = [
     "core",
     "studio",
     "tools",
+    "desktop-update",
     "launcher",
 ]
 # `cargo build` / `cargo run` at the root operate on the GUI app by default.
