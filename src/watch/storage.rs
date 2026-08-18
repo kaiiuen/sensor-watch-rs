@@ -242,7 +242,7 @@ pub fn sync() -> bool {
 ///
 /// We rotate writes across these rows so no single row wears out first,
 /// extending the life of the EEPROM emulation area.
-const WEAR_ROWS: u32 = 8;
+const WEAR_ROWS: u32 = 12;
 
 /// A magic value written at the start of each wear-leveled row to identify a
 /// committed entry.
@@ -259,6 +259,8 @@ const LEGACY_WEAR_HEADER_SIZE: u32 = 12;
 const NAMESPACE_ROWS: u32 = WEAR_ROWS / 2;
 const CRC_NAMESPACE: u32 = 0x4352_4301;
 const SETTINGS_NAMESPACE: u32 = 0x5357_0001;
+/// Versioned RTC calibration profiles have their own wear-levelled rows.
+pub const RTC_CALIBRATION_NAMESPACE: u32 = 0x5254_0001;
 
 /// The current wear-leveling row index, kept in RAM.
 ///
@@ -439,6 +441,7 @@ fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
     match namespace {
         CRC_NAMESPACE => Some((0, NAMESPACE_ROWS)),
         SETTINGS_NAMESPACE => Some((NAMESPACE_ROWS, NAMESPACE_ROWS)),
+        RTC_CALIBRATION_NAMESPACE => Some((NAMESPACE_ROWS * 2, NAMESPACE_ROWS)),
         _ => None,
     }
 }

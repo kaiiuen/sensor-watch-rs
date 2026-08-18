@@ -55,11 +55,18 @@ impl RtcCalibration {
     }
 
     pub fn correction_ppm(self, temperature_c: f32) -> f32 {
-        if !self.is_enabled() || !temperature_c.is_finite() {
+        self.combined_correction_ppm(0.0, temperature_c)
+    }
+
+    /// Combines the separately controlled manual correction with the stored
+    /// temperature profile. The result is bounded before it reaches FREQCORR.
+    pub fn combined_correction_ppm(self, manual_ppm: f32, temperature_c: f32) -> f32 {
+        if !self.is_enabled() || !manual_ppm.is_finite() || !temperature_c.is_finite() {
             return 0.0;
         }
         let temperature = temperature_c.clamp(MIN_TEMPERATURE_C, MAX_TEMPERATURE_C);
-        (self.base_ppm
+        (manual_ppm
+            + self.base_ppm
             + self.temperature_coefficient_ppm_per_c * (temperature - self.reference_temperature_c))
             .clamp(-MAX_BASE_PPM, MAX_BASE_PPM)
     }
@@ -185,6 +192,19 @@ mod tests {
         bytes[11] = 1;
         assert!(RtcCalibration::decode(&bytes).is_none());
     }
+    #[test]
+    fn combines_manual_correction_and_bounds_result() {
+        let c = RtcCalibration::new(900.0, 100.0, 25.0);
+        assert_eq!(c.combined_correction_ppm(900.0, 125.0), MAX_BASE_PPM);
+        assert_eq!(c.combined_correction_ppm(-900.0, -80.0), -MAX_BASE_PPM);
+    }
+
+    #[test]
+    fn unavailable_temperature_disables_correction() {
+        let c = RtcCalibration::new(1.0, 2.0, 25.0);
+        assert_eq!(c.combined_correction_ppm(4.0, f32::NAN), 0.0);
+    }
+
     #[test]
     fn fits_line_deterministically() {
         let c = recommended_calibration(&[(15.0, -2.0), (25.0, 8.0), (35.0, 18.0)], 25.0).unwrap();

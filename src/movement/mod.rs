@@ -79,6 +79,7 @@ pub mod ratemeter;
 pub mod repetition_minute;
 pub mod rpn_calculator;
 pub mod rpn_calculator_alt;
+pub mod rtc_calibration_store;
 pub mod sailing;
 pub mod save_load;
 pub mod set_time;

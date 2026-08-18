@@ -13,7 +13,6 @@ use crate::watch::utility;
 const DITHERING: i32 = 31;
 const NANOSEC_MAX_SCREEN: u8 = 7;
 const NANOSEC_PROFILE_COUNT: u8 = 5;
-const VOLTAGE_COEFFICIENT: f32 = 0.241_666_67 * DITHERING as f32;
 
 /// The nanosec state.
 pub struct NanosecState {
@@ -362,23 +361,11 @@ impl WatchFace for NanosecFace {
                 }
             }
             Event::BackgroundTask => {
-                let temperature_c = 25.0f32;
-                let voltage = 3.0f32;
-                let dt = temperature_c - self.state.center_temperature as f32 / 100.0;
-                let correction = libm::roundf(
-                    (self.state.freq_correction as f32 / 100.0 * DITHERING as f32
-                        + (-self.state.quadratic_tempco as f32 / 100000.0 * DITHERING as f32)
-                            * dt
-                            * dt
-                        + (self.state.cubic_tempco as f32 / 10000000.0 * DITHERING as f32)
-                            * dt
-                            * dt
-                            * dt
-                        + (voltage - 3.0) * VOLTAGE_COEFFICIENT
-                        + self.get_aging() * DITHERING as f32)
-                        / 0.95367,
-                ) as i16;
-                self.apply_rtc_correction(correction);
+                // Legacy nanosec profiles are no longer an independent
+                // compensation model. The authoritative stored profile path
+                // reads a validated sensor and otherwise fails closed.
+                let manual_ppm = self.state.freq_correction / 100;
+                let _result = movement::rtc_calibration_store::apply(manual_ppm);
             }
             Event::Button(Button::Light, ButtonEvent::Down) => {}
             _ => movement::default_loop_handler(event, _settings),

@@ -82,13 +82,14 @@ pub fn sync() -> bool {
 /// The host model uses the same bounded log as the firmware. Keeping the
 /// records in rows (rather than a map) is important: tests can then exercise
 /// the same erase-before-reuse and interrupted-write behavior as the device.
-const WEAR_ROWS: u32 = 8;
+const WEAR_ROWS: u32 = 12;
 const WEAR_MAGIC: u32 = 0x574C_0001;
 const WEAR_HEADER_SIZE: u32 = 20;
 const LEGACY_WEAR_HEADER_SIZE: u32 = 12;
 const NAMESPACE_ROWS: u32 = WEAR_ROWS / 2;
 const CRC_NAMESPACE: u32 = 0x4352_4301;
 const SETTINGS_NAMESPACE: u32 = 0x5357_0001;
+pub const RTC_CALIBRATION_NAMESPACE: u32 = 0x5254_0001;
 
 static mut WEAR_ROW: u32 = 0;
 
@@ -218,6 +219,7 @@ fn namespace_rows(namespace: u32) -> Option<(u32, u32)> {
     match namespace {
         CRC_NAMESPACE => Some((0, NAMESPACE_ROWS)),
         SETTINGS_NAMESPACE => Some((NAMESPACE_ROWS, NAMESPACE_ROWS)),
+        RTC_CALIBRATION_NAMESPACE => Some((NAMESPACE_ROWS * 2, NAMESPACE_ROWS)),
         _ => None,
     }
 }
@@ -377,9 +379,9 @@ mod tests {
         assert!(wear_leveled_read(0, &mut latest));
         assert_eq!(latest, [9]);
 
-        // The newest record is row 0 after the ninth write. Damage its
+        // The newest record is row 8 after the ninth write. Damage its
         // generation complement as an interrupted header write would do.
-        assert!(write(0, 8, &[0]));
+        assert!(write(8, 8, &[0]));
         let mut recovered = [0];
         assert!(wear_leveled_read(0, &mut recovered));
         assert_eq!(recovered, [8]);

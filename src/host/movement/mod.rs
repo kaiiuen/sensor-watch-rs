@@ -504,6 +504,9 @@ pub mod nanosec {
     pub use real::NanosecFace;
 }
 
+#[path = "../../movement/rtc_calibration_store.rs"]
+pub mod rtc_calibration_store;
+
 /// The REAL `orrery` face. Uses `movement::TIMEZONE_OFFSETS`, `watch::rtc`,
 /// `watch::slcd`, and `watch::utility`.
 pub mod orrery {
