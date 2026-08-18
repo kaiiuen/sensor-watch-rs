@@ -6,6 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
+
+use crate::master_clock;
 use std::sync::OnceLock;
 
 pub const MANIFEST_FILE: &str = "sensor-watch-package.json";
@@ -34,6 +36,9 @@ pub struct PackageManifest {
     pub tools_directory: Option<String>,
     #[serde(default)]
     pub targets_directory: Option<String>,
+    /// Optional, explicitly licensed/tracked Master Clock capability.
+    #[serde(default)]
+    pub master_clock: Option<master_clock::PackageToolCapability>,
     #[serde(default)]
     pub user_data_directory: Option<String>,
 }
@@ -52,6 +57,7 @@ pub struct CapabilityStatus {
     pub firmware_project: bool,
     pub tools: bool,
     pub targets: bool,
+    pub master_clock: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +74,8 @@ pub struct PackageStatus {
     pub active_project: Option<PathBuf>,
     pub tools: Option<PathBuf>,
     pub targets: Option<PathBuf>,
+    /// Validated package-local Master Clock executable, if declared and present.
+    pub master_clock: Option<PathBuf>,
     pub user_data_root: PathBuf,
     pub current_version: Option<String>,
     pub previous_version: Option<String>,
@@ -127,6 +135,7 @@ pub fn resolve(
             firmware_project: project,
             tools: None,
             targets: None,
+            master_clock: None,
             user_data_root,
             current_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             previous_version: None,
@@ -136,6 +145,7 @@ pub fn resolve(
                 firmware_project: caps,
                 tools: false,
                 targets: false,
+                master_clock: false,
             },
             warnings,
         };
@@ -151,6 +161,7 @@ pub fn resolve(
         active_project: None,
         tools: None,
         targets: None,
+        master_clock: None,
         user_data_root,
         current_version: None,
         previous_version: None,
@@ -160,6 +171,7 @@ pub fn resolve(
             firmware_project: false,
             tools: false,
             targets: false,
+            master_clock: false,
         },
         warnings: vec!["No package manifest found; developer fallback is disabled".into()],
     }
@@ -179,6 +191,19 @@ fn package_status(
     let tools = manifest.tools_directory.as_deref().map(path);
     let targets = manifest.targets_directory.as_deref().map(path);
     let mut warnings = Vec::new();
+    let validated_master_clock = manifest.master_clock.as_ref().and_then(|capability| {
+        match master_clock::validate_package_tool(
+            &root,
+            capability,
+            &master_clock::NoCapabilityAuthenticator,
+        ) {
+            Ok(path) => Some(path),
+            Err(error) => {
+                warnings.push(format!("Master Clock capability unavailable: {error}"));
+                None
+            }
+        }
+    });
     if manifest.schema_version != MANIFEST_SCHEMA {
         warnings.push(format!(
             "Unsupported package manifest schema {}",
@@ -213,6 +238,7 @@ fn package_status(
         active_project,
         tools: tools.clone(),
         targets: targets.clone(),
+        master_clock: validated_master_clock.clone(),
         user_data_root,
         current_version: Some(manifest.current_version.version),
         previous_version: manifest.previous_version.map(|v| v.version),
@@ -222,6 +248,7 @@ fn package_status(
             firmware_project: exists(&firmware_project),
             tools: tools.as_deref().is_some_and(exists),
             targets: targets.as_deref().is_some_and(exists),
+            master_clock: validated_master_clock.is_some(),
         },
         warnings,
     }
@@ -373,6 +400,10 @@ fn safe_manifest(manifest: &PackageManifest) -> bool {
             .as_deref()
             .is_none_or(safe_relative)
         && manifest
+            .master_clock
+            .as_ref()
+            .is_none_or(|capability| capability.path == master_clock::TOOL_RELATIVE_PATH)
+        && manifest
             .user_data_directory
             .as_deref()
             .is_none_or(safe_relative)
@@ -455,7 +486,8 @@ mod tests {
             "templates_directory":"templates",
             "firmware_project_directory":"firmware",
             "tools_directory":"tools",
-            "targets_directory":"targets"
+            "targets_directory":"targets",
+            "master_clock": null
         })
         .to_string()
     }

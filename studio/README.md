@@ -202,10 +202,14 @@ The binary is `target/release/sensor-watch-studio`. A release executable by
 itself is not a full distribution. Folder-based packages must place
 `sensor-watch-package.json` beside the package root and identify the launcher,
 versioned app directory, resources, templates, firmware project, and optional
-tools/targets. Studio reports **Packaged mode** only after validating that
-manifest. Missing project sources or tools are reported as unavailable. Studio
-never claims full self-containment in that case. Mutable settings and user data
-remain under the platform user-data directory, separate from the package.
+tools/targets and the optional `master_clock` capability. Studio reports
+**Packaged mode** only after validating that manifest. Missing project sources or
+tools are reported as unavailable. The Master Clock action is Advanced-only,
+on-demand, package-local, hash-validated, and never launched at startup. It
+warns that NTP/geolocation are external network activity and does not change
+Windows time. The package builder does not bundle the unlicensed/untracked
+Master Clock source. Mutable settings and user data remain under the platform
+user-data directory, separate from the package.
 
 A binary copied from a developer checkout does not silently use that checkout.
 To opt into checkout paths for local development, set

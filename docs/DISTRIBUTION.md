@@ -22,6 +22,7 @@ before Studio enters packaged mode:
   "firmware_project_directory": "firmware",
   "tools_directory": "tools",
   "targets_directory": "targets",
+  "master_clock": null,
   "user_data_directory": "user-data"
 }
 ```
@@ -37,8 +38,14 @@ executable directly.
 
 `resources`, `templates`, and `firmware_project` are reported independently.
 `tools` and `targets` are optional paths but are still reported as capabilities
-when present. A package is never described as self-contained when any required
-project/resource capability or optional tool/target bundle is absent.
+when present. The optional `master_clock` capability must be exactly
+`tools/master-clock.exe`, include a SHA-256 digest, and may include a signature
+checked through the existing desktop-update authentication hook. The executable
+must be present, package-local, and hash-valid before Advanced Settings exposes
+it. The package builder emits this capability as absent: the unlicensed,
+untracked Master Clock source is not bundled automatically. A package is never
+described as self-contained when any required project/resource capability or
+optional tool/target bundle is absent.
 
 ## Runtime modes and mutable data
 
@@ -50,6 +57,11 @@ project/resource capability or optional tool/target bundle is absent.
   unavailable; Studio does not silently use a checkout.
 - Settings, presets, logs, restore points, and generated user data stay in the
   platform user-data root and are not written into the package root.
+- Master Clock is never launched during startup. In Advanced mode it is an
+  explicit, confirmed action with a privacy warning: NTP and geolocation are
+  external network activity, and Windows time is not changed. Developer mode
+  accepts only an explicitly configured and validated executable path; it never
+  searches `PATH`.
 
 The footer displays the mode, current package version when available, and
 whether the distribution is complete or partial. Missing resources are shown

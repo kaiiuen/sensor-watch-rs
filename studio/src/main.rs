@@ -25,6 +25,7 @@ mod fuzz;
 mod help;
 mod i18n;
 mod integrity;
+mod master_clock;
 mod modules;
 mod ntp;
 mod optical;
@@ -399,6 +400,10 @@ struct StudioApp {
     advanced_mode: bool,
     /// Whether the advanced-mode warning is awaiting confirmation.
     advanced_mode_confirm: bool,
+    /// Explicit developer-configured Master Clock path; never read from PATH.
+    master_clock_path: String,
+    /// The on-demand Master Clock child process.
+    master_clock_process: Option<master_clock::MasterClockProcess>,
     /// Most recent physical probe report.
     probe_report: Option<probe::ProbeReport>,
     /// Background physical probe worker and its nonblocking progress channel.
@@ -563,6 +568,7 @@ enum ConfirmKind {
     RemoveModule(String),
     RunPhysicalProbe,
     ResetTestProfile,
+    LaunchMasterClock,
 }
 
 fn panel_for_help_id(id: HelpId) -> Option<Panel> {
@@ -1071,6 +1077,8 @@ impl Default for StudioApp {
             restore_name: String::new(),
             advanced_mode: false,
             advanced_mode_confirm: false,
+            master_clock_path: String::new(),
+            master_clock_process: None,
             probe_report: None,
             pending_probe: None,
             probe_progress_rx: None,
@@ -1216,6 +1224,10 @@ impl eframe::App for StudioApp {
                 || self.pending_detection.is_some()
                 || self.pending_flash.is_some();
             if active_workers {
+                if let Some(mut process) = self.master_clock_process.take() {
+                    process.terminate();
+                    self.status = "Master Clock terminated while Studio was closing".into();
+                }
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.status = "Finish background work before closing".to_string();
                 self.log
@@ -1230,6 +1242,7 @@ impl eframe::App for StudioApp {
             }
         }
 
+        self.poll_master_clock();
         self.poll_flash_workers();
         self.poll_probe_worker();
         self.invalidate_stale_artifact();
@@ -1889,6 +1902,25 @@ impl eframe::App for StudioApp {
                                 "Reset unavailable while background work is active".into();
                         } else if test_runtime::active().isolated_debug {
                             self.reset_test_profile();
+                        }
+                    }
+                    ConfirmKind::LaunchMasterClock => {
+                        if !self.advanced_mode {
+                            self.status = "Master Clock requires Advanced mode".into();
+                        } else if self.master_clock_process.is_some() {
+                            self.status = "Master Clock is already running".into();
+                        } else if let Some(path) = self.master_clock_executable() {
+                            match master_clock::MasterClockProcess::launch(&path) {
+                                Ok(process) => {
+                                    self.master_clock_process = Some(process);
+                                    self.status = "Master Clock started; NTP/geolocation network activity is external and Windows time will not change".into();
+                                    self.log.log("Master Clock launched on user request");
+                                }
+                                Err(error) => {
+                                    self.status = error;
+                                    self.log_error(&self.status.clone());
+                                }
+                            }
                         }
                     }
                     ConfirmKind::RunPhysicalProbe => {
@@ -7366,6 +7398,35 @@ impl StudioApp {
         }
     }
 
+    fn master_clock_executable(&self) -> Option<std::path::PathBuf> {
+        if let Some(path) = self.package_status.master_clock.as_ref() {
+            return Some(path.clone());
+        }
+        if self.package_status.mode == distribution::DistributionMode::Developer
+            && !self.master_clock_path.trim().is_empty()
+        {
+            return master_clock::validate_developer_tool(std::path::Path::new(
+                self.master_clock_path.trim(),
+            ))
+            .ok();
+        }
+        None
+    }
+
+    fn poll_master_clock(&mut self) {
+        let Some(mut process) = self.master_clock_process.take() else {
+            return;
+        };
+        match process.poll() {
+            Ok(true) => self.master_clock_process = Some(process),
+            Ok(false) => self.status = "Master Clock exited unsuccessfully".into(),
+            Err(error) => {
+                self.status = error;
+                self.log_error(&self.status.clone());
+            }
+        }
+    }
+
     /// The settings panel: configure the app and the watch.
     fn settings(&mut self, ui: &mut egui::Ui) {
         ui.heading(tr(self.language, Key::Settings));
@@ -7600,6 +7661,57 @@ impl StudioApp {
                 self.advanced_mode_confirm = true;
             }
             return;
+        }
+
+        ui.add_space(16.0);
+        ui.separator();
+        ui.heading("NTP Time / Master Clock");
+        ui.label("Optional on-demand tool. NTP and any geolocation behavior are external network activity; this does not change Windows time.");
+        ui.weak("Studio never starts this tool automatically. Only a validated package-local tools/master-clock.exe is offered.");
+        if self.package_status.mode == distribution::DistributionMode::Developer {
+            ui.horizontal(|ui| {
+                ui.label("Explicit developer path:");
+                ui.text_edit_singleline(&mut self.master_clock_path);
+                if ui.button("Validate path").clicked() {
+                    match master_clock::validate_developer_tool(std::path::Path::new(
+                        self.master_clock_path.trim(),
+                    )) {
+                        Ok(path) => {
+                            self.status = format!("Validated Master Clock: {}", path.display())
+                        }
+                        Err(error) => self.status = error,
+                    }
+                }
+            });
+            ui.weak("Developer mode requires an explicit configured path and validation; PATH lookup is never used.");
+        }
+        let available = master_clock::action_available(
+            self.advanced_mode,
+            self.master_clock_executable().is_some(),
+            self.master_clock_process.is_some(),
+        );
+        let launch = ui.add_enabled(available, egui::Button::new("NTP Time / Master Clock"));
+        if launch.clicked() {
+            self.pending_confirm = Some((
+                "Launch Master Clock? It may contact NTP/geolocation services (external network activity). It will not change Windows time. Continue?".into(),
+                ConfirmKind::LaunchMasterClock,
+            ));
+        }
+        if self.master_clock_process.is_some() {
+            ui.horizontal(|ui| {
+                ui.colored_label(
+                    egui::Color32::from_rgb(100, 210, 130),
+                    "Master Clock is running",
+                );
+                if ui.button("Stop Master Clock").clicked() {
+                    if let Some(mut process) = self.master_clock_process.take() {
+                        process.terminate();
+                    }
+                    self.status = "Master Clock stopped".into();
+                }
+            });
+        } else if !available {
+            ui.weak("Unavailable: no validated package capability or explicitly validated developer executable.");
         }
 
         ui.add_space(16.0);
@@ -11231,6 +11343,12 @@ mod tests {
         app.save_settings_internal();
 
         assert_eq!(app.status, "unchanged");
+    }
+
+    #[test]
+    fn startup_does_not_launch_master_clock() {
+        let app = super::StudioApp::default();
+        assert!(app.master_clock_process.is_none());
     }
 
     #[test]

@@ -222,6 +222,10 @@ pub fn package_studio_artifacts_with_launcher(
         "firmware_project_directory": "firmware",
         "tools_directory": "tools",
         "targets_directory": "targets",
+        // Deliberately absent: the unlicensed/untracked Master Clock source is
+        // never bundled by the package builder. A separately licensed artifact
+        // may be declared by a trusted package manifest.
+        "master_clock": null,
         "user_data_directory": "(platform user-data directory; not included)",
         "capability_manifest": "PACKAGE-CAPABILITIES.json",
         "update_policy": "update-policy.json",
@@ -238,6 +242,7 @@ pub fn package_studio_artifacts_with_launcher(
             "launcher": { "available": true, "path": format!("launcher/sensor-watch-studio{EXE_SUFFIX}") },
             "versioned_app": { "available": true, "path": format!("{app_directory}/sensor-watch-studio{EXE_SUFFIX}") },
             "resources": { "available": true, "path": "resources" },
+            "master_clock": { "available": false, "path": "tools/master-clock.exe", "reason": "not bundled; provenance and licensing required" },
             "templates": { "available": true, "path": "templates" },
             "firmware_project": { "available": true, "path": "firmware" },
             "tools": { "available": false, "path": "tools", "reason": "not bundled by this builder" },
