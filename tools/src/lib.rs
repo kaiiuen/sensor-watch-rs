@@ -215,40 +215,45 @@ pub fn create_manifest(
 fn ensure_safe_parent(path: &Path) -> ToolResult<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     let mut current = if parent.is_absolute() {
-        PathBuf::from(std::path::MAIN_SEPARATOR.to_string())
+        // Build the absolute path from its prefix and root components. Starting
+        // with a standalone root turns Windows extended drive paths into an
+        // invalid `\\?\C::` path when the prefix is appended.
+        PathBuf::new()
     } else {
         env::current_dir().map_err(|e| format!("cannot resolve output directory: {e}"))?
     };
     for component in parent.components() {
         match component {
             std::path::Component::Prefix(prefix) => current.push(prefix.as_os_str()),
-            std::path::Component::RootDir => {}
+            std::path::Component::RootDir => current.push(component.as_os_str()),
             std::path::Component::CurDir => {}
             std::path::Component::ParentDir => {
                 current.pop();
             }
             std::path::Component::Normal(name) => current.push(name),
         }
-        match fs::symlink_metadata(&current) {
-            Ok(metadata) if metadata.file_type().is_symlink() => {
-                return Err(format!(
-                    "refusing symlinked output directory: {}",
-                    current.display()
-                ));
-            }
-            Ok(metadata) if !metadata.is_dir() => {
-                return Err(format!(
-                    "output parent is not a directory: {}",
-                    current.display()
-                ));
-            }
-            Ok(_) => {}
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
-            Err(error) => {
-                return Err(format!(
-                    "cannot inspect output directory {}: {error}",
-                    current.display()
-                ));
+        if matches!(component, std::path::Component::Normal(_)) {
+            match fs::symlink_metadata(&current) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(format!(
+                        "refusing symlinked output directory: {}",
+                        current.display()
+                    ));
+                }
+                Ok(metadata) if !metadata.is_dir() => {
+                    return Err(format!(
+                        "output parent is not a directory: {}",
+                        current.display()
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+                Err(error) => {
+                    return Err(format!(
+                        "cannot inspect output directory {}: {error}",
+                        current.display()
+                    ));
+                }
             }
         }
     }
@@ -257,22 +262,27 @@ fn ensure_safe_parent(path: &Path) -> ToolResult<()> {
     // Re-check after creation: create_dir_all follows a path component that
     // could have been swapped in concurrently.
     let mut current = if parent.is_absolute() {
-        PathBuf::from(std::path::MAIN_SEPARATOR.to_string())
+        PathBuf::new()
     } else {
         env::current_dir().map_err(|e| format!("cannot resolve output directory: {e}"))?
     };
     for component in parent.components() {
-        if let std::path::Component::Normal(name) = component {
-            current.push(name);
-            let metadata = fs::symlink_metadata(&current).map_err(|e| {
-                format!("cannot inspect output directory {}: {e}", current.display())
-            })?;
-            if metadata.file_type().is_symlink() || !metadata.is_dir() {
-                return Err(format!(
-                    "refusing unsafe output directory: {}",
-                    current.display()
-                ));
+        match component {
+            std::path::Component::Prefix(prefix) => current.push(prefix.as_os_str()),
+            std::path::Component::RootDir => current.push(component.as_os_str()),
+            std::path::Component::Normal(name) => {
+                current.push(name);
+                let metadata = fs::symlink_metadata(&current).map_err(|e| {
+                    format!("cannot inspect output directory {}: {e}", current.display())
+                })?;
+                if metadata.file_type().is_symlink() || !metadata.is_dir() {
+                    return Err(format!(
+                        "refusing unsafe output directory: {}",
+                        current.display()
+                    ));
+                }
             }
+            std::path::Component::CurDir | std::path::Component::ParentDir => {}
         }
     }
     Ok(())
@@ -853,6 +863,33 @@ pub fn flash_firmware(elf: &Path) -> ToolResult<()> {
     ])
     .arg(elf);
     run(c)
+}
+
+#[cfg(test)]
+mod output_path_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_output_path_is_created_and_written() {
+        let root = env::temp_dir().join(format!("sensor-watch-output-test-{}", now_nanos()));
+        let output = root.join("nested").join("artifact.bin");
+        write_binary(&output, b"output").unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"output");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn extended_drive_output_path_is_created_and_written() {
+        let root =
+            env::temp_dir().join(format!("sensor-watch-extended-output-test-{}", now_nanos()));
+        fs::create_dir_all(&root).unwrap();
+        let extended_root = PathBuf::from(format!(r"\\?\{}", root.display()));
+        let output = extended_root.join("nested").join("artifact.bin");
+        write_binary(&output, b"output").unwrap();
+        assert_eq!(fs::read(&output).unwrap(), b"output");
+        fs::remove_dir_all(root).unwrap();
+    }
 }
 
 #[cfg(test)]
