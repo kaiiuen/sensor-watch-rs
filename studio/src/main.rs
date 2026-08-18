@@ -4411,10 +4411,21 @@ impl StudioApp {
                         egui::Color32::from_rgb(220, 160, 80),
                         "Build disabled: complete the Studio-to-firmware configuration input contract first.",
                     );
-                    ui.collapsing("Missing contract inputs", |ui| {
-                        for input in build::missing_configuration_inputs() {
-                            ui.label(format!("• {input}"));
+                    ui.collapsing("Why these five items are still shown", |ui| {
+                        ui.label(
+                            "These are firmware-build requirements, not a beginner checklist. Selecting every UI option does not wire the selection into the firmware build.",
+                        );
+                        for (title, explanation) in build::CONFIGURATION_INPUT_EXPLANATIONS {
+                            ui.strong(*title);
+                            ui.label(*explanation);
+                            ui.add_space(4.0);
                         }
+                    });
+                    ui.collapsing("What to do next", |ui| {
+                        ui.label("1. Keep your stock preset, matching target/profile, and component choices as Studio planning data.");
+                        ui.label("2. Do not keep changing toggles expecting this gate to clear; there is no beginner action that completes the missing firmware-input generation.");
+                        ui.label("3. For an existing, verified UF2, enter its path, inspect it with its matching .uf2.json and .json.sig sidecars, and review the result.");
+                        ui.label("4. Approve only that exact artifact for this session, refresh bootloader detection, and copy only when exactly one expected watch drive is identified.");
                     });
                 } else {
                     let build_response = ui

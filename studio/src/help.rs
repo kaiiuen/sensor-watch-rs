@@ -433,15 +433,17 @@ pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
             Some(BuildBoard),
             None,
             Some(BuildProfile),
+            None,
             Some(BuildArtifactPath),
             Some(BuildArtifactPath),
+            None,
             Some(BuildInspect),
             None,
             Some(BuildApprove),
             Some(BuildRefresh),
             Some(BuildCopy),
             Some(BuildCopy),
-        ][index.min(11)];
+        ][index.min(13)];
     }
     Some(match id {
         // BuildFlash returns above because some steps are informational.
@@ -628,18 +630,20 @@ const TUTORIALS: &[Tutorial] = &[
         stable_key: "build-flash",
         title: "Build & Flash tutorial",
         steps: steps!
-        ("1. Check the configured-build gate" => "Start by reading the Build unavailable explanation. Configured Studio firmware builds remain fail-closed because the Studio-to-firmware input contract is incomplete; no configured UF2 is generated. Do not work around this gate or treat another file as the configured result.",
-         "2. Review the board" => "Review Target board and its revision details. This records which watch revision you intend to flash, but it does not turn the current planning values into firmware inputs while configured builds are unavailable.",
-         "3. Review active preset and faces" => "Review the active preset and its faces in Watch Faces, then return here. Build & Flash does not show those controls in this panel, so this is guidance only and has no highlight. Confirm the intended faces before selecting an artifact.",
-         "4. Review the component/LCD profile" => "Review Components / Build Profile, including the component and LCD description. The panel labels this as planning data only; a selected profile is not proof that its values were compiled into an artifact.",
-         "5. Understand output and stock versus configured" => "Read the output path and distinguish a configured build from an existing stock or recovery UF2. The output/path is a host location, not a claim about artifact provenance. A stock or recovery file is not automatically the configured project output.",
-         "6. Enter an existing UF2" => "If you have an existing artifact, enter its path in the UF2 path field. Use an explicit file you intend to inspect; entering a path does not build, approve, or flash anything.",
-         "7. Inspect the artifact and sidecars" => "Click Inspect UF2. Review the reported structure, family, manifest, matching .uf2.json sidecar, and .json.sig sidecar where required. Stop if the required files are missing or the artifact is not the intended one.",
-         "8. Interpret verification correctly" => "Verification reports local consistency only. It does not establish authenticity, provenance, that the configured board/profile/faces were applied, bootloader success, firmware health, or compatibility with physical hardware.",
-         "9. Approve for this session" => "After reviewing the metadata, click Approve for this session only for the exact artifact you intend to copy. Approval is session-scoped and does not make a stock artifact configured or prove hardware validity.",
-         "10. Put one watch in bootloader mode" => "Put exactly one intended watch in bootloader mode with USB connected, then click Refresh detection. Wait for detection to finish; do not rely on an old drive list.",
-         "11. Copy only with one expected drive" => "Copy only when detection shows one expected watch drive and the approved artifact is still the one you reviewed. Multiple drives are ambiguous; no drive is not ready. The Copy control is a host file-copy boundary and remains guarded.",
-         "12. Wait, then unplug safely" => "After Copy reports completion, wait for the operation to finish and follow the watch/USB guidance before unplugging. Never unplug during a copy. A successful host copy still does not validate firmware behavior or hardware authenticity."),
+        ("1. Check the configured-build gate" => "Start by reading the Build unavailable explanation. Configured Studio firmware builds remain fail-closed because the Studio-to-firmware input contract is incomplete; no configured UF2 is generated. The five items are explanations of a firmware contract, not a beginner checklist: selecting every toggle cannot satisfy them.",
+         "2. Review the board" => "Review Target board and its revision details. This records which watch revision you intend to flash as planning data, but Studio cannot generate the board-specific firmware inputs while configured builds are unavailable.",
+         "3. Review active preset and faces" => "Review the active preset and its faces in Watch Faces, then return here. You can choose the stock/default preset and Studio records the ordered face/source plan, but it cannot generate a configured UF2 from that plan.",
+         "4. Review the component/LCD profile" => "Review Components / Build Profile, including the component and LCD description. A UI selection is not the same as being wired into the firmware build. For example, enabling OPT3001 records the light-sensor plan, but does not add its firmware feature/module or connect its driver. There is currently no beginner action that completes this item because Studio lacks firmware-input generation.",
+         "5. Understand the remaining contract" => "Studio cannot generate concrete pin, bus, address, power, ownership, or build-provenance inputs. SPI/I2C toggles are not pin mappings, and a selected thermistor does not identify its wiring. Keep the fail-closed gate in place; do not infer that the configured contract is complete.",
+         "6. Follow the safe existing-UF2 path" => "For an existing, verified UF2, enter its explicit path, inspect it with its matching .uf2.json and .json.sig sidecars, review the metadata, approve only that exact artifact for this session, refresh bootloader detection, and copy only when exactly one expected watch drive is identified.",
+         "7. Know what the copy means" => "The verified existing-UF2 path safely inspects and copies an artifact; it does not make a stock or recovery UF2 configured, prove that Studio planning choices were compiled, or validate hardware behavior.",
+         "8. Choose your next action" => "Keep the stock preset, matching target/profile, and desired component choices if you want a saved plan; stop changing toggles expecting the gate to clear. If you need a watch artifact now, use only the existing verified-UF2 inspection/copy path above." ,
+         "9. Inspect the artifact and sidecars" => "Click Inspect UF2. Review the reported structure, family, manifest, matching .uf2.json sidecar, and .json.sig sidecar where required. Stop if the required files are missing or the artifact is not the intended one.",
+         "10. Interpret verification correctly" => "Verification reports local consistency only. It does not establish authenticity, provenance, that the configured board/profile/faces were applied, bootloader success, firmware health, or compatibility with physical hardware.",
+         "11. Approve for this session" => "After reviewing the metadata, click Approve for this session only for the exact artifact you intend to copy. Approval is session-scoped and does not make a stock artifact configured or prove hardware validity.",
+         "12. Put one watch in bootloader mode" => "Put exactly one intended watch in bootloader mode with USB connected, then click Refresh detection. Wait for detection to finish; do not rely on an old drive list.",
+         "13. Copy only with one expected drive" => "Copy only when detection shows one expected watch drive and the approved artifact is still the one you reviewed. Multiple drives are ambiguous; no drive is not ready. The Copy control is a host file-copy boundary and remains guarded.",
+         "14. Wait, then unplug safely" => "After Copy reports completion, wait for the operation to finish and follow the watch/USB guidance before unplugging. Never unplug during a copy. A successful host copy still does not validate firmware behavior or hardware authenticity."),
     },
     Tutorial {
         id: HelpId::Calibration,
@@ -876,6 +880,31 @@ mod tests {
     }
 
     #[test]
+    fn build_flash_tutorial_explains_current_limits_and_safe_next_action() {
+        let text = tutorial(HelpId::BuildFlash)
+            .steps
+            .iter()
+            .map(|step| format!("{} {}", step.title, step.body))
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
+        for phrase in [
+            "selecting every toggle cannot satisfy",
+            "planning data",
+            "ui selection",
+            "wired into the firmware build",
+            "opt3001",
+            "no beginner action",
+            "lacks firmware-input generation",
+            "uf2.json",
+            "json.sig",
+            "exactly one expected watch drive",
+        ] {
+            assert!(text.contains(phrase), "tutorial omitted: {phrase}");
+        }
+    }
+
+    #[test]
     fn held_pointer_stays_blocked_through_pause_and_resume() {
         let mut waiting = false;
         assert!(!simulator_wait_for_pointer_release(&mut waiting, false));
@@ -959,7 +988,7 @@ mod tests {
                 max: (20.0, 40.0),
             },
         );
-        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 8).is_none());
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 10).is_none());
         registry.register(
             HelpId::BuildFlash,
             AnchorId::BuildApprove.key(),
@@ -969,16 +998,16 @@ mod tests {
             },
         );
         assert!(step_target(&registry, HelpId::Settings, HelpId::BuildFlash, 2).is_none());
-        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 8).is_some());
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 10).is_some());
     }
 
     #[test]
     fn build_flash_tutorial_has_ordered_unique_steps_and_valid_routes() {
         let tutorial = tutorial(HelpId::BuildFlash);
-        assert_eq!(tutorial.steps.len(), 12);
+        assert_eq!(tutorial.steps.len(), 14);
         let titles: Vec<_> = tutorial.steps.iter().map(|step| step.title).collect();
         assert_eq!(titles[0], "1. Check the configured-build gate");
-        assert_eq!(titles[11], "12. Wait, then unplug safely");
+        assert_eq!(titles[13], "14. Wait, then unplug safely");
         assert!(titles.windows(2).all(|pair| pair[0] != pair[1]));
 
         let expected = [
@@ -986,8 +1015,10 @@ mod tests {
             Some(AnchorId::BuildBoard),
             None,
             Some(AnchorId::BuildProfile),
+            None,
             Some(AnchorId::BuildArtifactPath),
             Some(AnchorId::BuildArtifactPath),
+            None,
             Some(AnchorId::BuildInspect),
             None,
             Some(AnchorId::BuildApprove),
@@ -1029,11 +1060,11 @@ mod tests {
                 max: (120.0, 60.0),
             },
         );
-        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 8).is_some());
+        assert!(step_target(&registry, HelpId::BuildFlash, HelpId::BuildFlash, 10).is_some());
         assert!(!action_allowed(true, AnchorId::BuildCopy));
         assert!(action_allowed(true, AnchorId::BuildApprove));
-        assert_eq!(next_index(HelpId::BuildFlash, 8), 9);
-        assert_eq!(previous_index(HelpId::BuildFlash, 8), 7);
+        assert_eq!(next_index(HelpId::BuildFlash, 10), 11);
+        assert_eq!(previous_index(HelpId::BuildFlash, 10), 9);
 
         // A later frame can remove the conditional target without retaining a
         // stale rectangle, and the step becomes recoverable/informational.

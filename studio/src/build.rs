@@ -183,6 +183,32 @@ pub const CONFIGURATION_INPUT_CONTRACT: &[&str] = &[
     "a generated-input provenance/validation record tied to the exact firmware build",
 ];
 
+/// Plain-language explanations for the preflight panel. These deliberately say
+/// what the current UI records and what it cannot generate, rather than implying
+/// that a beginner can satisfy the contract by checking every option.
+pub const CONFIGURATION_INPUT_EXPLANATIONS: &[(&str, &str)] = &[
+    (
+        "Preset and faces",
+        "You can choose the stock/default preset and review its ordered faces and source files. Studio records that choice as planning data, but cannot generate the configured firmware inputs that would put it into a new UF2.",
+    ),
+    (
+        "Target board and profile",
+        "You can select the matching target board, revision, LCD, and component profile. Studio records what you intend to use for planning and estimates; it cannot generate the board-specific runtime settings or wiring needed by the firmware build.",
+    ),
+    (
+        "Component-to-firmware feature/module selections",
+        "A toggle is a UI selection, not firmware wiring. For example, enabling OPT3001 records that you want the light sensor, but it does not add the firmware feature/module or connect its driver to the build. There is currently no beginner action that completes this item because Studio lacks firmware-input generation.",
+    ),
+    (
+        "Concrete hardware mappings",
+        "Studio cannot infer or generate the pins, bus, address, power, or ownership for a selected component. Enabling SPI or I2C alone is not a mapping, and selecting a thermistor does not identify its physical connection.",
+    ),
+    (
+        "Generated-input provenance",
+        "Studio cannot generate the validation and provenance record that ties a configured input set to an exact firmware build. Until it can, no newly built UF2 may be presented as configured.",
+    ),
+];
+
 /// The build cannot truthfully produce a configured artifact until every item in
 /// [`CONFIGURATION_INPUT_CONTRACT`] is supplied to the firmware build.
 pub const CONFIGURATION_BUILD_BLOCKED: &str = concat!(
@@ -731,6 +757,32 @@ mod tests {
         for input in CONFIGURATION_INPUT_CONTRACT {
             assert!(message.contains(input), "blocked message omitted: {input}");
         }
+    }
+
+    #[test]
+    fn contract_explanations_are_beginner_actionable_without_promising_generation() {
+        assert_eq!(
+            CONFIGURATION_INPUT_EXPLANATIONS.len(),
+            CONFIGURATION_INPUT_CONTRACT.len()
+        );
+        let all = CONFIGURATION_INPUT_EXPLANATIONS
+            .iter()
+            .flat_map(|(title, explanation)| [*title, *explanation])
+            .collect::<Vec<_>>();
+        let text = all.join(" ").to_ascii_lowercase();
+        for phrase in [
+            "planning data",
+            "cannot generate",
+            "ui selection",
+            "firmware build",
+            "no beginner action",
+            "opt3001",
+            "uf2",
+            "provenance",
+        ] {
+            assert!(text.contains(phrase), "explanations omitted: {phrase}");
+        }
+        assert!(text.contains("not firmware wiring"));
     }
 
     #[test]
