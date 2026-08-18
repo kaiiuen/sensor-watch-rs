@@ -83,10 +83,20 @@ enum BuildEstimatorState {
     Failed(String),
 }
 
+fn build_completion_configuration_matches(
+    captured_fingerprint: Option<&str>,
+    current_fingerprint: &str,
+) -> bool {
+    captured_fingerprint == Some(current_fingerprint)
+}
+
 fn configured_estimator_status(
     state: &BuildEstimatorState,
     plan: &firmware_inputs::BuildPlan,
 ) -> String {
+    if matches!(state, BuildEstimatorState::Building) {
+        return "Building configured UF2...".to_string();
+    }
     if let firmware_inputs::PreflightStatus::Invalid(reason) = &plan.preflight {
         return format!("Build estimate unavailable: {reason}");
     }
@@ -1348,68 +1358,71 @@ impl eframe::App for StudioApp {
                         self.build_log.log(&result.message);
                         if result.success {
                             let current_fingerprint = self.build_configuration_fingerprint();
-                            match (build_fingerprint, verified_artifact_after_build(&result)) {
-                                (Some(build_fingerprint), Ok(inspection))
-                                    if build_fingerprint == current_fingerprint =>
-                                {
-                                    set_verified_artifact_state(
-                                        &mut self.status,
-                                        &mut self.build_message,
-                                        &mut self.approved_artifact,
-                                        &mut self.pending_artifact,
-                                        inspection,
-                                        false,
-                                    );
-                                    self.pending_artifact_fingerprint = Some(current_fingerprint);
-                                    self.build_estimator_state = BuildEstimatorState::Verified;
-                                    self.last_build_time = Some(
-                                        std::time::SystemTime::now()
-                                            .duration_since(std::time::UNIX_EPOCH)
-                                            .map(|d| d.as_secs())
-                                            .unwrap_or(0),
-                                    );
-                                    self.build_count += 1;
-                                    if let Some(t) = self.last_build_time {
-                                        self.build_history.push(t);
-                                        if self.build_history.len() > 50 {
-                                            self.build_history.remove(0);
+                            if !build_completion_configuration_matches(
+                                build_fingerprint.as_deref(),
+                                &current_fingerprint,
+                            ) {
+                                self.pending_artifact = None;
+                                self.pending_artifact_fingerprint = None;
+                                self.status =
+                                    "Build configuration changed. Artifact discarded".to_string();
+                                self.build_message = self.status.clone();
+                                self.build_estimator_state =
+                                    BuildEstimatorState::Failed(self.status.clone());
+                            } else {
+                                match verified_artifact_after_build(&result) {
+                                    Ok(inspection) => {
+                                        set_verified_artifact_state(
+                                            &mut self.status,
+                                            &mut self.build_message,
+                                            &mut self.approved_artifact,
+                                            &mut self.pending_artifact,
+                                            inspection,
+                                            false,
+                                        );
+                                        self.pending_artifact_fingerprint =
+                                            Some(current_fingerprint);
+                                        self.build_estimator_state = BuildEstimatorState::Verified;
+                                        self.last_build_time = Some(
+                                            std::time::SystemTime::now()
+                                                .duration_since(std::time::UNIX_EPOCH)
+                                                .map(|d| d.as_secs())
+                                                .unwrap_or(0),
+                                        );
+                                        self.build_count += 1;
+                                        if let Some(t) = self.last_build_time {
+                                            self.build_history.push(t);
+                                            if self.build_history.len() > 50 {
+                                                self.build_history.remove(0);
+                                            }
                                         }
-                                    }
-                                    if let Some(inspection) = &self.pending_artifact {
-                                        self.log.log(format!(
-                                            "UF2 verified and awaiting approval: {}",
-                                            inspection.path.display()
-                                        ));
-                                        self.build_log.log(format!(
-                                            "UF2 verified and awaiting approval: {}",
-                                            inspection.path.display()
-                                        ));
-                                        self.push_terminal(
+                                        if let Some(inspection) = &self.pending_artifact {
+                                            self.log.log(format!(
+                                                "UF2 verified and awaiting approval: {}",
+                                                inspection.path.display()
+                                            ));
+                                            self.build_log.log(format!(
+                                                "UF2 verified and awaiting approval: {}",
+                                                inspection.path.display()
+                                            ));
+                                            self.push_terminal(
                                             "Artifact verified locally. Explicit approval required",
                                         );
+                                        }
                                     }
-                                }
-                                (Some(_), Ok(_)) | (None, Ok(_)) => {
-                                    self.pending_artifact = None;
-                                    self.pending_artifact_fingerprint = None;
-                                    self.status = "Build configuration changed. Artifact discarded"
-                                        .to_string();
-                                    self.build_message = self.status.clone();
-                                    self.build_estimator_state =
-                                        BuildEstimatorState::Failed(self.status.clone());
-                                }
-                                (_, Err(error)) => {
-                                    self.pending_artifact = None;
-                                    self.pending_artifact_fingerprint = None;
-                                    self.build_message = format!(
-                                        "Built artifact rejected during verification: {error}"
-                                    );
-                                    self.status = self.build_message.clone();
-                                    self.build_estimator_state =
-                                        BuildEstimatorState::Failed(self.build_message.clone());
-                                    self.push_terminal(
-                                        "Output write finished: artifact verification failed",
-                                    );
+                                    Err(error) => {
+                                        self.pending_artifact = None;
+                                        self.pending_artifact_fingerprint = None;
+                                        self.build_message = format!(
+                                            "Built artifact rejected during verification: {error}"
+                                        );
+                                        self.status = self.build_message.clone();
+                                        self.build_estimator_state =
+                                            BuildEstimatorState::Failed(self.build_message.clone());
+                                        self.push_terminal(
+                                            "Output write finished: artifact verification failed",
+                                        );
+                                    }
                                 }
                             }
                         } else {
@@ -2125,9 +2138,15 @@ impl StudioApp {
         previous_board: Board,
         previous_effective: &components::ComponentsConfig,
     ) {
-        if previous_board != self.board || previous_effective != &self.component_effective {
+        if (previous_board != self.board || previous_effective != &self.component_effective)
+            && !self.build_worker_active()
+        {
             self.build_estimator_state = BuildEstimatorState::NeedsValidation;
         }
+    }
+
+    fn build_worker_active(&self) -> bool {
+        self.building || self.pending_build.is_some()
     }
 
     fn request_component_change(
@@ -3254,7 +3273,8 @@ impl StudioApp {
             &mut self.pending_artifact,
             &mut self.pending_artifact_fingerprint,
             &fingerprint,
-        ) {
+        ) && !self.build_worker_active()
+        {
             self.status = "Artifact discarded: build configuration changed".to_string();
             self.build_message = self.status.clone();
             self.build_estimator_state = BuildEstimatorState::Failed(self.status.clone());
@@ -10662,6 +10682,7 @@ mod tests {
         ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS, FIRST_RUN_STEPS, HELP_CARD_LAYER_ORDER,
         HELP_DIM_LAYER_ORDER,
     };
+    use super::{build_completion_configuration_matches, BuildEstimatorState, StudioApp};
     use super::{
         classify_http_status, classify_transport, commits_match, parse_latest_commit,
         UpdateCheckError,
@@ -10670,7 +10691,6 @@ mod tests {
         handle_sim_button, reset_simulator_button_state, update_simulator_pointer_lock, ButtonId,
         SimAction,
     };
-    use super::{BuildEstimatorState, StudioApp};
     use crate::components;
     use crate::flash::{select_watch_drive, FlashResult, FlashStatus};
     use crate::modules;
@@ -10698,6 +10718,81 @@ mod tests {
             app.build_estimator_state,
             BuildEstimatorState::NeedsValidation
         );
+    }
+
+    #[test]
+    fn configuration_change_during_active_build_keeps_building_state() {
+        let mut app = StudioApp::default();
+        app.begin_compile_session("captured".to_string());
+        let mut draft = app.component_draft.clone();
+        draft.uart_shell = !draft.uart_shell;
+
+        app.request_component_change(
+            Board::Green,
+            app.component_profile,
+            draft,
+            "Change component configuration".to_string(),
+        );
+
+        assert_eq!(app.build_estimator_state, BuildEstimatorState::Building);
+        assert_eq!(app.status, "Building configured UF2...");
+    }
+
+    #[test]
+    fn board_auto_detection_during_active_build_keeps_building_state() {
+        let mut app = StudioApp::default();
+        app.begin_compile_session("captured".to_string());
+        let previous_board = app.board;
+        let previous_effective = app.component_effective.clone();
+        app.board = Board::Blue;
+
+        app.invalidate_build_estimator_if_configuration_changed(
+            previous_board,
+            &previous_effective,
+        );
+
+        assert_eq!(app.build_estimator_state, BuildEstimatorState::Building);
+        assert_eq!(app.status, "Building configured UF2...");
+    }
+
+    #[test]
+    fn pending_build_worker_also_blocks_estimator_invalidation() {
+        let mut app = StudioApp::default();
+        app.build_estimator_state = BuildEstimatorState::Building;
+        app.pending_build = Some(std::thread::spawn(|| super::build::BuildResult {
+            success: true,
+            message: String::new(),
+            uf2_path: None,
+        }));
+        let previous_board = app.board;
+        let previous_effective = app.component_effective.clone();
+        app.board = Board::Blue;
+
+        app.invalidate_build_estimator_if_configuration_changed(
+            previous_board,
+            &previous_effective,
+        );
+
+        assert_eq!(app.build_estimator_state, BuildEstimatorState::Building);
+        let handle = app.pending_build.take().unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn stale_build_completion_requires_the_captured_request_identity() {
+        assert!(!build_completion_configuration_matches(
+            Some("captured"),
+            "changed"
+        ));
+        assert!(!build_completion_configuration_matches(None, "captured"));
+    }
+
+    #[test]
+    fn normal_build_completion_accepts_matching_request_identity() {
+        assert!(build_completion_configuration_matches(
+            Some("captured"),
+            "captured"
+        ));
     }
 
     #[test]
