@@ -15,15 +15,15 @@ before Studio enters packaged mode:
   "schema_version": 1,
   "current_version": {"version": "1.2.3", "installed_at": "2026-01-01T00:00:00Z"},
   "previous_version": {"version": "1.2.2"},
-  "launcher_executable": "launcher/sensor-watch-studio.exe",
-  "app_directory": "app/1.2.3",
+  "launcher_executable": "launcher/sensor-watch-studio-launcher.exe",
+  "app_directory": "versions/1.2.3",
   "resources_directory": "resources",
   "templates_directory": "templates",
   "firmware_project_directory": "firmware",
   "tools_directory": "tools",
   "targets_directory": "targets",
   "master_clock": null,
-  "user_data_directory": "user-data"
+  "user_data_directory": "(platform user-data directory; not included)"
 }
 ```
 
@@ -33,8 +33,9 @@ searches only the executable directory and its ancestors for this manifest.
 The package root, launcher, version metadata, and each capability are exposed
 through the typed `distribution` contract in `studio/src/distribution.rs`. The
 supported entry point is the packaged launcher at
-`launcher/sensor-watch-studio.exe`; users should not launch the versioned Studio
-executable directly.
+`launcher/sensor-watch-studio-launcher.exe`. It resolves the package root one
+level above its own directory and launches `versions/<version>/studio.exe`.
+Users should not launch the versioned Studio executable directly.
 
 `resources`, `templates`, and `firmware_project` are reported independently.
 `tools` and `targets` are optional paths but are still reported as capabilities

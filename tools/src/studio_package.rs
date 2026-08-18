@@ -15,11 +15,7 @@ use crate::ToolResult;
 const PACKAGE_SCHEMA: u32 = 1;
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const STUDIO_VERSION: &str = env!("CARGO_PKG_VERSION");
-const LAUNCHER_ARTIFACT_NAMES: &[&str] = &[
-    "sensor-watch-studio-launcher",
-    "sensor-watch-launcher",
-    "sensor-watch-bootstrapper",
-];
+const LAUNCHER_ARTIFACT_NAMES: &[&str] = &["sensor-watch-studio-launcher"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StudioPackageResult {
@@ -151,7 +147,7 @@ pub fn package_studio_artifacts_with_launcher(
 
     let version = studio_version(&root)?;
     let package_directory = format!("sensor-watch-studio-{version}");
-    let app_directory = format!("app/{version}");
+    let app_directory = format!("versions/{version}");
     let output = output.map(PathBuf::from).unwrap_or_else(|| {
         root.join("target/studio-package")
             .join(format!("{package_directory}.zip"))
@@ -172,11 +168,11 @@ pub fn package_studio_artifacts_with_launcher(
 
     let mut files = Vec::<(String, PathBuf)>::new();
     files.push((
-        format!("{package_directory}/{app_directory}/sensor-watch-studio{EXE_SUFFIX}"),
+        format!("{package_directory}/{app_directory}/studio{EXE_SUFFIX}"),
         executable,
     ));
     files.push((
-        format!("{package_directory}/launcher/sensor-watch-studio{EXE_SUFFIX}"),
+        format!("{package_directory}/launcher/sensor-watch-studio-launcher{EXE_SUFFIX}"),
         launcher,
     ));
     add_tree(
@@ -202,20 +198,15 @@ pub fn package_studio_artifacts_with_launcher(
     let capabilities_path = format!("{package_directory}/PACKAGE-CAPABILITIES.json");
     let release_metadata_path = format!("{package_directory}/release/metadata.json");
     let release_signature_path = format!("{package_directory}/release/metadata.json.sig");
-    let update_policy_path = format!("{package_directory}/update-policy.json");
-    let startup_marker_path = format!("{package_directory}/startup-marker.json");
+    let update_policy_path = format!("{package_directory}/updates/update-policy.json");
+    let startup_marker_path = format!("{package_directory}/updates/startup-marker.json");
     let current_pointer_path = format!("{package_directory}/versions/current.json");
     let previous_pointer_path = format!("{package_directory}/versions/previous.json");
-    let mut entries = files
-        .iter()
-        .map(|(path, source)| package_entry(path, source))
-        .collect::<ToolResult<Vec<_>>>()?;
-    entries.sort_by(|a, b| a.path.cmp(&b.path));
     let manifest = serde_json::to_vec_pretty(&json!({
         "schema_version": PACKAGE_SCHEMA,
         "current_version": { "version": version },
         "previous_version": null,
-        "launcher_executable": format!("launcher/sensor-watch-studio{EXE_SUFFIX}"),
+        "launcher_executable": format!("launcher/sensor-watch-studio-launcher{EXE_SUFFIX}"),
         "app_directory": app_directory,
         "resources_directory": "resources",
         "templates_directory": "templates",
@@ -228,8 +219,8 @@ pub fn package_studio_artifacts_with_launcher(
         "master_clock": null,
         "user_data_directory": "(platform user-data directory; not included)",
         "capability_manifest": "PACKAGE-CAPABILITIES.json",
-        "update_policy": "update-policy.json",
-        "startup_marker": "startup-marker.json",
+        "update_policy": "updates/update-policy.json",
+        "startup_marker": "updates/startup-marker.json",
         "current_pointer": "versions/current.json",
         "previous_pointer": "versions/previous.json",
         "release_metadata": "release/metadata.json",
@@ -239,8 +230,8 @@ pub fn package_studio_artifacts_with_launcher(
     let capabilities = serde_json::to_vec_pretty(&json!({
         "schema_version": PACKAGE_SCHEMA,
         "capabilities": {
-            "launcher": { "available": true, "path": format!("launcher/sensor-watch-studio{EXE_SUFFIX}") },
-            "versioned_app": { "available": true, "path": format!("{app_directory}/sensor-watch-studio{EXE_SUFFIX}") },
+            "launcher": { "available": true, "path": format!("launcher/sensor-watch-studio-launcher{EXE_SUFFIX}") },
+            "versioned_app": { "available": true, "path": format!("{app_directory}/studio{EXE_SUFFIX}") },
             "resources": { "available": true, "path": "resources" },
             "master_clock": { "available": false, "path": "tools/master-clock.exe", "reason": "not bundled; provenance and licensing required" },
             "templates": { "available": true, "path": "templates" },
@@ -277,9 +268,36 @@ pub fn package_studio_artifacts_with_launcher(
         serde_json::to_vec_pretty(&json!({ "version": version, "app_directory": app_directory }))
             .unwrap();
     let previous_pointer = b"{\n  \"version\": null,\n  \"app_directory\": null\n}\n".to_vec();
+    let generated_inputs_readme = b"Generated-input schemas and examples are package documentation only.\nRuntime-generated inputs and build outputs belong in user-data.\n";
+    let tools_readme = b"Optional tool capabilities are not bundled by this package.\n";
+    let targets_readme = b"Optional target capabilities are not bundled by this package.\n";
     let readme = format!(
-        "Sensor-Watch Studio {version}\n\nThe launcher is the only supported entry point. It owns startup markers,\nverification, and current/previous version selection. Mutable settings and\nuser projects stay outside this ZIP in the platform user-data directory.\n\nSigned-release metadata is a placeholder and must be replaced before publishing.\nPACKAGE-CAPABILITIES.json describes bundled and unavailable capabilities.\nPACKAGE-MANIFEST.json lists the SHA-256 digest of every packaged file.\n"
+        "Sensor-Watch Studio {version}\n\nCanonical package layout:\n  launcher/sensor-watch-studio-launcher{EXE_SUFFIX}\n  versions/{version}/studio{EXE_SUFFIX}\n  versions/current.json and versions/previous.json\n  firmware/, generated-inputs/, resources/, templates/, tools/, targets/\n  updates/ and release/\n\nThe launcher is the only supported entry point. It owns startup markers,\nverification, and current/previous version selection. Mutable settings,\nprojects, logs, and update state stay outside this ZIP in platform user data.\n\nSigned-release metadata is a placeholder and must be replaced before publishing.\nPACKAGE-MANIFEST.json covers every other packaged file; its own entry is excluded\nby the explicit self_entry rule.\n"
     );
+    files.push((
+        format!("{package_directory}/generated-inputs/README.txt"),
+        bytes_path(generated_inputs_readme),
+    ));
+    files.push((
+        format!("{package_directory}/generated-inputs/schema.json"),
+        bytes_path(b"{\n  \"schema_version\": 1,\n  \"description\": \"Generated firmware input contract\"\n}\n"),
+    ));
+    files.push((
+        format!("{package_directory}/generated-inputs/example.json"),
+        bytes_path(b"{\n  \"schema_version\": 1,\n  \"example\": true\n}\n"),
+    ));
+    files.push((
+        format!("{package_directory}/tools/README.txt"),
+        bytes_path(tools_readme),
+    ));
+    files.push((
+        format!("{package_directory}/targets/README.txt"),
+        bytes_path(targets_readme),
+    ));
+    files.push((
+        format!("{package_directory}/updates/README.txt"),
+        bytes_path(b"Update state is mutable user data and is not stored in this package.\n"),
+    ));
     files.push((manifest_path, bytes_path(&manifest)));
     files.push((readme_path, bytes_path(readme.as_bytes())));
     files.push((capabilities_path, bytes_path(&capabilities)));
@@ -289,21 +307,20 @@ pub fn package_studio_artifacts_with_launcher(
     files.push((startup_marker_path, bytes_path(&startup_marker)));
     files.push((current_pointer_path, bytes_path(&current_pointer)));
     files.push((previous_pointer_path, bytes_path(&previous_pointer)));
-    let mut all_entries = entries;
-    all_entries.push(PackageEntry {
-        path: format!("{package_directory}/sensor-watch-package.json"),
-        size: manifest.len() as u64,
-        sha256: digest(&manifest),
-    });
-    all_entries.push(PackageEntry {
-        path: format!("{package_directory}/README.txt"),
-        size: readme.len() as u64,
-        sha256: digest(readme.as_bytes()),
-    });
-    all_entries.sort_by(|a, b| a.path.cmp(&b.path));
-    let package_manifest =
-        serde_json::to_vec_pretty(&json!({"schema_version": 1, "entries": all_entries}))
-            .map_err(|e| format!("cannot serialize package file manifest: {e}"))?;
+    // Finalize every allowed file before calculating the manifest. The manifest
+    // deliberately excludes itself, which is its explicit self-entry rule.
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut entries = files
+        .iter()
+        .map(|(path, source)| package_entry(path, source))
+        .collect::<ToolResult<Vec<_>>>()?;
+    entries.sort_by(|a, b| a.path.cmp(&b.path));
+    let package_manifest = serde_json::to_vec_pretty(&json!({
+        "schema_version": 1,
+        "self_entry": "excluded",
+        "entries": entries
+    }))
+    .map_err(|e| format!("cannot serialize package file manifest: {e}"))?;
     files.push((
         format!("{package_directory}/PACKAGE-MANIFEST.json"),
         bytes_path(&package_manifest),
@@ -381,14 +398,14 @@ fn studio_version(root: &Path) -> ToolResult<String> {
 
 fn regular_file(path: &Path, label: &str) -> ToolResult<PathBuf> {
     let metadata = fs::symlink_metadata(path).map_err(|e| format!("{label} is missing: {e}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_file() {
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !metadata.is_file() {
         return Err(format!("{label} is not a regular file: {}", path.display()));
     }
     Ok(path.to_path_buf())
 }
 fn require_directory(path: &Path, label: &str) -> ToolResult<()> {
     let metadata = fs::symlink_metadata(path).map_err(|e| format!("{label} is missing: {e}"))?;
-    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+    if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !metadata.is_dir() {
         return Err(format!(
             "{label} is not a regular directory: {}",
             path.display()
@@ -396,6 +413,17 @@ fn require_directory(path: &Path, label: &str) -> ToolResult<()> {
     }
     Ok(())
 }
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
+}
+
 fn safe_component(path: &Path) -> bool {
     let mut components = path.components();
     matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
@@ -416,7 +444,10 @@ fn add_tree(
             return Err(format!("unsafe package entry: {}", item.path().display()));
         }
         let metadata = fs::symlink_metadata(item.path()).map_err(|e| e.to_string())?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() && !metadata.is_dir() {
+        if metadata.file_type().is_symlink()
+            || is_reparse_point(&metadata)
+            || !metadata.is_file() && !metadata.is_dir()
+        {
             return Err(format!("refusing package entry: {}", item.path().display()));
         }
         let destination = format!("{prefix}/{}", name.to_string_lossy());
@@ -600,18 +631,29 @@ mod tests {
         assert!(!safe_component(Path::new("a/b")));
         assert!(safe_component(Path::new("safe")));
     }
+    #[cfg(unix)]
     #[test]
-    fn automatic_launcher_resolution_uses_known_release_names() {
-        let (root, _) = fixture("launcher-resolution");
-        let release = root.join("target/release");
-        fs::rename(
-            release.join("sensor-watch-studio-launcher.exe"),
-            release.join("sensor-watch-launcher.exe"),
+    fn symlinked_package_input_is_rejected() {
+        use std::os::unix::fs::symlink;
+        let (root, executable) = fixture("symlink-input");
+        symlink(
+            root.join("studio/assets/watch.svg"),
+            root.join("studio/assets/link.svg"),
         )
         .unwrap();
+        let error =
+            package_studio_artifacts(&root, &executable, Some(&root.join("out.zip"))).unwrap_err();
+        assert!(error.contains("refusing package entry"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn automatic_launcher_resolution_uses_canonical_release_name() {
+        let (root, _) = fixture("launcher-resolution");
+        let release = root.join("target/release");
         assert_eq!(
             resolve_launcher_artifact(&release, None).unwrap(),
-            release.join("sensor-watch-launcher.exe")
+            release.join("sensor-watch-studio-launcher.exe")
         );
         let _ = fs::remove_dir_all(root);
     }
@@ -669,12 +711,12 @@ mod tests {
         assert!(
             names
                 .iter()
-                .any(|name| name.ends_with("/launcher/sensor-watch-studio.exe"))
+                .any(|name| name.ends_with("/launcher/sensor-watch-studio-launcher.exe"))
         );
         assert!(
             names
                 .iter()
-                .any(|name| name.ends_with("/app/9.8.7/sensor-watch-studio.exe"))
+                .any(|name| name.ends_with("/versions/9.8.7/studio.exe"))
         );
         assert!(!names.iter().any(|name| name.contains("target/")
             || name.contains(".git/")
@@ -725,9 +767,9 @@ mod tests {
         assert_eq!(value["schema_version"], 1);
         assert_eq!(
             value["launcher_executable"],
-            "launcher/sensor-watch-studio.exe"
+            "launcher/sensor-watch-studio-launcher.exe"
         );
-        assert_eq!(value["app_directory"], "app/9.8.7");
+        assert_eq!(value["app_directory"], "versions/9.8.7");
         assert_eq!(value["current_pointer"], "versions/current.json");
         assert!(
             zip_names(&output)
@@ -737,6 +779,65 @@ mod tests {
         let _ = fs::remove_dir_all(root);
     }
     #[test]
+    fn manifest_covers_every_packaged_file_except_itself() {
+        let (root, executable) = fixture("manifest-coverage");
+        let output = root.join("out.zip");
+        package_studio_artifacts(&root, &executable, Some(&output)).unwrap();
+        let names = zip_names(&output);
+        let manifest: serde_json::Value = serde_json::from_str(&zip_text(
+            &output,
+            "sensor-watch-studio-9.8.7/PACKAGE-MANIFEST.json",
+        ))
+        .unwrap();
+        assert_eq!(manifest["self_entry"], "excluded");
+        let entries = manifest["entries"].as_array().unwrap();
+        let listed: std::collections::BTreeSet<_> = entries
+            .iter()
+            .map(|entry| entry["path"].as_str().unwrap())
+            .collect();
+        for name in names
+            .iter()
+            .filter(|name| !name.ends_with("PACKAGE-MANIFEST.json"))
+        {
+            assert!(listed.contains(name.as_str()), "unlisted {name}");
+        }
+        assert_eq!(listed.len(), names.len() - 1);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn package_uses_launcher_compatible_decomposed_tree() {
+        let (root, executable) = fixture("decomposed-layout");
+        let output = root.join("out.zip");
+        package_studio_artifacts(&root, &executable, Some(&output)).unwrap();
+        let names = zip_names(&output);
+        for required in [
+            "/launcher/sensor-watch-studio-launcher.exe",
+            "/versions/9.8.7/studio.exe",
+            "/versions/current.json",
+            "/versions/previous.json",
+            "/firmware/src/main.rs",
+            "/generated-inputs/schema.json",
+            "/generated-inputs/example.json",
+            "/resources/watch.svg",
+            "/templates/template.rs",
+            "/tools/README.txt",
+            "/targets/README.txt",
+            "/updates/update-policy.json",
+            "/release/metadata.json",
+            "/README.txt",
+        ] {
+            assert!(
+                names.iter().any(|name| name.ends_with(required)),
+                "missing {required}"
+            );
+        }
+        assert!(!names.iter().any(|name| name.contains("user-data")));
+        assert!(!names.iter().any(|name| name.contains("out.zip")));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn package_contains_ab_pointers_and_startup_update_contracts() {
         let (root, executable) = fixture("ab-layout");
         let output = root.join("out.zip");
@@ -744,9 +845,9 @@ mod tests {
         let base = "sensor-watch-studio-9.8.7";
         let current = zip_text(&output, &format!("{base}/versions/current.json"));
         let previous = zip_text(&output, &format!("{base}/versions/previous.json"));
-        let marker = zip_text(&output, &format!("{base}/startup-marker.json"));
-        let policy = zip_text(&output, &format!("{base}/update-policy.json"));
-        assert!(current.contains("app/9.8.7"));
+        let marker = zip_text(&output, &format!("{base}/updates/startup-marker.json"));
+        let policy = zip_text(&output, &format!("{base}/updates/update-policy.json"));
+        assert!(current.contains("versions/9.8.7"));
         assert!(previous.contains("null"));
         assert!(marker.contains("stale_marker_means_recovery"));
         assert!(policy.contains("verification"));

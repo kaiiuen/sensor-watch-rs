@@ -4,8 +4,11 @@ use std::time::Duration;
 fn main() {
     let base = match std::env::current_exe().and_then(|p| {
         p.parent()
+            .and_then(|launcher_directory| launcher_directory.parent())
             .map(|p| p.to_path_buf())
-            .ok_or_else(|| std::io::Error::other("launcher has no parent directory"))
+            .ok_or_else(|| {
+                std::io::Error::other("launcher is not inside a package launcher directory")
+            })
     }) {
         Ok(path) => path,
         Err(error) => {
