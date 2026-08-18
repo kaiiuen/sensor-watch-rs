@@ -5,6 +5,7 @@
 //! their settings and data.
 
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 
 use super::components::BuildProfile;
 use super::i18n::Language;
@@ -95,6 +96,79 @@ impl RtcCalibrationSettings {
 /// instead of failing the whole load.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
+pub struct PanelUxOverrides {
+    /// Allow the guided tutorial to install its input barrier.
+    #[serde(default = "default_true")]
+    pub tutorial_input_barrier: bool,
+    /// Draw the tutorial spotlight around its current target.
+    #[serde(default = "default_true")]
+    pub tutorial_spotlight: bool,
+    /// Show advanced-only tabs when Developer Mode is enabled.
+    #[serde(default = "default_true")]
+    pub advanced_tab_visibility: bool,
+    /// Show simulated or host-only diagnostic details.
+    #[serde(default = "default_true")]
+    pub simulated_diagnostics_visibility: bool,
+    /// Show developer tool affordances in this panel.
+    #[serde(default = "default_true")]
+    pub developer_tool_visibility: bool,
+    /// Use the full confirmation explanation for actions in this panel.
+    #[serde(default = "default_true")]
+    pub confirmation_verbosity: bool,
+}
+
+impl Default for PanelUxOverrides {
+    fn default() -> Self {
+        Self {
+            tutorial_input_barrier: true,
+            tutorial_spotlight: true,
+            advanced_tab_visibility: true,
+            simulated_diagnostics_visibility: true,
+            developer_tool_visibility: true,
+            confirmation_verbosity: true,
+        }
+    }
+}
+
+impl PanelUxOverrides {
+    /// UX overrides cannot change any hard safety boundary.
+    pub const fn affects_hard_safeguards(&self) -> bool {
+        false
+    }
+}
+
+/// Names of boundaries that are intentionally outside persisted UX settings.
+pub const HARD_SAFEGUARD_BOUNDARIES: &[&str] = &[
+    "cryptographic and signature checks",
+    "UF2, hash, and sidecar validation",
+    "configured-build fail-closed contract",
+    "drive identity, count, and revalidation",
+    "UART bounds, allowlist, and timeouts",
+    "shell mutation authorization",
+    "editor path and symlink safety",
+    "file-browser read-only and path safety",
+    "update rollback",
+    "explicit physical-action consent",
+];
+
+impl AppSettings {
+    /// Return the persisted UX policy for a panel, using safe defaults.
+    pub fn panel_ux(&self, panel: &str) -> PanelUxOverrides {
+        self.panel_ux_overrides
+            .get(panel)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Set a panel UX policy without changing any hard safeguard.
+    pub fn set_panel_ux(&mut self, panel: impl Into<String>, overrides: PanelUxOverrides) {
+        self.panel_ux_overrides.insert(panel.into(), overrides);
+    }
+}
+
+/// The serializable app configuration.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AppSettings {
     /// Schema version, bumped on backward-incompatible changes so future
     /// migrations are possible. Old files without it default to 1.
@@ -167,9 +241,18 @@ pub struct AppSettings {
     /// The selected target board revision.
     #[serde(default = "default_board")]
     pub board: String,
-    /// Whether advanced protocol, register, and diagnostic controls are visible.
+    /// Whether the opt-in Developer Mode presentation is enabled.
+    ///
+    /// This only exposes development UX. Hard safety boundaries remain enforced
+    /// by their operation handlers.
     #[serde(default)]
-    pub advanced_mode: bool,
+    pub developer_mode: bool,
+    /// Legacy name retained for one-way migration from older settings files.
+    #[serde(default, rename = "advanced_mode", skip_serializing)]
+    legacy_advanced_mode: bool,
+    /// Per-panel presentation and guidance preferences.
+    #[serde(default)]
+    pub panel_ux_overrides: BTreeMap<String, PanelUxOverrides>,
     /// Preferred top-level tab-bar row count.
     #[serde(default)]
     pub tab_layout: TabLayoutMode,
@@ -235,7 +318,9 @@ impl AppSettings {
             component_profiles: component_profiles.to_vec(),
             active_component_profile,
             board: default_board(),
-            advanced_mode: false,
+            developer_mode: false,
+            legacy_advanced_mode: false,
+            panel_ux_overrides: BTreeMap::new(),
             tab_layout,
             tab_overflow,
         }
@@ -246,8 +331,16 @@ impl AppSettings {
         self
     }
 
-    pub fn with_advanced_mode(mut self, advanced_mode: bool) -> Self {
-        self.advanced_mode = advanced_mode;
+    pub fn with_developer_mode(mut self, developer_mode: bool) -> Self {
+        self.developer_mode = developer_mode;
+        self
+    }
+
+    pub fn with_panel_ux_overrides(
+        mut self,
+        panel_ux_overrides: BTreeMap<String, PanelUxOverrides>,
+    ) -> Self {
+        self.panel_ux_overrides = panel_ux_overrides;
         self
     }
 
@@ -369,6 +462,11 @@ impl AppSettings {
             return Err("settings JSON is too large".into());
         }
         let mut settings: Self = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        // Migrate the old persisted name only when the new field is absent.
+        let value: serde_json::Value = serde_json::from_str(json).map_err(|e| e.to_string())?;
+        if value.get("developer_mode").is_none() {
+            settings.developer_mode = settings.legacy_advanced_mode;
+        }
         // Compatibility migration for settings written before face identity
         // became case-insensitive. It is order-preserving and idempotent.
         settings.presets.migrate_face_duplicates();
@@ -409,7 +507,9 @@ impl Default for AppSettings {
             component_profiles: Vec::new(),
             active_component_profile: 0,
             board: default_board(),
-            advanced_mode: false,
+            developer_mode: false,
+            legacy_advanced_mode: false,
+            panel_ux_overrides: BTreeMap::new(),
             tab_layout: TabLayoutMode::default(),
             tab_overflow: TabOverflowBehavior::default(),
         }
@@ -477,6 +577,41 @@ pub fn default_output_dir() -> String {
 #[cfg(test)]
 mod tests {
     use super::{AppSettings, RtcCalibrationSettings};
+
+    #[test]
+    fn developer_mode_defaults_off_and_migrates_advanced_mode() {
+        let defaults = AppSettings::default();
+        assert!(!defaults.developer_mode);
+
+        let mut value: serde_json::Value =
+            serde_json::from_str(&defaults.to_json().unwrap()).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("developer_mode");
+        object.insert("advanced_mode".into(), serde_json::Value::Bool(true));
+        let migrated = AppSettings::from_json(&value.to_string()).unwrap();
+        assert!(migrated.developer_mode);
+        assert!(!migrated.to_json().unwrap().contains("advanced_mode"));
+    }
+
+    #[test]
+    fn panel_overrides_persist_and_default_safely() {
+        let mut settings = AppSettings::default();
+        let mut panel = settings.panel_ux("simulator");
+        assert!(panel.tutorial_input_barrier);
+        panel.tutorial_input_barrier = false;
+        panel.tutorial_spotlight = false;
+        settings.set_panel_ux("simulator", panel.clone());
+        let loaded = AppSettings::from_json(&settings.to_json().unwrap()).unwrap();
+        assert!(!loaded.panel_ux("simulator").tutorial_input_barrier);
+        assert!(!loaded.panel_ux("simulator").tutorial_spotlight);
+        assert!(loaded.panel_ux("editor").tutorial_input_barrier);
+    }
+
+    #[test]
+    fn ux_overrides_cannot_affect_hard_safeguards() {
+        assert!(!super::PanelUxOverrides::default().affects_hard_safeguards());
+        assert_eq!(super::HARD_SAFEGUARD_BOUNDARIES.len(), 10);
+    }
 
     #[test]
     fn rejects_unknown_rtc_calibration_versions() {

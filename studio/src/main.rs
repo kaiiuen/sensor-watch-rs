@@ -397,9 +397,13 @@ struct StudioApp {
     restore_store: restore::RestoreStore,
     /// Name input for a manually created restore point.
     restore_name: String,
-    /// Whether Advanced-only tools are visible.
+    /// Whether Developer Mode tools are visible.
     advanced_mode: bool,
-    /// Whether the advanced-mode warning is awaiting confirmation.
+    /// Persisted presentation-only preferences keyed by stable panel name.
+    panel_ux_overrides: std::collections::BTreeMap<String, settings::PanelUxOverrides>,
+    /// Panel selected in the compact UX override editor.
+    ux_override_panel: usize,
+    /// Whether the developer-mode warning is awaiting confirmation.
     advanced_mode_confirm: bool,
     /// Explicit developer-configured Master Clock path; never read from PATH.
     master_clock_path: String,
@@ -596,6 +600,46 @@ fn panel_for_help_id(id: HelpId) -> Option<Panel> {
 }
 
 impl Panel {
+    const ALL: [Self; 16] = [
+        Self::Dashboard,
+        Self::Faces,
+        Self::Editor,
+        Self::Simulator,
+        Self::BuildFlash,
+        Self::Calibration,
+        Self::Modules,
+        Self::Shell,
+        Self::Diagnostics,
+        Self::Debug,
+        Self::Bugs,
+        Self::FileBrowser,
+        Self::Tutorials,
+        Self::Wiki,
+        Self::Settings,
+        Self::Probe,
+    ];
+
+    fn key(self) -> &'static str {
+        match self {
+            Self::Dashboard => "dashboard",
+            Self::Faces => "faces",
+            Self::Editor => "editor",
+            Self::Simulator => "simulator",
+            Self::BuildFlash => "build_flash",
+            Self::Calibration => "calibration",
+            Self::Modules => "modules",
+            Self::Shell => "shell",
+            Self::Diagnostics => "diagnostics",
+            Self::Debug => "debug",
+            Self::Bugs => "bugs",
+            Self::FileBrowser => "file_browser",
+            Self::Tutorials => "tutorials",
+            Self::Wiki => "wiki",
+            Self::Settings => "settings",
+            Self::Probe => "probe",
+        }
+    }
+
     fn help_id(self) -> HelpId {
         match self {
             Panel::Dashboard => HelpId::Dashboard,
@@ -1077,6 +1121,8 @@ impl Default for StudioApp {
             restore_store: restore::RestoreStore::load(),
             restore_name: String::new(),
             advanced_mode: false,
+            panel_ux_overrides: std::collections::BTreeMap::new(),
+            ux_override_panel: 0,
             advanced_mode_confirm: false,
             master_clock_path: String::new(),
             master_clock_process: None,
@@ -1582,7 +1628,7 @@ impl eframe::App for StudioApp {
 
         // Terminal panel (collapsible) above the footer. It is intentionally
         // hidden in Normal mode because it exposes protocol and transport tools.
-        if self.advanced_mode {
+        if self.advanced_mode && self.panel_ux(self.current_panel).developer_tool_visibility {
             egui::TopBottomPanel::bottom("terminal")
                 .resizable(true)
                 .default_height(140.0)
@@ -1727,15 +1773,16 @@ impl eframe::App for StudioApp {
         self.show_component_conflict(ctx);
 
         if self.advanced_mode_confirm {
-            egui::Window::new("Enable Advanced mode?")
+            egui::Window::new("Enable Developer Mode?")
                 .collapsible(false)
                 .resizable(false)
                 .show(ctx, |ui| {
-                    ui.label("Advanced controls can affect firmware configuration and hardware.");
+                    ui.label("Developer Mode exposes development tools and transport views.");
+                    ui.label("It never bypasses signature, UF2, drive, UART, shell, path, rollback, or physical-consent safeguards.");
                     ui.label("Simulated actions remain simulated. This mode does not make hardware claims.");
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
-                        if ui.button("Enable Advanced mode").clicked() {
+                        if ui.button("Enable Developer Mode").clicked() {
                             self.advanced_mode = true;
                             self.advanced_mode_confirm = false;
                             self.open_tutorial(HelpId::Advanced, false);
@@ -1820,7 +1867,12 @@ impl eframe::App for StudioApp {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
                 .show(ctx, |ui| {
-                    ui.label(&message);
+                    let compact = !self.panel_ux(self.current_panel).confirmation_verbosity;
+                    if compact {
+                        ui.label("Confirm this action. It remains subject to all hard safeguards.");
+                    } else {
+                        ui.label(&message);
+                    }
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("Cancel").clicked() {
@@ -2155,8 +2207,20 @@ impl StudioApp {
         }
     }
 
+    fn panel_ux(&self, panel: Panel) -> settings::PanelUxOverrides {
+        self.panel_ux_overrides
+            .get(panel.key())
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn help_owns_input(&self) -> bool {
-        self.help_open.is_some() && (!self.help_minimized || self.help_pending_panel.is_some())
+        let barrier = panel_for_help_id(self.help_open.unwrap_or(HelpId::Dashboard))
+            .map(|panel| self.panel_ux(panel).tutorial_input_barrier)
+            .unwrap_or(true);
+        self.help_open.is_some()
+            && barrier
+            && (!self.help_minimized || self.help_pending_panel.is_some())
     }
 
     fn minimize_help(&mut self) {
@@ -2195,7 +2259,9 @@ impl StudioApp {
         let Some(id) = self.help_open else { return };
         let target_panel =
             panel_for_help_id(help::route(id, self.help_step).panel).unwrap_or(self.current_panel);
-        if !self.help_owns_input() || self.current_panel != target_panel {
+        let card_active =
+            self.help_open.is_some() && (!self.help_minimized || self.help_pending_panel.is_some());
+        if !card_active || self.current_panel != target_panel {
             let label = if self.help_minimized {
                 format!("Tour paused: {}", help::tutorial(id).title)
             } else {
@@ -2260,7 +2326,11 @@ impl StudioApp {
             min: (rect.min.0 - screen.min.x, rect.min.1 - screen.min.y),
             max: (rect.max.0 - screen.min.x, rect.max.1 - screen.min.y),
         });
-        let spotlight_target = target_local.map(|rect| rect.expand(8.0));
+        let spotlight_target = self
+            .panel_ux(self.current_panel)
+            .tutorial_spotlight
+            .then(|| target_local.map(|rect| rect.expand(8.0)))
+            .flatten();
         let card = help::place_card(
             target_local,
             (
@@ -2427,7 +2497,7 @@ impl StudioApp {
         let visible: Vec<Panel> = panels
             .into_iter()
             .filter(|panel| {
-                self.advanced_mode
+                (self.advanced_mode && self.panel_ux(*panel).advanced_tab_visibility)
                     || !matches!(
                         panel,
                         Panel::Modules
@@ -5017,6 +5087,13 @@ impl StudioApp {
     /// an explicit UART command and are never inferred from this report.
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
         ui.heading("Diagnostics");
+        if !self
+            .panel_ux(Panel::Diagnostics)
+            .simulated_diagnostics_visibility
+        {
+            ui.weak("Simulated diagnostics are hidden by this panel override. Physical checks remain separate and guarded.");
+            return;
+        }
 
         ui.label("Offline checks for the watch shell and simulator. Physical hardware is never implied by simulated results.");
         if ui.button("Open error encyclopedia").clicked() {
@@ -7451,6 +7528,55 @@ impl StudioApp {
             });
     }
 
+    /// Shows presentation-only overrides. These controls never reach operation
+    /// handlers, so they cannot weaken artifact, transport, path, or consent gates.
+    fn panel_ux_settings(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(12.0);
+        ui.separator();
+        ui.heading("Per-panel UX overrides");
+        ui.label("Each override changes presentation or guidance for one panel. Hard safeguards are never overrideable.");
+        let panels = Panel::ALL;
+        let selected = self.ux_override_panel.min(panels.len() - 1);
+        self.ux_override_panel = selected;
+        egui::ComboBox::from_id_source("panel_ux_panel")
+            .selected_text(panels[selected].label(self.language))
+            .show_ui(ui, |ui| {
+                for (index, panel) in panels.iter().enumerate() {
+                    ui.selectable_value(
+                        &mut self.ux_override_panel,
+                        index,
+                        panel.label(self.language),
+                    );
+                }
+            });
+        let panel = panels[self.ux_override_panel];
+        let key = panel.key().to_string();
+        let mut policy = self
+            .panel_ux_overrides
+            .get(&key)
+            .cloned()
+            .unwrap_or_default();
+        let mut changed = false;
+        for (value, label, description) in [
+            (&mut policy.tutorial_input_barrier, "Tutorial input barrier", "Controls whether the tutorial guides input around its card. It does not gate hardware actions."),
+            (&mut policy.tutorial_spotlight, "Tutorial spotlight", "Highlights the current tutorial target without granting permission to use it."),
+            (&mut policy.advanced_tab_visibility, "Advanced-tab visibility", "Controls whether advanced tabs are shown after Developer Mode has already enabled them."),
+            (&mut policy.simulated_diagnostics_visibility, "Simulated diagnostics", "Shows or hides host-only diagnostic detail. It never changes a diagnostic result or hardware check."),
+            (&mut policy.developer_tool_visibility, "Developer tools", "Shows or hides developer tool affordances. Hidden tools remain unavailable unless all normal gates pass."),
+            (&mut policy.confirmation_verbosity, "Confirmation verbosity", "Shows the full or compact explanation. Explicit confirmation is required in either form."),
+        ] {
+            if ui.checkbox(value, label).changed() {
+                changed = true;
+            }
+            ui.weak(description);
+        }
+        if changed {
+            self.panel_ux_overrides.insert(key, policy);
+            self.save_settings_unconditionally();
+        }
+        ui.weak("Never affected here: signature checks, UF2 and sidecar validation, fail-closed builds, drive revalidation, UART bounds, shell authorization, path safety, read-only browser rules, rollback, or physical consent.");
+    }
+
     /// The scrollable body of the settings panel.
     fn settings_body(&mut self, ui: &mut egui::Ui) {
         ui.label(tr(self.language, Key::ConfigureApp));
@@ -7659,13 +7785,14 @@ impl StudioApp {
 
         ui.add_space(8.0);
         ui.weak("All-in-one CLI: run Firmware Studio with --help");
+        self.panel_ux_settings(ui);
 
         if !self.advanced_mode {
             ui.add_space(16.0);
             ui.separator();
-            ui.heading("Developer / Advanced mode");
-            ui.label("Normal mode keeps protocol, register, diagnostics, and developer tools out of the way.");
-            if ui.button("Enable Advanced mode...").clicked() {
+            ui.heading("Developer Mode");
+            ui.label("Developer Mode is off by default. It exposes development UX only and never disables hard safety checks.");
+            if ui.button("Enable Developer Mode...").clicked() {
                 self.advanced_mode_confirm = true;
             }
             return;
@@ -7673,6 +7800,8 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
+        ui.heading("Developer Mode tools");
+        ui.label("Developer Mode is enabled. It exposes development UX only. Artifact, drive, UART, shell, path, rollback, and physical-action safeguards remain mandatory.");
         ui.heading("NTP Time / Master Clock");
         ui.label("Optional on-demand tool. NTP and any geolocation behavior are external network activity; this does not change Windows time.");
         ui.weak("Studio never starts this tool automatically. Only a validated package-local tools/master-clock.exe is offered.");
@@ -8315,7 +8444,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode)
+        .with_developer_mode(self.advanced_mode)
+        .with_panel_ux_overrides(self.panel_ux_overrides.clone())
         .with_data_folder(self.pending_data_folder.clone());
         // Use the same atomic, validated writer as automatic persistence.
         let path = persist::settings_path();
@@ -8369,7 +8499,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode)
+        .with_developer_mode(self.advanced_mode)
+        .with_panel_ux_overrides(self.panel_ux_overrides.clone())
         .with_data_folder(self.pending_data_folder.clone());
         self.restore_store
             .create(name, settings, self.board.label(), self.presets.active);
@@ -8511,7 +8642,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode)
+        .with_developer_mode(self.advanced_mode)
+        .with_panel_ux_overrides(self.panel_ux_overrides.clone())
         .with_data_folder(self.pending_data_folder.clone());
         match persist::save(&settings) {
             Ok(_) => {}
@@ -8555,7 +8687,8 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_advanced_mode(self.advanced_mode)
+        .with_developer_mode(self.advanced_mode)
+        .with_panel_ux_overrides(self.panel_ux_overrides.clone())
         .with_data_folder(self.pending_data_folder.clone());
         match settings.to_json() {
             Ok(json) => {
@@ -8701,7 +8834,8 @@ impl StudioApp {
         } else {
             s.data_folder
         };
-        self.advanced_mode = s.advanced_mode;
+        self.advanced_mode = s.developer_mode;
+        self.panel_ux_overrides = s.panel_ux_overrides;
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
         self.rtc_calibration = s.rtc_calibration;
@@ -11357,6 +11491,23 @@ mod tests {
     fn startup_does_not_launch_master_clock() {
         let app = super::StudioApp::default();
         assert!(app.master_clock_process.is_none());
+    }
+
+    #[test]
+    fn developer_and_panel_ux_toggles_apply_without_opening_hard_actions() {
+        let mut app = super::StudioApp::default();
+        let mut settings = super::settings::AppSettings::default();
+        settings.developer_mode = true;
+        let mut ux = settings.panel_ux("simulator");
+        ux.tutorial_input_barrier = false;
+        settings.set_panel_ux("simulator", ux);
+
+        app.apply_settings(settings);
+
+        assert!(app.advanced_mode);
+        assert!(!app.panel_ux(super::Panel::Simulator).tutorial_input_barrier);
+        app.help_open = Some(super::HelpId::Simulator);
+        assert!(!app.unsafe_action_allowed());
     }
 
     #[test]
