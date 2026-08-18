@@ -6,10 +6,9 @@ description = "Firmware Studio - a GUI companion app for the Sensor-Watch firmwa
 license = "MIT OR Apache-2.0"
 
 [features]
-# Enables the Simulator to run REAL firmware faces through the host `Hw` seam.
-# On by default: the firmware host lib compiles and links cleanly as a `std`
-# dependency, and `RealFace::new` installs its `MockHw` into the host seam (and
-# clears it on drop). See `src/real_face.rs`.
+# Enables the Simulator to run firmware face source files through translated
+# host movement and HAL seams with `MockHw`.
+# On by default. See `src/real_face.rs` and `src/sim_provenance.rs`.
 real-faces = ["dep:sensor-watch"]
 default = ["real-faces"]
 

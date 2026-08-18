@@ -24,11 +24,11 @@
 //! because pulling the firmware *host lib* into the app as a dependency currently
 //! requires the firmware seam to compile as a host lib (the firmware's `watch`
 //! tree is mid-migration and not yet a clean host dependency). With the feature
-//! **on**, this module drives the real faces through the seam; with it **off**
-//! (the default), it exposes a fallback `RealFace` that is always `None`, so the
-//! Simulator transparently keeps using `face_sim` and the app still compiles and
-//! passes its tests. No Studio code needs changing; the main loop just sees
-//! "seam unavailable" and falls back.
+//! **on**, this module drives the real faces through the seam. With it **off**, it
+//! exposes a fallback `RealFace` that is always `None`, so the Simulator
+//! transparently keeps using `face_sim` and the app still compiles and passes its
+//! tests. No Studio code needs changing. The main loop sees "seam unavailable"
+//! and falls back.
 
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{

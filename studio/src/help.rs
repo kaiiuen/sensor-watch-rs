@@ -622,8 +622,8 @@ const TUTORIALS: &[Tutorial] = &[
         title: "Simulator tutorial",
         steps: steps!
         ("Controls" => "The watch preview, face selector, scale, date/time controls, and simulated button controls are visible here. Use them to exercise a face without connecting a watch.",
-         "Beginner workflow" => "1. Select a preset face. 2. Set a recognizable date/time. 3. Click or hold the simulated buttons. 4. Observe the display and event/status output. Expected result: the preview responds deterministically to simulated input.",
-         "Safety and limits" => "Simulation cannot access real sensors, crystal drift, battery behavior, USB, or the physical LCD. A simulated success is not hardware validation. Reset or changing simulation inputs only affects the host session."),
+         "Beginner workflow" => "1. Select a preset face. 2. Set a recognizable date/time. 3. Click or hold the simulated buttons. 4. Observe the display and event/status output. Expected result: the preview responds deterministically to simulated input. The panel shows the current face render path.",
+         "Safety and limits" => "With default real-faces, 108 of 111 faces execute the actual firmware face source files through translated host movement and HAL seams with MockHw. The remaining 3 use the separate face_sim approximation. This is not full ARM firmware simulation or hardware simulation. MMIO, interrupts, sensors, power, RTC oscillator accuracy, peripheral electrical behavior, and some scheduling are modeled or stubbed and can diverge. With real-faces disabled, all 111 faces use face_sim. A simulated success is not hardware validation."),
     },
     Tutorial {
         id: HelpId::BuildFlash,

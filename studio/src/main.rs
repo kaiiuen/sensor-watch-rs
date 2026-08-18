@@ -37,6 +37,7 @@ mod progress;
 mod real_face;
 mod restore;
 mod settings;
+mod sim_provenance;
 mod sysstats;
 mod test_runtime;
 mod theme;
@@ -6522,6 +6523,10 @@ impl StudioApp {
              settings configured in the Watch Faces tab.",
         );
         ui.separator();
+        ui.heading("Simulation provenance");
+        ui.label(sim_provenance::STATUS);
+        ui.weak(sim_provenance::LIMITATIONS);
+        ui.separator();
 
         // The simulator body can be taller than the window (especially with the
         // date controller, debug log, and a large watch rendering all expanded),
@@ -6565,11 +6570,14 @@ impl StudioApp {
                     ui.separator();
                     // This is the result of the most recently completed render;
                     // draw_watch updates it only after texture creation succeeds.
-                    ui.label(if self.last_render_used_real {
-                        "Last render: real face (firmware seam)"
-                    } else {
-                        "Last render: face_sim fallback"
-                    });
+                    ui.label(format!(
+                        "Current face render path: {}",
+                        if self.last_render_used_real {
+                            "actual firmware face source via host seam and MockHw"
+                        } else {
+                            "face_sim approximation fallback"
+                        }
+                    ));
                     ui.separator();
                     // Fuzz the current face.
                     if ui

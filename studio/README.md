@@ -33,17 +33,17 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   firmware API, build constraints, and hardware impact. Normal mode is the
   recommended path for beginners, Advanced mode does not make source changes
   safe or physically validated.
-- **Simulator** - 1:1 F-91W replica (SVG) with clickable button hotspots, a
-  **date/time controller**, and face cycling through the active preset. Faces
-  are **fully interactive** via the `face_sim` engine: the clock ticks live,
-  the stopwatch/timer/counter run, the alarm toggles, and the diagnostics face
-  is navigable (including a power-on uptime stat). Text renders with the
-  firmware's real 7-segment character set. Shows both the sim's face counter
-  and the engine's actual loaded face for catching face-switching bugs. These
-  diagnostics are simulated unless a UART jig is connected. With Studio's
-  default `real-faces` feature, 108 of the 111 registered firmware faces run
-  through the real host seam. The remaining 3 use `face_sim`. Host seam
-  coverage does not constitute physical hardware testing.
+- **Simulator** - F-91W SVG display replica with clickable button hotspots, a
+  **date/time controller**, and face cycling through the active preset. The
+  current face render path is shown prominently in the panel. With the default
+  `real-faces` feature, 108 of 111 faces execute the actual firmware face source
+  files through translated host movement and HAL seams with `MockHw`. The other
+  3 faces use the separate `face_sim` approximation. With `real-faces` disabled,
+  all 111 faces use `face_sim`. This is not full ARM firmware simulation or
+  hardware simulation. MMIO, interrupts, sensors, power, RTC oscillator
+  accuracy, peripheral electrical behavior, and some scheduling are modeled or
+  stubbed and can diverge from a physical watch. The SVG and firmware character
+  set provide a display preview, not physical hardware validation.
 - **Build & Flash** - combined panel: review the target board and component
   profile, then request a firmware build. The build preflight is explicitly
   fail-closed and the profile panel displays the disabled state. No configured
@@ -229,18 +229,21 @@ component profile are passed into the firmware build. Once that input path is
 implemented, it will invoke the firmware's own `cargo build` and use the core
 crate's `convert_to_uf2` to produce the final file.
 
-The Simulator can also run the **real firmware faces** through a host seam:
-`real_face.rs` drives the firmware's own `WatchFace` code against a mock HAL,
-so the rendered digits come from the same code the firmware runs. The host seam
-and its real-face coverage are available through Studio's default `real-faces`
-feature because it requires the firmware host lib to compile as a host
-dependency. If the feature is disabled, the Simulator falls back to the
-hand-written `face_sim` engine. CI checks this configuration with
-`cargo test -p sensor-watch-studio --no-default-features`. This remains
-host-side coverage, not physical hardware validation. The latest validated
+The Simulator's default `real-faces` mode executes 108 of 111 faces from the
+actual firmware face source files through translated host movement and HAL seams
+with `MockHw`. The other 3 faces use the separate `face_sim` approximation. If
+`real-faces` is disabled, the existing fallback behavior remains in place and all
+111 faces use `face_sim`.
+
+This is not full ARM firmware simulation or hardware simulation. MMIO,
+interrupts, sensors, power, RTC oscillator accuracy, peripheral electrical
+behavior, and some scheduling are modeled or stubbed and can diverge from a
+physical watch. The display preview and host seam coverage do not constitute
+physical hardware validation. CI checks the fallback configuration with
+`cargo test -p sensor-watch-studio --no-default-features`. The latest validated
 workspace run passed 365 host tests: 121 firmware host-seam, 69 core, 145
 Studio, and 30 tools. The ARM release package build is a separate build check.
-none of these results represent on-silicon validation.
+None of these results represent on-silicon validation.
 
 ## Dependencies
 
