@@ -2116,6 +2116,16 @@ impl eframe::App for StudioApp {
 }
 
 impl StudioApp {
+    fn invalidate_build_estimator_if_configuration_changed(
+        &mut self,
+        previous_board: Board,
+        previous_effective: &components::ComponentsConfig,
+    ) {
+        if previous_board != self.board || previous_effective != &self.component_effective {
+            self.build_estimator_state = BuildEstimatorState::NeedsValidation;
+        }
+    }
+
     fn request_component_change(
         &mut self,
         board: Board,
@@ -2123,6 +2133,8 @@ impl StudioApp {
         draft: components::ComponentsConfig,
         title: String,
     ) {
+        let previous_board = self.board;
+        let previous_effective = self.component_effective.clone();
         let profile_data = self
             .component_profiles
             .get(profile)
@@ -2145,6 +2157,10 @@ impl StudioApp {
             self.component_profile = profile;
             self.component_draft = draft.clone();
             self.component_effective = components::effective_config(board, &profile_data, &draft);
+            self.invalidate_build_estimator_if_configuration_changed(
+                previous_board,
+                &previous_effective,
+            );
         }
     }
 
@@ -2170,6 +2186,8 @@ impl StudioApp {
             });
         if let Some(action) = action {
             if action != 0 {
+                let previous_board = self.board;
+                let previous_effective = self.component_effective.clone();
                 self.board = pending.board;
                 self.component_profile = pending.profile;
                 self.component_draft = pending.draft.clone();
@@ -2188,6 +2206,10 @@ impl StudioApp {
                 self.component_effective =
                     components::resolve_conflict(choice, pending.board, &profile, &pending.draft)
                         .expect("non-cancel component conflict choice must resolve");
+                self.invalidate_build_estimator_if_configuration_changed(
+                    previous_board,
+                    &previous_effective,
+                );
             }
             self.pending_component_conflict = None;
         }
@@ -4525,13 +4547,6 @@ impl StudioApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 ui.heading("Build & Flash");
-                let (flash, ram) = components::estimate(&self.component_effective);
-                ui.weak(configured_estimator_status(
-                    &self.build_estimator_state,
-                    flash,
-                    ram,
-                ));
-                ui.add_space(8.0);
 
                 // Board selection (which revision the .uf2 targets).
                 ui.horizontal(|ui| {
@@ -4582,9 +4597,22 @@ impl StudioApp {
                     self.request_component_change(self.board, selection.index, selection.config, format!("Apply build profile {}", self.component_profiles[selection.index].name));
                 }
                 if config_changed && self.pending_component_conflict.is_none() {
+                    let previous_board = self.board;
+                    let previous_effective = self.component_effective.clone();
                     let profile = self.component_profiles.get(self.component_profile).cloned().unwrap_or_else(|| components::BuildProfile::new("draft", self.component_draft.clone()));
                     self.component_effective = components::effective_config(self.board, &profile, &self.component_draft);
+                    self.invalidate_build_estimator_if_configuration_changed(
+                        previous_board,
+                        &previous_effective,
+                    );
                 }
+                let (flash, ram) = components::estimate(&self.component_effective);
+                ui.weak(configured_estimator_status(
+                    &self.build_estimator_state,
+                    flash,
+                    ram,
+                ));
+                ui.add_space(8.0);
                 self.register_anchor_rect(
                     Panel::BuildFlash,
                     AnchorId::BuildProfile,
@@ -7468,7 +7496,13 @@ impl StudioApp {
                         _ => None,
                     };
                     if let Some(nb) = next {
+                        let previous_board = self.board;
+                        let previous_effective = self.component_effective.clone();
                         self.board = nb;
+                        self.invalidate_build_estimator_if_configuration_changed(
+                            previous_board,
+                            &previous_effective,
+                        );
                         self.save_settings_internal();
                         self.push_terminal(format!("Board set to {}", nb.label()));
                     } else {
@@ -9243,7 +9277,13 @@ impl StudioApp {
                         if let WatchDriveSelection::One(candidate) = &self.cached_watch {
                             if let Some(board) = board_from_info(&candidate.info) {
                                 if self.board != board {
+                                    let previous_board = self.board;
+                                    let previous_effective = self.component_effective.clone();
                                     self.board = board;
+                                    self.invalidate_build_estimator_if_configuration_changed(
+                                        previous_board,
+                                        &previous_effective,
+                                    );
                                     self.log.log(format!(
                                         "Auto-selected board {} from watch",
                                         board.label()
@@ -10573,6 +10613,7 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::configured_estimator_status;
     use super::Board;
     use super::{
         approve_artifact_state, clamp_sim_weekday, configuration_fingerprint,
@@ -10592,12 +10633,50 @@ mod tests {
         handle_sim_button, reset_simulator_button_state, update_simulator_pointer_lock, ButtonId,
         SimAction,
     };
+    use super::{BuildEstimatorState, StudioApp};
     use crate::components;
     use crate::flash::{select_watch_drive, FlashResult, FlashStatus};
     use crate::modules;
     use crate::presets::PresetManager;
     use crate::progress::{self, Phase, ProgressEvent};
     use crate::watch_config;
+
+    #[test]
+    fn effective_component_change_requires_estimator_validation() {
+        let mut app = StudioApp {
+            build_estimator_state: BuildEstimatorState::Verified,
+            ..StudioApp::default()
+        };
+        let mut draft = app.component_draft.clone();
+        draft.uart_shell = !draft.uart_shell;
+
+        app.request_component_change(
+            Board::Green,
+            app.component_profile,
+            draft,
+            "Change component configuration".to_string(),
+        );
+
+        assert_eq!(
+            app.build_estimator_state,
+            BuildEstimatorState::NeedsValidation
+        );
+    }
+
+    #[test]
+    fn estimator_status_uses_live_effective_configuration_estimate() {
+        let config = components::ComponentsConfig::default();
+        let initial = components::estimate(&config);
+        let mut changed = config.clone();
+        changed.uart_shell = true;
+        let refreshed = components::estimate(&changed);
+
+        assert_ne!(initial, refreshed);
+        let status =
+            configured_estimator_status(&BuildEstimatorState::Verified, refreshed.0, refreshed.1);
+        assert!(status.contains(&format!("+{} KiB flash", refreshed.0)));
+        assert!(status.contains(&format!("+{} KiB RAM", refreshed.1)));
+    }
 
     fn test_progress_event(operation_id: u64, phase: Phase, message: &str) -> ProgressEvent {
         ProgressEvent {
