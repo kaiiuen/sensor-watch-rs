@@ -9310,7 +9310,7 @@ fn fmt_bytes(bytes: u64) -> String {
 
 fn print_cli_help() {
     println!(
-        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Refuse unconfigured firmware builds until Studio inputs are wired\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
+        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Build the unconfigured stock firmware (stock path)\n  configured-build --board <BOARD> --revision <REVISION> --profile <PROFILE> --lcd original --preset <NAME> --faces <FACE[,FACE...]> --output <DIR>\n      Build a validated Studio configuration through the isolated ARM pipeline\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
     );
 }
 
@@ -9324,6 +9324,210 @@ fn ensure_cli_no_extra(args: &mut impl Iterator<Item = String>) -> Result<(), St
         return Err(format!("unexpected argument: {extra} (try --help)"));
     }
     Ok(())
+}
+
+#[derive(Clone, Debug)]
+struct ConfiguredBuildCli {
+    request: firmware_inputs::FirmwareInputRequest,
+    output: std::path::PathBuf,
+}
+
+fn cli_value(args: &mut impl Iterator<Item = String>, option: &str) -> Result<String, String> {
+    args.next()
+        .ok_or_else(|| format!("missing value for {option} (try --help)"))
+}
+
+fn parse_stock_board(value: &str) -> Result<Board, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "green" => Ok(Board::Green),
+        "blue" => Ok(Board::Blue),
+        "pro" => Ok(Board::Pro),
+        "red" | "lite" | "red-lite" | "red/lite" => Ok(Board::RedLite),
+        _ => Err(format!("unsupported stock board: {value}")),
+    }
+}
+
+fn parse_stock_profile(value: &str, board: Board) -> Result<components::BuildProfile, String> {
+    let normalized = value
+        .to_ascii_lowercase()
+        .replace([' ', '_', '/'], "-")
+        .split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-");
+    let expected = match board {
+        Board::Green => "green",
+        Board::RedLite => "red-lite",
+        Board::Blue => "blue",
+        Board::Pro => "pro",
+    };
+    if normalized != expected {
+        return Err(format!(
+            "profile {value:?} does not match stock board {}",
+            board.label()
+        ));
+    }
+    let index = components::BoardKind::ALL
+        .iter()
+        .position(|candidate| *candidate == board)
+        .expect("all stock boards have profiles");
+    Ok(components::default_profiles()[index].clone())
+}
+
+fn parse_configured_build(
+    args: &mut impl Iterator<Item = String>,
+) -> Result<ConfiguredBuildCli, String> {
+    let mut board = None;
+    let mut revision = None;
+    let mut profile = None;
+    let mut lcd = None;
+    let mut preset = None;
+    let mut faces = None;
+    let mut output = None;
+    while let Some(option) = args.next() {
+        let value = match option.as_str() {
+            "--board" => cli_value(args, "--board")?,
+            "--revision" => cli_value(args, "--revision")?,
+            "--profile" => cli_value(args, "--profile")?,
+            "--lcd" => cli_value(args, "--lcd")?,
+            "--preset" => cli_value(args, "--preset")?,
+            "--faces" => cli_value(args, "--faces")?,
+            "--output" => cli_value(args, "--output")?,
+            _ => return Err(format!("unexpected argument: {option} (try --help)")),
+        };
+        let slot = match option.as_str() {
+            "--board" => &mut board,
+            "--revision" => &mut revision,
+            "--profile" => &mut profile,
+            "--lcd" => &mut lcd,
+            "--preset" => &mut preset,
+            "--faces" => &mut faces,
+            "--output" => &mut output,
+            _ => unreachable!(),
+        };
+        if slot.replace(value).is_some() {
+            return Err(format!("duplicate argument: {option}"));
+        }
+    }
+    let board = parse_stock_board(board.as_deref().ok_or("missing --board")?)?;
+    let revision = revision.ok_or("missing --revision")?;
+    let profile = parse_stock_profile(profile.as_deref().ok_or("missing --profile")?, board)?;
+    if lcd.as_deref() != Some("original") {
+        return Err("--lcd must be exactly original for the supported stock LCD".into());
+    }
+    let preset_name = preset.ok_or("missing --preset")?;
+    let ordered_faces: Vec<String> = faces
+        .ok_or("missing --faces")?
+        .split(',')
+        .map(str::trim)
+        .map(str::to_string)
+        .collect();
+    if ordered_faces.iter().any(String::is_empty) {
+        return Err("--faces must contain non-empty ordered face names".into());
+    }
+    let output = std::path::PathBuf::from(output.ok_or("missing --output")?);
+    let components = profile.config.clone();
+    Ok(ConfiguredBuildCli {
+        request: firmware_inputs::FirmwareInputRequest {
+            board,
+            revision,
+            profile,
+            components,
+            preset_name,
+            ordered_faces,
+            modules: Vec::new(),
+        },
+        output,
+    })
+}
+
+fn run_configured_build(cli: ConfiguredBuildCli) -> Result<(), String> {
+    let result = build::build_firmware(cli.request, &cli.output);
+    if !result.success {
+        return Err(result.message);
+    }
+    let path = result
+        .uf2_path
+        .ok_or_else(|| "configured build produced no UF2 artifact".to_string())?;
+    let inspection = build::inspect_artifact(&path)?;
+    build::validate_generated_input_digest(&inspection)?;
+    println!(
+        "configured build succeeded\nartifact {}\ngenerated-input-digest {}",
+        path.display(),
+        inspection.generated_input_digest
+    );
+    Ok(())
+}
+
+#[cfg(test)]
+mod configured_cli_tests {
+    use super::*;
+
+    fn valid_args() -> Vec<String> {
+        [
+            "--board",
+            "Green",
+            "--revision",
+            "OSO-SWAT-A1-05",
+            "--profile",
+            "Green",
+            "--lcd",
+            "original",
+            "--preset",
+            "Stock Casio",
+            "--faces",
+            "SIMPLE_CLOCK,ALARM",
+            "--output",
+            "target/test-configured",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect()
+    }
+
+    #[test]
+    fn parses_valid_stock_configured_request() {
+        let parsed = parse_configured_build(&mut valid_args().into_iter()).unwrap();
+        assert_eq!(parsed.request.board, Board::Green);
+        assert_eq!(parsed.request.revision, "OSO-SWAT-A1-05");
+        assert_eq!(parsed.request.profile.name, "Green");
+        assert_eq!(parsed.request.components, parsed.request.profile.config);
+        assert_eq!(parsed.request.preset_name, "Stock Casio");
+        assert_eq!(parsed.request.ordered_faces, ["SIMPLE_CLOCK", "ALARM"]);
+        assert_eq!(
+            parsed.output,
+            std::path::PathBuf::from("target/test-configured")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_stock_combinations_without_a_fallback_request() {
+        let mut args = valid_args();
+        let profile = args.iter().position(|arg| arg == "Green").unwrap();
+        args[profile] = "Pro".into();
+        let error = parse_configured_build(&mut args.into_iter()).unwrap_err();
+        assert!(error.contains("does not match stock board"));
+    }
+
+    #[test]
+    fn rejects_non_original_lcd_and_missing_ordered_faces() {
+        let mut args = valid_args();
+        let lcd = args.iter().position(|arg| arg == "original").unwrap();
+        args[lcd] = "custom".into();
+        assert!(parse_configured_build(&mut args.into_iter())
+            .unwrap_err()
+            .contains("--lcd"));
+
+        let mut args = valid_args();
+        let faces = args
+            .iter()
+            .position(|arg| arg == "SIMPLE_CLOCK,ALARM")
+            .unwrap();
+        args[faces] = "SIMPLE_CLOCK,".into();
+        assert!(parse_configured_build(&mut args.into_iter())
+            .unwrap_err()
+            .contains("non-empty"));
+    }
 }
 
 fn print_manifest_cli(manifest: &sensor_watch_tools::Manifest) -> Result<(), String> {
@@ -9345,9 +9549,10 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
             ensure_cli_no_extra(&mut args)?;
             build::validate_configuration_inputs().map_err(str::to_string)?;
             let result = sensor_watch_tools::build_firmware()?;
-            println!("built {}", result.uf2_path.display());
+            println!("built stock artifact {}", result.uf2_path.display());
             Ok(())
         }
+        "configured-build" => run_configured_build(parse_configured_build(&mut args)?),
         "uf2" => {
             let input = std::path::PathBuf::from(required_cli_arg(&mut args)?);
             let output = std::path::PathBuf::from(required_cli_arg(&mut args)?);

@@ -174,14 +174,22 @@ Build the GUI with:
 cargo build --release
 ```
 
-The same binary also provides host-side UF2, recovery, and probe-flash commands.
-Its `build` command is intentionally fail-closed for configured Studio builds:
-it rejects the request until preset, board, and component selections are wired
-into firmware build inputs. Use `help` to see the complete command surface:
+The same binary also provides host-side configured-build, UF2, recovery, and
+probe-flash commands. `configured-build` is the headless Studio path: it accepts
+only the supported stock board/revision/profile combinations, original LCD,
+an active preset with ordered faces, and an output directory. It constructs the
+same `FirmwareInputRequest` used by the GUI and verifies generated-input
+provenance before returning success. The separate `build` command is explicitly
+the unconfigured stock firmware path. Use `help` to see the complete command
+surface:
 
 ```sh
 cargo run -p sensor-watch-studio -- help
-cargo run -p sensor-watch-studio -- build  # rejects configured builds for now
+cargo run -p sensor-watch-studio -- configured-build \\
+  --board Green --revision OSO-SWAT-A1-05 --profile Green --lcd original \\
+  --preset "Stock Casio" --faces SIMPLE_CLOCK,ALARM \\
+  --output target/configured-green
+cargo run -p sensor-watch-studio -- build  # stock, unconfigured firmware
 cargo run -p sensor-watch-tools -- package-studio
 cargo run -p sensor-watch-tools -- package-studio --output target/releases/sensor-watch-studio-0.1.0.zip
 cargo run -p sensor-watch-studio -- verify path/to/sensor-watch.uf2
