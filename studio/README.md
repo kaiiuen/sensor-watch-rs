@@ -86,7 +86,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Settings** - language (English, Simplified Chinese, Traditional Chinese), theme, text size
   (small/normal/big), configurable **log line limit**, app resource usage
   (app-only, adjustable update rate), settings save/export/import, source
-  export, integrity (SHA-256 + release checksum verification), community credits
+  export, integrity (SHA-256 digest/checksum checks only; not authenticity), community credits
   (see [`docs/CREDITS.md`](../docs/CREDITS.md)), code statistics, and license.
 
 ## Studio build input contract
@@ -245,7 +245,7 @@ none of these results represent on-silicon validation.
 - `serde` / `serde_json` - settings save/export/import
 - `arboard` - system clipboard
 - `sysinfo` - app resource usage
-- `ureq` - HTTP client for release checksum verification
+- `ureq` - HTTP client for release checksum/integrity checks (not authenticity)
 - `serialport` - cross-platform UART-jig port discovery and I/O
 - `webbrowser` - open the GitHub repo from the title
 
@@ -266,7 +266,7 @@ none of these results represent on-silicon validation.
 - `ntp.rs` - NTP time client
 - `settings.rs` - settings save/export/import
 - `persist.rs` - internal settings persistence (exe-adjacent file)
-- `integrity.rs` - SHA-256 hashing and release checksum verification
+- `integrity.rs` - SHA-256 integrity hashing/checks; release authenticity requires separately trusted public-key signature verification
 - `sysstats.rs` - app resource usage
 - `watch_config.rs` - watch configuration (mirrors the firmware Settings register)
 - `components.rs` - persisted component/build profiles and planning estimates

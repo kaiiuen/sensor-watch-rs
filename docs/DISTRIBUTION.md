@@ -77,10 +77,23 @@ remain under user data.
 Before selecting or starting a version, the launcher authenticates the signed
 `release/metadata.json` using its configured key ring, checks the requested
 version against that signed metadata, and verifies the selected executable's
-artifact digest. Missing authentication, an invalid signature, an untrusted
-version, a downgrade that is not allowed by policy, or a digest mismatch fails
-closed. The package builder emits a metadata/signature placeholder for local
-artifacts; it must be replaced with a real signed release before publishing.
+artifact digest. SHA-256 is a digest/hash used to detect corruption or an
+unexpected change; it is not a release key and does not establish who produced
+an artifact. Authenticity requires a release signer to use a private signing key
+and the launcher/distribution to verify the signature with the corresponding
+pinned public verification key (for example, an Ed25519 key).
+
+The trusted public key belongs in the launcher's configured key ring or another
+protected, versioned distribution trust store, independently of mutable release
+metadata or repository content. The private signing key must stay in the
+protected release/signing environment and must never be committed, packaged, or
+placed in the repository. A mutable GitHub branch, or a checksum fetched from
+that branch alone, is not an authenticity root: an attacker who can change the
+artifact can change its checksum too. Missing authentication, an invalid
+signature, an untrusted version, a downgrade that is not allowed by policy, or
+a digest mismatch fails closed. The package builder emits a
+metadata/signature placeholder for local artifacts; it must be replaced with a
+real signed release and a separately provisioned public key before publishing.
 
 Installed Studio versions are immutable sibling directories under
 `versions/<version>`. The launcher keeps A/B-style `current` and `previous`

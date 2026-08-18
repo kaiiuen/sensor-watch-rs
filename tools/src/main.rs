@@ -12,7 +12,7 @@ fn help() {
         "usage: sensor-watch-tools <build|package-studio|uf2|verify|backup|rollback|report|flash> ..."
     );
     println!(
-        "verify checks UF2 structure, local manifest consistency, and optional trusted release SHA-256 matching; SHA-256 is not a signature."
+        "verify checks UF2 structure, local manifest consistency, and optional trusted release SHA-256 matching; SHA-256 is a digest/hash for integrity, not a signing key or authenticity proof. Authenticity requires a signature verified with a separately trusted public key (for example, Ed25519)."
     );
 }
 fn ensure_no_extra(args: &mut impl Iterator<Item = String>) {
@@ -95,7 +95,7 @@ fn main() -> ExitCode {
                 tools::write_manifest(&output, &result).unwrap_or_else(|e| fail(e));
             }
             eprintln!(
-                "artifact validation: structural and local digest checks passed; trusted release SHA-256: {}",
+                "artifact validation: structural and local digest checks passed; trusted release SHA-256 (integrity only): {}",
                 if trusted.is_some() {
                     "matched"
                 } else {

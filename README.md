@@ -192,7 +192,12 @@ written. The archive has one versioned root folder,
 contains the launcher plus the versioned Studio executable under the A/B layout,
 `sensor-watch-package.json`, resources, templates, the firmware project sources,
 `README.txt`, sorted `PACKAGE-MANIFEST.json` SHA-256 entries, signature placeholders,
-and startup/update pointer contracts. Firmware tools/cross targets are reported as
+and startup/update pointer contracts. The SHA-256 entries are integrity digests,
+not release keys or authenticity proof. A published release needs a private
+signing key and a separately trusted public verification key (for example,
+Ed25519); the private key must never be committed or packaged. A mutable GitHub
+branch/checksum alone cannot establish provenance because an attacker can change
+both the artifact and its checksum. Firmware tools/cross targets are reported as
 unavailable rather than implied. User settings, secrets, `target/`, and `.git/`
 remain outside the archive. The ZIP is written to a temporary file and atomically
 renamed only after completion. No cryptographic signature or network self-update is

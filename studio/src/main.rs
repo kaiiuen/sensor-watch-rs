@@ -7905,10 +7905,10 @@ impl StudioApp {
             ui.weak("Could not read the executable.");
         }
 
-        // Release checksum verification.
+        // Release digest comparison; this does not establish authenticity.
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if ui.button("Verify against release").clicked() {
+            if ui.button("Compare release digest").clicked() {
                 self.fetch_release_checksum();
             }
             if self.checksum_busy {
@@ -7923,12 +7923,12 @@ impl StudioApp {
                     if *expected == local {
                         ui.colored_label(
                             egui::Color32::from_rgb(80, 200, 120),
-                            "Checksum matches the official release.",
+                            "SHA-256 matches the published value (integrity only; not authenticity).",
                         );
                     } else {
                         ui.colored_label(
                             egui::Color32::from_rgb(220, 80, 80),
-                            "Checksum MISMATCH - this executable differs from the official release.",
+                            "SHA-256 mismatch - this executable differs from the published value.",
                         );
                     }
                 }
@@ -7938,8 +7938,8 @@ impl StudioApp {
             }
         } else if !self.checksum_busy {
             ui.weak(
-                "No release checksum fetched yet. Press 'Verify against release' (requires internet).\n\
-                 If offline, the checksum cannot be validated.",
+                "No release digest fetched yet. Press 'Compare release digest' (requires internet).\n\
+                 This checksum comparison is an integrity check only, not authenticity verification. If offline, the digest cannot be compared.",
             );
         }
 

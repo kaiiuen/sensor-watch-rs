@@ -6,10 +6,14 @@
 //! change at runtime and are expected to differ.
 //!
 //! A running executable cannot meaningfully hash itself for authenticity (the
-//! bytes it reads are the same bytes it is), so the real verification is done
-//! against a published checksum: the app fetches the expected SHA-256 from the
-//! GitHub release and compares it to the local file's hash. If offline, it shows
-//! that the checksum could not be validated.
+//! bytes it reads are the same bytes it is). SHA-256 is a digest/hash for
+//! detecting corruption or unexpected changes, not a signing key or proof of
+//! publisher identity. A checksum fetched from a mutable GitHub branch or
+//! release location is insufficient: an attacker who changes the binary can
+//! change that checksum too. Authenticity requires a signature made with a
+//! protected private key and verified with a separately trusted public key,
+//! such as an Ed25519 key. This module reports checksum status only; it does
+//! not invent or provision signing keys.
 
 use std::io::Read;
 
