@@ -52,6 +52,8 @@ pub struct BoardCapabilities {
     pub i2c: CapabilityStatus,
     pub spi: CapabilityStatus,
     pub uart: CapabilityStatus,
+    pub usb_uf2: CapabilityStatus,
+    pub sensor_connector: CapabilityStatus,
 }
 
 /// Authoritative Studio capability table. Unknown is intentional: it prevents
@@ -72,6 +74,8 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
             i2c: CapabilityStatus::Documented,
             spi: CapabilityStatus::Documented,
             uart: CapabilityStatus::Documented,
+            usb_uf2: CapabilityStatus::Unknown,
+            sensor_connector: CapabilityStatus::Unknown,
         },
     ),
     (
@@ -83,12 +87,14 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
             blue_led: CapabilityStatus::Unsupported,
             rgb_led: CapabilityStatus::Unsupported,
             thermistor: CapabilityStatus::Documented,
-            accelerometer: CapabilityStatus::Unknown,
+            accelerometer: CapabilityStatus::Unsupported,
             light_sensor: CapabilityStatus::Unsupported,
-            buzzer: CapabilityStatus::Verified,
+            buzzer: CapabilityStatus::Documented,
             i2c: CapabilityStatus::Unsupported,
             spi: CapabilityStatus::Unsupported,
-            uart: CapabilityStatus::Verified,
+            uart: CapabilityStatus::Documented,
+            usb_uf2: CapabilityStatus::Documented,
+            sensor_connector: CapabilityStatus::Unsupported,
         },
     ),
     (
@@ -106,23 +112,27 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
             i2c: CapabilityStatus::Documented,
             spi: CapabilityStatus::Documented,
             uart: CapabilityStatus::Documented,
+            usb_uf2: CapabilityStatus::Unknown,
+            sensor_connector: CapabilityStatus::Unknown,
         },
     ),
     (
         BoardKind::Pro,
         BoardCapabilities {
-            lcd: CapabilityStatus::Verified,
-            red_led: CapabilityStatus::Verified,
-            green_led: CapabilityStatus::Verified,
-            blue_led: CapabilityStatus::Unsupported,
-            rgb_led: CapabilityStatus::Unsupported,
+            lcd: CapabilityStatus::Documented,
+            red_led: CapabilityStatus::Documented,
+            green_led: CapabilityStatus::Documented,
+            blue_led: CapabilityStatus::Documented,
+            rgb_led: CapabilityStatus::Documented,
             thermistor: CapabilityStatus::Documented,
-            accelerometer: CapabilityStatus::Unknown,
-            light_sensor: CapabilityStatus::Unknown,
+            accelerometer: CapabilityStatus::Documented,
+            light_sensor: CapabilityStatus::Documented,
             buzzer: CapabilityStatus::Documented,
             i2c: CapabilityStatus::Documented,
             spi: CapabilityStatus::Documented,
             uart: CapabilityStatus::Documented,
+            usb_uf2: CapabilityStatus::Documented,
+            sensor_connector: CapabilityStatus::Documented,
         },
     ),
 ];
@@ -224,12 +234,10 @@ mod tests {
         );
 
         let pro = issues(BoardKind::Pro, config.clone());
-        let rgb_issue = pro.iter().find(|item| item.component == "RGB LED").unwrap();
-        assert_eq!(rgb_issue.severity, CompatibilitySeverity::Error);
-        assert!(rgb_issue.reason.contains("unsupported"));
+        assert!(!pro.iter().any(|item| item.component == "RGB LED"));
         assert_eq!(
             capabilities(BoardKind::Pro).rgb_led,
-            CapabilityStatus::Unsupported
+            CapabilityStatus::Documented
         );
 
         assert!(issues(BoardKind::Green, config)
@@ -308,7 +316,7 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn capability_chart_layout_is_compact_and_deterministic() {
-        assert_eq!(capability_chart_cells(&CAPABILITY_CHART[0]).len(), 12);
+        assert_eq!(capability_chart_cells(&CAPABILITY_CHART[0]).len(), 14);
         assert_eq!(CAPABILITY_BOARD_WIDTH, 96.0);
         assert_eq!(CAPABILITY_NAME_WIDTH, 128.0);
         assert_eq!(CAPABILITY_VALUE_WIDTH, 400.0);
@@ -329,31 +337,35 @@ mod tests {
         assert_eq!(green.light_sensor, "Onboard IR light sensor");
         assert_eq!(green.led, "RGB (red/green/blue)");
         let red_lite = rows.iter().find(|row| row.board == "Red / Lite").unwrap();
-        assert_eq!(red_lite.light_sensor, "No onboard sensor");
-        assert_eq!(red_lite.led, "Red + green");
         assert_eq!(
-            red_lite.thermistor,
-            "Documented onboard thermistor / temperature sensor"
+            red_lite.light_sensor,
+            "Unsupported: no claimed onboard sensor"
         );
-        assert!(red_lite.buses.contains("I2C/SPI not exposed"));
+        assert_eq!(red_lite.led, "Red + green PWM");
+        assert_eq!(red_lite.thermistor, "Documented onboard temperature sensor");
+        assert!(red_lite.buses.contains("A1/A4"));
         assert!(red_lite
             .source
-            .contains("User-provided/commercial comparison chart"));
-        assert!(red_lite
-            .revision_notes
-            .contains("Exact board revision/BOM confirmation is still required"));
-        assert!(red_lite.verification.contains("confirm the fitted part"));
+            .contains("https://www.crowdsupply.com/oddly-specific-objects/sensor-watch"));
+        assert!(red_lite.connector.contains("No nine-pin"));
+        assert!(red_lite.verification.contains("Firmware verification"));
         let blue = rows.iter().find(|row| row.board == "Blue").unwrap();
         assert_eq!(blue.led, "Red + blue");
         assert_eq!(blue.thermistor, "Unknown: board/revision-dependent");
         let pro = rows.iter().find(|row| row.board == "Pro").unwrap();
-        assert_eq!(pro.light_sensor, "Unknown / revision-dependent");
-        assert_eq!(pro.led, "Red + green");
-        assert!(pro.lcd.contains("Classic LCD") && pro.lcd.contains("OSO BU9796"));
-        assert!(!pro.led.contains("RGB, 3"));
+        assert_eq!(pro.light_sensor, "Documented infrared phototransistor");
+        assert_eq!(pro.led, "Red + green + blue PWM");
+        assert!(pro.lcd.contains("72-segment") && pro.lcd.contains("92-segment"));
+        assert!(pro.buses.contains("nine-pin") || pro.buses.contains("Nine-pin"));
+        assert!(pro.connector.contains("Nine-pin"));
+        assert!(pro
+            .source
+            .contains("https://www.crowdsupply.com/oddly-specific-objects/sensor-watch-pro"));
         assert!(rows.iter().all(|row| !row.lcd.is_empty()
             && !row.light_sensor.is_empty()
-            && !row.verification.is_empty()));
+            && !row.verification.is_empty()
+            && !row.programming.is_empty()
+            && !row.connector.is_empty()));
     }
 
     #[test]
@@ -367,7 +379,23 @@ mod tests {
             CapabilityStatus::Documented
         );
         assert!(CAPABILITY_CHART.iter().all(|row| {
-            !row.thermistor.contains("automatic") && !row.thermistor.contains("compensation")
+            !row.thermistor.contains("automatic")
+                && !row.thermistor.contains("compensation")
+                && row.verification.contains("Firmware verification")
+        }));
+    }
+
+    #[test]
+    fn lite_rejects_requested_accelerometer() {
+        let result = issues(
+            BoardKind::RedLite,
+            ComponentsConfig {
+                accelerometer: true,
+                ..Default::default()
+            },
+        );
+        assert!(result.iter().any(|item| {
+            item.component == "accelerometer" && item.severity == CompatibilitySeverity::Error
         }));
     }
 
@@ -447,7 +475,7 @@ mod tests {
         );
         assert_eq!(
             capabilities(BoardKind::Pro).light_sensor,
-            CapabilityStatus::Unknown
+            CapabilityStatus::Documented
         );
 
         let config = ComponentsConfig {
@@ -540,6 +568,8 @@ pub struct CapabilityChartRow {
     pub source: &'static str,
     pub revision_notes: &'static str,
     pub verification: &'static str,
+    pub programming: &'static str,
+    pub connector: &'static str,
 }
 
 pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
@@ -557,21 +587,25 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         source: "Official maintained pin evidence: community IR evidence",
         revision_notes: "Do not generalize across commercial revisions",
         verification: "Core LED/LCD evidence maintained. Fitted sensors remain revision-sensitive",
+        programming: "USB Micro-B; UF2 bootloader",
+        connector: "Unknown: board/revision-dependent",
     },
     CapabilityChartRow {
         board: "Red / Lite",
-        lcd: "Classic LCD",
-        led: "Red + green",
-        light_sensor: "No onboard sensor",
-        thermistor: "Documented onboard thermistor / temperature sensor",
-        accelerometer: "Accessory/optional: not built in",
-        buzzer: "Piezo",
-        buses: "I2C/SPI not exposed on current Lite pins",
-        uart: "Dedicated UART",
-        confidence: "High for current Lite pinout: medium for revisions",
-        source: "User-provided/commercial comparison chart",
-        revision_notes: "Exact board revision/BOM confirmation is still required",
-        verification: "Commercial chart documents the thermistor; confirm the fitted part and analog mapping before relying on it",
+        lcd: "Classic 72-segment F-91W/A158W LCD",
+        led: "Red + green PWM",
+        light_sensor: "Unsupported: no claimed onboard sensor",
+        thermistor: "Documented onboard temperature sensor",
+        accelerometer: "Unsupported: no onboard accelerometer claimed",
+        buzzer: "Piezo pad",
+        buses: "A1/A4 pads: analog/digital/PWM; UART",
+        uart: "A1/A4 test pads",
+        confidence: "Product-page claim; firmware/hardware validation separate",
+        source: "Product-page claim: https://www.crowdsupply.com/oddly-specific-objects/sensor-watch",
+        revision_notes: "No nine-pin connector; A4 can provide wake input",
+        verification: "Firmware verification: no temperature-compensation proof. Hardware validation: confirm fitted sensor and A1/A4 mapping",
+        programming: "USB Micro-B; UF2 bootloader",
+        connector: "No nine-pin connector claimed",
     },
     CapabilityChartRow {
         board: "Blue",
@@ -587,21 +621,25 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         source: "Official maintained pin evidence: community LED evidence",
         revision_notes: "Thermistor and accessory population may vary",
         verification: "LED colors corrected. Sensor fit remains unknown",
+        programming: "Unknown: board/revision-dependent",
+        connector: "Unknown: board/revision-dependent",
     },
     CapabilityChartRow {
         board: "Pro",
-        lcd: "Classic LCD or OSO BU9796 custom LCD",
-        led: "Red + green",
-        light_sensor: "Unknown / revision-dependent",
-        thermistor: "Documented onboard thermistor / temperature sensor",
-        accelerometer: "Accessory/optional: not built in",
-        buzzer: "Timed driver",
-        buses: "I2C/SPI available: OSO BU9796 requires I2C",
-        uart: "Multiplexed: not dedicated",
-        confidence: "High for red/green and OSO requirement: medium overall",
-        source: "User-provided/commercial comparison chart; official OSO/BU9796 evidence",
-        revision_notes: "Exact board revision/BOM confirmation is still required; Classic/OSO fit may vary",
-        verification: "Commercial chart documents the thermistor; confirm the fitted part before relying on it; OSO requires exposed I2C",
+        lcd: "Classic 72-segment LCD or custom 92-segment LCD",
+        led: "Red + green + blue PWM",
+        light_sensor: "Documented infrared phototransistor",
+        thermistor: "Documented onboard temperature sensor",
+        accelerometer: "Optional LIS2DW add-on",
+        buzzer: "Amplified piezo",
+        buses: "Nine-pin connector: I2C/SPI/GPIO/UART/analog/wake",
+        uart: "UART test points and nine-pin connector",
+        confidence: "Product-page claim; firmware/hardware validation separate",
+        source: "Product-page claim: https://www.crowdsupply.com/oddly-specific-objects/sensor-watch-pro",
+        revision_notes: "Custom LCD and LIS2DW are optional Pro add-ons",
+        verification: "Firmware verification: no temperature-compensation proof. Hardware validation: confirm connector population and sensor/add-on fit",
+        programming: "USB Micro-B; UF2 bootloader",
+        connector: "Nine-pin sensor-board connector",
     },
 ];
 
@@ -615,7 +653,7 @@ const CAPABILITY_VALUE_WIDTH: f32 = 400.0;
 const CAPABILITY_CHART_MIN_WIDTH: f32 =
     CAPABILITY_BOARD_WIDTH + CAPABILITY_NAME_WIDTH + CAPABILITY_VALUE_WIDTH + 16.0;
 
-fn capability_chart_cells(row: &CapabilityChartRow) -> [(&'static str, &'static str); 12] {
+fn capability_chart_cells(row: &CapabilityChartRow) -> [(&'static str, &'static str); 14] {
     [
         ("LCD", row.lcd),
         ("LED channels/type", row.led),
@@ -629,6 +667,8 @@ fn capability_chart_cells(row: &CapabilityChartRow) -> [(&'static str, &'static 
         ("Source", row.source),
         ("Revision notes", row.revision_notes),
         ("Verification", row.verification),
+        ("Programming", row.programming),
+        ("Connector", row.connector),
     ]
 }
 
@@ -753,7 +793,10 @@ pub fn validate_compatibility(
             "Disable SPI or select a board/revision with exposed SPI",
         ));
     }
-    if config.uart_shell && matches!(caps.uart, CapabilityStatus::Documented) {
+    if config.uart_shell
+        && board == BoardKind::Pro
+        && matches!(caps.uart, CapabilityStatus::Documented)
+    {
         issues.push(issue(
             "UART",
             CompatibilitySeverity::Warning,
@@ -793,13 +836,22 @@ pub fn validate_compatibility(
             _ => {}
         }
     }
-    if config.accelerometer && matches!(caps.accelerometer, CapabilityStatus::Unknown) {
-        issues.push(issue(
-            "accelerometer",
-            CompatibilitySeverity::Warning,
-            "accelerometer capability is unknown for this board",
-            "Confirm the accelerometer, bus, address, and power mapping before building",
-        ));
+    if config.accelerometer {
+        match caps.accelerometer {
+            CapabilityStatus::Unsupported => issues.push(issue(
+                "accelerometer",
+                CompatibilitySeverity::Error,
+                "accelerometer is not claimed for this board",
+                "Disable the accelerometer or select Pro with the optional LIS2DW add-on",
+            )),
+            CapabilityStatus::Unknown => issues.push(issue(
+                "accelerometer",
+                CompatibilitySeverity::Warning,
+                "accelerometer capability is unknown for this board",
+                "Confirm the accelerometer, bus, address, and power mapping before building",
+            )),
+            _ => {}
+        }
     }
     if config.rgb_led {
         match caps.rgb_led {
