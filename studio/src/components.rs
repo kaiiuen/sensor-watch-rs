@@ -82,7 +82,7 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
             green_led: CapabilityStatus::Verified,
             blue_led: CapabilityStatus::Unsupported,
             rgb_led: CapabilityStatus::Unsupported,
-            thermistor: CapabilityStatus::Unknown,
+            thermistor: CapabilityStatus::Documented,
             accelerometer: CapabilityStatus::Unknown,
             light_sensor: CapabilityStatus::Unsupported,
             buzzer: CapabilityStatus::Verified,
@@ -116,7 +116,7 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
             green_led: CapabilityStatus::Verified,
             blue_led: CapabilityStatus::Unsupported,
             rgb_led: CapabilityStatus::Unsupported,
-            thermistor: CapabilityStatus::Unknown,
+            thermistor: CapabilityStatus::Documented,
             accelerometer: CapabilityStatus::Unknown,
             light_sensor: CapabilityStatus::Unknown,
             buzzer: CapabilityStatus::Documented,
@@ -331,9 +331,21 @@ mod tests {
         let red_lite = rows.iter().find(|row| row.board == "Red / Lite").unwrap();
         assert_eq!(red_lite.light_sensor, "No onboard sensor");
         assert_eq!(red_lite.led, "Red + green");
+        assert_eq!(
+            red_lite.thermistor,
+            "Documented onboard thermistor / temperature sensor"
+        );
         assert!(red_lite.buses.contains("I2C/SPI not exposed"));
+        assert!(red_lite
+            .source
+            .contains("User-provided/commercial comparison chart"));
+        assert!(red_lite
+            .revision_notes
+            .contains("Exact board revision/BOM confirmation is still required"));
+        assert!(red_lite.verification.contains("confirm the fitted part"));
         let blue = rows.iter().find(|row| row.board == "Blue").unwrap();
         assert_eq!(blue.led, "Red + blue");
+        assert_eq!(blue.thermistor, "Unknown: board/revision-dependent");
         let pro = rows.iter().find(|row| row.board == "Pro").unwrap();
         assert_eq!(pro.light_sensor, "Unknown / revision-dependent");
         assert_eq!(pro.led, "Red + green");
@@ -342,6 +354,21 @@ mod tests {
         assert!(rows.iter().all(|row| !row.lcd.is_empty()
             && !row.light_sensor.is_empty()
             && !row.verification.is_empty()));
+    }
+
+    #[test]
+    fn lite_and_pro_thermistors_are_documented_without_compensation_claims() {
+        assert_eq!(
+            capabilities(BoardKind::RedLite).thermistor,
+            CapabilityStatus::Documented
+        );
+        assert_eq!(
+            capabilities(BoardKind::Pro).thermistor,
+            CapabilityStatus::Documented
+        );
+        assert!(CAPABILITY_CHART.iter().all(|row| {
+            !row.thermistor.contains("automatic") && !row.thermistor.contains("compensation")
+        }));
     }
 
     #[test]
@@ -521,7 +548,7 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         lcd: "Classic LCD",
         led: "RGB (red/green/blue)",
         light_sensor: "Onboard IR light sensor",
-        thermistor: "Board/revision-dependent",
+        thermistor: "Unknown: board/revision-dependent",
         accelerometer: "Accessory/optional: not built in",
         buzzer: "Piezo",
         buses: "I2C/SPI available: pin mapping revision-dependent",
@@ -536,22 +563,22 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         lcd: "Classic LCD",
         led: "Red + green",
         light_sensor: "No onboard sensor",
-        thermistor: "Board/revision-dependent",
+        thermistor: "Documented onboard thermistor / temperature sensor",
         accelerometer: "Accessory/optional: not built in",
         buzzer: "Piezo",
         buses: "I2C/SPI not exposed on current Lite pins",
         uart: "Dedicated UART",
         confidence: "High for current Lite pinout: medium for revisions",
-        source: "Official maintained pin evidence: community board evidence",
-        revision_notes: "Statement is limited to the current Lite pinout",
-        verification: "No inferred buses or sensors beyond the documented current pins",
+        source: "User-provided/commercial comparison chart",
+        revision_notes: "Exact board revision/BOM confirmation is still required",
+        verification: "Commercial chart documents the thermistor; confirm the fitted part and analog mapping before relying on it",
     },
     CapabilityChartRow {
         board: "Blue",
         lcd: "Classic LCD",
         led: "Red + blue",
         light_sensor: "Unknown / revision-dependent",
-        thermistor: "Board/revision-dependent",
+        thermistor: "Unknown: board/revision-dependent",
         accelerometer: "Accessory/optional: not built in",
         buzzer: "Piezo",
         buses: "I2C/SPI available: pin mapping revision-dependent",
@@ -566,15 +593,15 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         lcd: "Classic LCD or OSO BU9796 custom LCD",
         led: "Red + green",
         light_sensor: "Unknown / revision-dependent",
-        thermistor: "Board/revision-dependent",
+        thermistor: "Documented onboard thermistor / temperature sensor",
         accelerometer: "Accessory/optional: not built in",
         buzzer: "Timed driver",
         buses: "I2C/SPI available: OSO BU9796 requires I2C",
         uart: "Multiplexed: not dedicated",
         confidence: "High for red/green and OSO requirement: medium overall",
-        source: "Official maintained pin evidence: community OSO/BU9796 evidence",
-        revision_notes: "Classic/OSO fit and sensors are not identical on every revision",
-        verification: "OSO is compatible only with a board exposing the required I2C",
+        source: "User-provided/commercial comparison chart; official OSO/BU9796 evidence",
+        revision_notes: "Exact board revision/BOM confirmation is still required; Classic/OSO fit may vary",
+        verification: "Commercial chart documents the thermistor; confirm the fitted part before relying on it; OSO requires exposed I2C",
     },
 ];
 
