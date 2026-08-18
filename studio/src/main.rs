@@ -5606,14 +5606,7 @@ impl StudioApp {
         self.shell_log.log(format!("> {cmd}"));
         self.shell_hw_log
             .log("SERCOM3 RX: bytes received".to_string());
-        let reply = match cmd
-            .trim()
-            .split_whitespace()
-            .next()
-            .unwrap_or("")
-            .to_lowercase()
-            .as_str()
-        {
+        let reply = match simulated_shell_command_name(cmd).unwrap_or("") {
             "help" => {
                 self.shell_hw_log
                     .log("shell dispatcher: match(\"help\")".to_string());
@@ -5632,10 +5625,8 @@ impl StudioApp {
                 format!("{:02}{:02}{:02}{:02}{:02}{:02}", y % 100, mo, d, h, mi, s)
             }
             "settime" => {
-                let mut fields = cmd.trim().split_whitespace();
-                let payload = fields.next().and_then(|_| fields.next()).unwrap_or("");
-                let valid_shape = fields.next().is_none();
-                match valid_shape.then(|| parse_settime(payload)).flatten() {
+                let payload = &cmd["settime ".len()..];
+                match parse_settime(payload) {
                     Some((year, month, day, hour, minute)) => {
                         self.shell_hw_log.log(format!(
                             "RTC_clock <- write {year:04}-{month:02}-{day:02} {hour:02}:{minute:02}"
@@ -9413,24 +9404,27 @@ fn sim_hold_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
     response
 }
 
+/// Returns the simulated shell command name only for the exact no-argument
+/// commands or the two commands that have their own argument parsers.
+fn simulated_shell_command_name(command: &str) -> Option<&'static str> {
+    match command {
+        "help" => Some("help"),
+        "optical" => Some("optical"),
+        "time" => Some("time"),
+        _ if command.starts_with("settime ") => Some("settime"),
+        _ if command.starts_with("drift ") => Some("drift"),
+        _ => None,
+    }
+}
+
 /// Parses the simulated/firmware-compatible `drift N` command.
 fn parse_drift_command(command: &str) -> Option<i16> {
-    let mut fields = command.trim().split_whitespace();
-    if fields.next()?.eq_ignore_ascii_case("drift")
-        && fields.next().is_some()
-        && fields.next().is_none()
-    {
-        let ppm = command
-            .trim()
-            .split_whitespace()
-            .nth(1)?
-            .parse::<i16>()
-            .ok()?;
-        if (-1000..=1000).contains(&ppm) {
-            return Some(ppm);
-        }
+    let payload = command.strip_prefix("drift ")?;
+    if payload.is_empty() || payload.bytes().any(|byte| byte.is_ascii_whitespace()) {
+        return None;
     }
-    None
+    let ppm = payload.parse::<i16>().ok()?;
+    (-127..=127).contains(&ppm).then_some(ppm)
 }
 
 /// Parses a `YYMMDDHHMMSS` settime payload into (year, month, day, hour,
@@ -9729,6 +9723,50 @@ mod tests {
             current: None,
             total: None,
         }
+    }
+
+    #[test]
+    fn simulated_shell_accepts_exact_commands_only() {
+        for (command, name) in [("help", "help"), ("optical", "optical"), ("time", "time")] {
+            assert_eq!(super::simulated_shell_command_name(command), Some(name));
+        }
+        assert_eq!(super::simulated_shell_command_name("help extra"), None);
+        assert_eq!(super::simulated_shell_command_name("time 1"), None);
+        assert_eq!(super::simulated_shell_command_name("optical now"), None);
+        assert_eq!(super::simulated_shell_command_name(" time"), None);
+    }
+
+    #[test]
+    fn simulated_shell_rejects_extra_arguments_and_malformed_forms() {
+        for command in ["drift", "settime"] {
+            assert_eq!(
+                super::simulated_shell_command_name(command),
+                None,
+                "{command}"
+            );
+        }
+        assert_eq!(super::parse_drift_command("drift 1 2"), None);
+        assert_eq!(super::parse_drift_command("drift 128"), None);
+        assert_eq!(super::parse_drift_command("drift -128"), None);
+        assert_eq!(super::parse_drift_command("drift 1 "), None);
+        assert_eq!(super::parse_settime("260101120000 extra"), None);
+        assert_eq!(super::parse_settime("26010112000x"), None);
+        assert_eq!(super::parse_settime("260101120000 "), None);
+    }
+
+    #[test]
+    fn simulated_shell_accepts_firmware_argument_forms() {
+        assert_eq!(super::parse_drift_command("drift 0"), Some(0));
+        assert_eq!(super::parse_drift_command("drift +127"), Some(127));
+        assert_eq!(super::parse_drift_command("drift -127"), Some(-127));
+        assert_eq!(
+            super::parse_settime("240229235959"),
+            Some((2024, 2, 29, 23, 59))
+        );
+        assert_eq!(
+            super::parse_settime("831231235959"),
+            Some((2083, 12, 31, 23, 59))
+        );
     }
 
     fn poll_until_flash_workers_finish(app: &mut super::StudioApp) {
