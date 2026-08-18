@@ -183,6 +183,8 @@ into firmware build inputs. Use `help` to see the complete command surface:
 ```sh
 cargo run -p sensor-watch-studio -- help
 cargo run -p sensor-watch-studio -- build  # rejects configured builds for now
+cargo run -p sensor-watch-tools -- package-studio
+cargo run -p sensor-watch-tools -- package-studio --output target/releases/sensor-watch-studio-0.1.0.zip
 cargo run -p sensor-watch-studio -- verify path/to/sensor-watch.uf2
 cargo run -p sensor-watch-studio -- backup input.uf2 recovery/known-good.uf2
 cargo run -p sensor-watch-studio -- rollback input.uf2 staged.uf2 TRUSTED_SHA256

@@ -12,6 +12,8 @@ use std::{
     process::Command,
 };
 
+pub mod studio_package;
+
 struct BuildLock {
     path: PathBuf,
 }
@@ -57,6 +59,7 @@ pub const MANIFEST_FORMAT: &str = "sensor-watch-recovery-manifest-v2";
 pub const MAX_UF2_BYTES: usize = MAX_APPLICATION_BYTES.div_ceil(UF2_PAYLOAD_SIZE) * UF2_BLOCK_SIZE;
 pub type Manifest = Map<String, Value>;
 pub type ToolResult<T> = Result<T, String>;
+pub use studio_package::{StudioPackageResult, package_studio, package_studio_artifacts};
 
 #[derive(Debug, Clone)]
 pub struct Uf2Inspection {

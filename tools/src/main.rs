@@ -2,11 +2,15 @@ use sensor_watch_tools::{self as tools, Manifest};
 use std::{env, path::PathBuf, process::ExitCode};
 
 fn usage() -> ! {
-    eprintln!("usage: sensor-watch-tools <build|uf2|verify|backup|rollback|report|flash> ...");
+    eprintln!(
+        "usage: sensor-watch-tools <build|package-studio|uf2|verify|backup|rollback|report|flash> ..."
+    );
     std::process::exit(2)
 }
 fn help() {
-    println!("usage: sensor-watch-tools <build|uf2|verify|backup|rollback|report|flash> ...");
+    println!(
+        "usage: sensor-watch-tools <build|package-studio|uf2|verify|backup|rollback|report|flash> ..."
+    );
     println!(
         "verify checks UF2 structure, local manifest consistency, and optional trusted release SHA-256 matching; SHA-256 is not a signature."
     );
@@ -34,6 +38,19 @@ fn main() -> ExitCode {
     match command.as_str() {
         "help" | "--help" | "-h" => {
             help();
+        }
+        "package-studio" => {
+            let mut output = None;
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--output" if output.is_none() => {
+                        output = Some(PathBuf::from(required(&mut args)))
+                    }
+                    _ => usage(),
+                }
+            }
+            let result = tools::package_studio(output.as_deref()).unwrap_or_else(|e| fail(e));
+            println!("wrote {}", result.output.display());
         }
         "build" => {
             ensure_no_extra(&mut args);

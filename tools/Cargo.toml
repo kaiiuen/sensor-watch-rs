@@ -6,8 +6,10 @@ description = "Host build, UF2, recovery, and probe-rs tooling for Sensor-Watch"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 sensor-watch-core = { path = "../core" }
 
 [target.'cfg(not(target_arch = "arm"))'.dependencies]

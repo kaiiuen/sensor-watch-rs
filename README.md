@@ -176,7 +176,25 @@ cargo run -p sensor-watch-studio -- help
 ```
 
 The `sensor-watch-tools` command above produces the stock firmware UF2; it does
-not apply Studio selections. With no command, Studio starts the GUI. The CLI is
+not apply Studio selections. To build a deterministic, offline Studio folder
+package, run this from the repository root after the release build succeeds:
+
+```
+cargo run -p sensor-watch-tools -- package-studio
+# or choose the exact destination:
+cargo run -p sensor-watch-tools -- package-studio --output target/releases/sensor-watch-studio-0.1.0.zip
+```
+
+The default output is `target/studio-package/sensor-watch-studio-<Studio version>.zip`;
+`--output` replaces an existing `.zip` only after the new ZIP has been completely
+written. The archive has one versioned root folder,
+contains the executable, `sensor-watch-package.json`, resources, templates, the
+firmware project sources, `README.txt`, and a sorted `PACKAGE-MANIFEST.json` with
+SHA-256 entries. Firmware tools/cross targets are reported as unavailable rather
+than implied. User settings and mutable projects remain outside the archive. No
+cryptographic signature or network self-update is implemented.
+
+With no command, Studio starts the GUI. The CLI is
 host-side tooling: it does not
 turn the UF2 USB drive into a serial link or provide device-side recovery. The
 `flash` command uses a probe-rs-compatible SWD probe, normal UF2 flashing remains
