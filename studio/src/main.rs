@@ -117,6 +117,8 @@ struct StudioApp {
     shutting_down: bool,
     /// The handle to the background build thread.
     pending_build: Option<std::thread::JoinHandle<build::BuildResult>>,
+    /// A pending explicit UF2 inspection worker.
+    pending_inspection: Option<std::thread::JoinHandle<Result<build::ArtifactInspection, String>>>,
     /// A cached watch-drive detection result; detection never runs while rendering.
     cached_watch: WatchDriveSelection,
     /// The handle to the background drive detection worker.
@@ -988,6 +990,7 @@ impl Default for StudioApp {
             building: false,
             shutting_down: false,
             pending_build: None,
+            pending_inspection: None,
             cached_watch: WatchDriveSelection::None,
             pending_detection: None,
             pending_flash: None,
@@ -1248,6 +1251,7 @@ impl eframe::App for StudioApp {
             || self.pending_probe.is_some()
             || self.pending_detection.is_some()
             || self.pending_flash.is_some()
+            || self.pending_inspection.is_some()
             || self.beep_armed;
         if background_work {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
@@ -1300,7 +1304,8 @@ impl eframe::App for StudioApp {
                 || self.pending_update.is_some()
                 || self.pending_probe.is_some()
                 || self.pending_detection.is_some()
-                || self.pending_flash.is_some();
+                || self.pending_flash.is_some()
+                || self.pending_inspection.is_some();
             if active_workers {
                 if let Some(mut process) = self.master_clock_process.take() {
                     process.terminate();
@@ -1322,6 +1327,7 @@ impl eframe::App for StudioApp {
 
         self.poll_master_clock();
         self.poll_flash_workers();
+        self.poll_inspection_worker();
         self.poll_probe_worker();
         self.invalidate_stale_artifact();
 
@@ -3104,7 +3110,11 @@ impl StudioApp {
             self.status = "Build is disabled while a guided tour is active".to_string();
             return;
         }
-        if self.shutting_down || self.building || self.pending_build.is_some() || self.flash_busy()
+        if self.shutting_down
+            || self.building
+            || self.pending_build.is_some()
+            || self.pending_inspection.is_some()
+            || self.flash_busy()
         {
             self.push_terminal("Build or flash already running");
             return;
@@ -4614,7 +4624,10 @@ impl StudioApp {
                     "Enter a UF2 path and inspect it explicitly. Recovery generation UF2s
                      are accepted when their matching .uf2.json and .json.sig sidecars exist.",
                 );
-                let artifact_actions_blocked = self.building || self.pending_build.is_some();
+                let artifact_actions_blocked = self.building
+                    || self.pending_build.is_some()
+                    || self.pending_inspection.is_some()
+                    || self.flash_busy();
                 ui.horizontal(|ui| {
                     let path_response = ui.add_enabled(
                         !artifact_actions_blocked,
@@ -4635,7 +4648,9 @@ impl StudioApp {
                         self.inspect_artifact_from_input();
                     }
                 });
-
+                if !self.artifact_path_input.trim().is_empty() {
+                    ui.weak("Path entered: ready for explicit artifact inspection.");
+                }
                 if artifact_actions_blocked {
                     ui.weak("Artifact inspection and approval are disabled while a build is in progress.");
                 }
@@ -8618,6 +8633,7 @@ impl StudioApp {
             || self.pending_probe.is_some()
             || self.pending_detection.is_some()
             || self.pending_flash.is_some()
+            || self.pending_inspection.is_some()
             || self.flash_busy()
     }
 
@@ -8980,40 +8996,44 @@ impl StudioApp {
     }
 
     fn inspect_artifact_from_input(&mut self) {
-        let path = std::path::PathBuf::from(self.artifact_path_input.trim());
-        if self.building || self.pending_build.is_some() {
-            self.status = ARTIFACT_BUSY_STATUS.to_string();
-            self.build_message = ARTIFACT_BUSY_STATUS.to_string();
+        let trimmed = self.artifact_path_input.trim();
+        if trimmed.is_empty() {
+            let error = "UF2 path is empty".to_string();
+            set_failed_artifact_state(
+                &mut self.status,
+                &mut self.build_message,
+                &mut self.approved_artifact,
+                &mut self.pending_artifact,
+                error,
+            );
+            self.pending_artifact_fingerprint = None;
+            self.build_estimator_state = BuildEstimatorState::Failed(self.build_message.clone());
+            self.log_error(&self.build_message.clone());
+            self.build_log.log(&self.build_message);
+            self.push_terminal(self.build_message.clone());
             return;
         }
-        match build::inspect_artifact(&path) {
-            Ok(inspection) => {
-                set_verified_artifact_state(
-                    &mut self.status,
-                    &mut self.build_message,
-                    &mut self.approved_artifact,
-                    &mut self.pending_artifact,
-                    inspection,
-                    false,
-                );
-                self.pending_artifact_fingerprint = Some(self.build_configuration_fingerprint());
-                self.build_estimator_state = BuildEstimatorState::Verified;
-            }
-            Err(error) => {
-                // Do not disturb an already approved artifact when a new candidate
-                // fails verification; the failed candidate never enters flash state.
-                set_failed_artifact_state(
-                    &mut self.status,
-                    &mut self.build_message,
-                    &mut self.approved_artifact,
-                    &mut self.pending_artifact,
-                    error,
-                );
-                self.pending_artifact_fingerprint = None;
-                self.build_estimator_state =
-                    BuildEstimatorState::Failed(self.build_message.clone());
-            }
+        if self.building
+            || self.pending_build.is_some()
+            || self.flash_busy()
+            || self.pending_inspection.is_some()
+        {
+            self.status = ARTIFACT_BUSY_STATUS.to_string();
+            self.build_message = ARTIFACT_BUSY_STATUS.to_string();
+            self.log_error(&self.status.clone());
+            self.build_log.log(&self.build_message);
+            return;
         }
+        let path = std::path::PathBuf::from(trimmed);
+        self.log
+            .log(format!("Inspecting selected UF2 path: {}", path.display()));
+        self.build_log
+            .log(format!("Inspecting selected UF2 path: {}", path.display()));
+        self.status = "Inspecting UF2...".to_string();
+        self.build_message = self.status.clone();
+        self.pending_artifact = None;
+        self.pending_artifact_fingerprint = None;
+        self.pending_inspection = Some(std::thread::spawn(move || build::inspect_artifact(&path)));
     }
 
     /// Starts one worker that owns all artifact and removable-drive filesystem
@@ -9101,6 +9121,68 @@ impl StudioApp {
 
     fn flash_busy(&self) -> bool {
         self.pending_flash.is_some() || self.pending_detection.is_some()
+    }
+
+    fn poll_inspection_worker(&mut self) {
+        let Some(handle) = self.pending_inspection.take() else {
+            return;
+        };
+        if !handle.is_finished() {
+            self.pending_inspection = Some(handle);
+            return;
+        }
+        match handle.join() {
+            Ok(Ok(inspection)) => {
+                let path = inspection.path.display().to_string();
+                let metadata = artifact_metadata(&inspection);
+                set_verified_artifact_state(
+                    &mut self.status,
+                    &mut self.build_message,
+                    &mut self.approved_artifact,
+                    &mut self.pending_artifact,
+                    inspection,
+                    false,
+                );
+                self.pending_artifact_fingerprint = Some(self.build_configuration_fingerprint());
+                self.build_estimator_state = BuildEstimatorState::Verified;
+                self.log
+                    .log(format!("UF2 inspection succeeded: {path}\n{metadata}"));
+                self.build_log
+                    .log(format!("UF2 inspection succeeded: {path}\n{metadata}"));
+                self.push_terminal(format!("UF2 inspection succeeded: {path}"));
+            }
+            Ok(Err(error)) => {
+                set_failed_artifact_state(
+                    &mut self.status,
+                    &mut self.build_message,
+                    &mut self.approved_artifact,
+                    &mut self.pending_artifact,
+                    error,
+                );
+                self.pending_artifact_fingerprint = None;
+                self.build_estimator_state =
+                    BuildEstimatorState::Failed(self.build_message.clone());
+                self.log_error(&self.build_message.clone());
+                self.build_log.log(&self.build_message);
+                self.push_terminal(self.build_message.clone());
+            }
+            Err(_) => {
+                let error = "UF2 inspection worker panicked";
+                set_failed_artifact_state(
+                    &mut self.status,
+                    &mut self.build_message,
+                    &mut self.approved_artifact,
+                    &mut self.pending_artifact,
+                    error.to_string(),
+                );
+                self.pending_artifact_fingerprint = None;
+                self.build_estimator_state =
+                    BuildEstimatorState::Failed(self.build_message.clone());
+                self.log_error(&self.build_message.clone());
+                self.build_log.log(&self.build_message);
+                self.push_terminal(self.build_message.clone());
+            }
+        }
     }
 
     fn start_watch_detection(&mut self) {
@@ -10475,7 +10557,7 @@ fn set_failed_artifact_state(
 
 fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
     format!(
-        "Path: {}\nGeneration: {}\nFamily: {}\nUF2: {} bytes / {} blocks\nPayload: {} bytes\nUF2 SHA-256: {}\nPayload SHA-256: {}\nManifest digest: {}",
+        "Path: {}\nGeneration: {}\nFamily: {}\nUF2: {} bytes / {} blocks\nPayload: {} bytes\nUF2 SHA-256: {}\nPayload SHA-256: {}\nManifest digest: {}\nGenerated-input digest: {}",
         inspection.path.display(),
         inspection.generation,
         inspection.family_id,
@@ -11469,6 +11551,104 @@ mod tests {
             manifest_digest: "manifest-sha".to_string(),
             generated_input_digest: "inputs-sha".to_string(),
         }
+    }
+
+    #[test]
+    fn empty_inspection_path_fails_without_starting_a_worker() {
+        let mut app = super::StudioApp::default();
+        app.artifact_path_input = "   ".to_string();
+
+        app.inspect_artifact_from_input();
+
+        assert!(app.pending_inspection.is_none());
+        assert_eq!(app.status, super::ARTIFACT_VERIFICATION_FAILED_STATUS);
+        assert!(app.build_message.contains("UF2 path is empty"));
+        assert!(app
+            .error_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("UF2 path is empty")));
+    }
+
+    #[test]
+    fn busy_inspection_is_rejected_without_starting_a_worker() {
+        let mut app = super::StudioApp::default();
+        app.building = true;
+        app.artifact_path_input = "candidate.uf2".to_string();
+
+        app.inspect_artifact_from_input();
+
+        assert!(app.pending_inspection.is_none());
+        assert_eq!(app.status, super::ARTIFACT_BUSY_STATUS);
+        assert!(app
+            .build_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("inspection unavailable")));
+    }
+
+    #[test]
+    fn inspection_worker_completion_reuses_verified_state_and_logs_metadata() {
+        let mut app = super::StudioApp::default();
+        let inspection = test_inspection("stock.uf2");
+        app.pending_inspection = Some(std::thread::spawn(move || Ok(inspection)));
+        app.artifact_path_input = "stock.uf2".to_string();
+        app.status = "Inspecting UF2...".to_string();
+
+        for _ in 0..100 {
+            app.poll_inspection_worker();
+            if app.pending_inspection.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(app.pending_inspection.is_none());
+        assert_eq!(app.status, super::ARTIFACT_VERIFIED_PENDING_STATUS);
+        assert_eq!(
+            app.pending_artifact.as_ref().unwrap().path,
+            std::path::PathBuf::from("stock.uf2")
+        );
+        assert!(app
+            .build_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("UF2 inspection succeeded")
+                && entry.message.contains("stock.uf2")));
+        assert!(app
+            .terminal_history
+            .iter()
+            .any(|entry| entry.contains("UF2 inspection succeeded")));
+    }
+
+    #[test]
+    fn inspection_worker_failure_reuses_failed_state_and_logs_reason() {
+        let mut app = super::StudioApp::default();
+        app.pending_inspection = Some(std::thread::spawn(|| {
+            Err("missing manifest sidecar".to_string())
+        }));
+
+        for _ in 0..100 {
+            app.poll_inspection_worker();
+            if app.pending_inspection.is_none() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+
+        assert!(app.pending_inspection.is_none());
+        assert_eq!(app.status, super::ARTIFACT_VERIFICATION_FAILED_STATUS);
+        assert!(app.build_message.contains("missing manifest sidecar"));
+        assert!(app
+            .error_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("missing manifest sidecar")));
+        assert!(app
+            .build_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("missing manifest sidecar")));
     }
 
     #[test]
