@@ -3368,8 +3368,12 @@ dependencies = [
 name = "sensor-watch-launcher"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "ed25519-dalek",
+ "sensor-watch-desktop-update",
  "serde",
  "serde_json",
+ "sha2",
  "windows-sys 0.59.0",
 ]
 

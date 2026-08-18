@@ -4,6 +4,10 @@
 //! running. Studio versions are immutable sibling directories under `versions`;
 //! mutable state lives under `user-data`.
 
+use sensor_watch_desktop_update::{
+    authenticate, select, verify_artifact, Error as UpdateError, KeyRing, ReleaseMetadata,
+    SelectionPolicy, Version,
+};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -31,6 +35,9 @@ pub enum LauncherError {
     MissingVersion(String),
     NoPreviousVersion,
     StartupFailed(String),
+    Unsupported(&'static str),
+    Untrusted(String),
+    Update(UpdateError),
 }
 
 impl std::fmt::Display for LauncherError {
@@ -42,6 +49,9 @@ impl std::fmt::Display for LauncherError {
             Self::MissingVersion(v) => write!(f, "version directory is missing: {v}"),
             Self::NoPreviousVersion => write!(f, "no valid previous version is available"),
             Self::StartupFailed(e) => write!(f, "Studio startup failed: {e}"),
+            Self::Unsupported(e) => write!(f, "unsupported update configuration: {e}"),
+            Self::Untrusted(e) => write!(f, "untrusted update: {e}"),
+            Self::Update(e) => write!(f, "update verification failed: {e}"),
         }
     }
 }
@@ -56,11 +66,27 @@ impl From<serde_json::Error> for LauncherError {
         Self::Json(e)
     }
 }
+impl From<UpdateError> for LauncherError {
+    fn from(e: UpdateError) -> Self {
+        match e {
+            UpdateError::Unsupported(message) => Self::Unsupported(message),
+            UpdateError::Untrusted(message) => Self::Untrusted(message),
+            UpdateError::InvalidSignatureEncoding => {
+                Self::Untrusted("invalid signature encoding".into())
+            }
+            other => Self::Update(other),
+        }
+    }
+}
 
 pub struct Launcher {
     root: PathBuf,
     user_data: PathBuf,
     executable_name: String,
+    key_ring: KeyRing,
+    channel: String,
+    now: u64,
+    allow_downgrade: bool,
 }
 
 impl Launcher {
@@ -73,6 +99,10 @@ impl Launcher {
             root: root.into(),
             user_data: user_data.into(),
             executable_name: executable_name.into(),
+            key_ring: KeyRing::new(),
+            channel: "stable".into(),
+            now: u64::MAX,
+            allow_downgrade: false,
         }
     }
     pub fn root(&self) -> &Path {
@@ -83,6 +113,65 @@ impl Launcher {
     }
     pub fn version_root(&self) -> PathBuf {
         self.root.join("versions")
+    }
+    pub fn with_key_ring(mut self, key_ring: KeyRing) -> Self {
+        self.key_ring = key_ring;
+        self
+    }
+    pub fn with_policy(
+        mut self,
+        channel: impl Into<String>,
+        now: u64,
+        allow_downgrade: bool,
+    ) -> Self {
+        self.channel = channel.into();
+        self.now = now;
+        self.allow_downgrade = allow_downgrade;
+        self
+    }
+    fn metadata_path(&self) -> PathBuf {
+        self.root.join("release").join("metadata.json")
+    }
+    fn verify_version(&self, version: &str, allow_downgrade: bool) -> Result<(), LauncherError> {
+        let metadata = fs::read(self.metadata_path())?;
+        let (metadata, _) = authenticate(&metadata, &self.key_ring)?;
+        let current = self
+            .read_pointers()?
+            .current
+            .and_then(|v| Version::parse(&v).ok());
+        let target = Version::parse(version).map_err(LauncherError::Update)?;
+        if !allow_downgrade && current.as_ref().is_some_and(|v| target < *v) {
+            return Err(LauncherError::Update(UpdateError::Downgrade));
+        }
+        let release = metadata
+            .releases
+            .iter()
+            .find(|release| release.version == target)
+            .cloned()
+            .ok_or_else(|| {
+                LauncherError::Untrusted(format!("version {version} is not in signed metadata"))
+            })?;
+        let release = select(
+            &ReleaseMetadata {
+                schema_version: metadata.schema_version,
+                generated_at: metadata.generated_at,
+                releases: vec![release],
+            },
+            &SelectionPolicy {
+                channel: self.channel.clone(),
+                current: None,
+                allow_downgrade: true,
+                now: self.now,
+            },
+        )?;
+        let executable = self
+            .version_root()
+            .join(version)
+            .join(&self.executable_name);
+        let bytes =
+            fs::read(&executable).map_err(|_| LauncherError::MissingVersion(version.into()))?;
+        verify_artifact(&bytes, &release.artifact)?;
+        Ok(())
     }
     pub fn read_pointers(&self) -> Result<Pointers, LauncherError> {
         let path = self.user_data.join(STATE_FILE);
@@ -95,6 +184,7 @@ impl Launcher {
     }
     pub fn switch_current(&self, version: &str) -> Result<Pointers, LauncherError> {
         self.validate_version(version)?;
+        self.verify_version(version, self.allow_downgrade)?;
         let old = self.read_pointers()?;
         let next = Pointers {
             current: Some(version.to_owned()),
@@ -110,6 +200,7 @@ impl Launcher {
             .clone()
             .ok_or(LauncherError::NoPreviousVersion)?;
         self.validate_version(&previous)?;
+        self.verify_version(&previous, true)?;
         let next = Pointers {
             current: Some(previous),
             previous: old.current,
@@ -162,6 +253,7 @@ impl Launcher {
     }
     fn version_executable(&self, version: &str) -> Result<PathBuf, LauncherError> {
         self.validate_version(version)?;
+        self.verify_version(version, self.allow_downgrade)?;
         let path = self
             .version_root()
             .join(version)
@@ -269,6 +361,11 @@ fn unique_token() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::{engine::general_purpose::STANDARD as B64, Engine as _};
+    use ed25519_dalek::{Signer, SigningKey};
+    use sensor_watch_desktop_update::Artifact;
+    use serde::Serialize;
+    use sha2::{Digest, Sha256};
     use std::time::{SystemTime, UNIX_EPOCH};
     fn temp(name: &str) -> PathBuf {
         std::env::temp_dir().join(format!(
@@ -279,13 +376,87 @@ mod tests {
                 .as_nanos()
         ))
     }
+    #[derive(Serialize)]
+    struct SignedRelease<'a> {
+        version: Version,
+        channel: &'a str,
+        expires_at: u64,
+        artifact: Artifact,
+        key_id: &'a str,
+        signature: String,
+    }
+    fn metadata(root: &Path, key: &SigningKey, versions: &[(&str, &[u8])]) {
+        #[derive(Serialize)]
+        struct Metadata<'a> {
+            schema_version: u32,
+            generated_at: u64,
+            releases: Vec<SignedRelease<'a>>,
+        }
+        let releases = versions
+            .iter()
+            .map(|(version, bytes)| {
+                let artifact = Artifact {
+                    url: "file:///package/studio.exe".into(),
+                    size: bytes.len() as u64,
+                    sha256: format!("{:x}", Sha256::digest(bytes)),
+                };
+                #[derive(Serialize)]
+                struct Payload<'a> {
+                    version: Version,
+                    channel: &'a str,
+                    expires_at: u64,
+                    artifact: Artifact,
+                    key_id: &'a str,
+                }
+                let payload = serde_json::to_vec(&Payload {
+                    version: Version::parse(version).unwrap(),
+                    channel: "stable",
+                    expires_at: 100,
+                    artifact: artifact.clone(),
+                    key_id: "test-key",
+                })
+                .unwrap();
+                SignedRelease {
+                    version: Version::parse(version).unwrap(),
+                    channel: "stable",
+                    expires_at: 100,
+                    artifact,
+                    key_id: "test-key",
+                    signature: B64.encode(key.sign(&payload).to_bytes()),
+                }
+            })
+            .collect();
+        fs::create_dir_all(root.join("release")).unwrap();
+        fs::write(
+            root.join("release/metadata.json"),
+            serde_json::to_vec(&Metadata {
+                schema_version: 1,
+                generated_at: 1,
+                releases,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    }
+    fn configured(l: Launcher, key: &SigningKey) -> Launcher {
+        l.with_key_ring(
+            KeyRing::new()
+                .pin_active("test-key", key.verifying_key().to_bytes())
+                .unwrap(),
+        )
+        .with_policy("stable", 1, false)
+    }
     fn setup(name: &str) -> (Launcher, PathBuf, PathBuf) {
         let root = temp(name);
         let user = root.join("user-data");
+        let key = SigningKey::from_bytes(&[7; 32]);
         let l = Launcher::new(&root, &user, "studio.exe");
         fs::create_dir_all(l.version_root().join("1.0.0")).unwrap();
         fs::create_dir_all(l.version_root().join("2.0.0")).unwrap();
-        (l, root, user)
+        fs::write(l.version_root().join("1.0.0/studio.exe"), b"x").unwrap();
+        fs::write(l.version_root().join("2.0.0/studio.exe"), b"x").unwrap();
+        metadata(&root, &key, &[("1.0.0", b"x"), ("2.0.0", b"x")]);
+        (configured(l, &key), root, user)
     }
     fn clean(root: &Path) {
         let _ = fs::remove_dir_all(root);
@@ -294,8 +465,6 @@ mod tests {
     #[test]
     fn pointer_transitions_are_atomic_and_ordered() {
         let (l, root, _) = setup("pointers");
-        fs::write(l.version_root().join("1.0.0/studio.exe"), b"x").unwrap();
-        fs::write(l.version_root().join("2.0.0/studio.exe"), b"x").unwrap();
         l.switch_current("1.0.0").unwrap();
         let p = l.switch_current("2.0.0").unwrap();
         assert_eq!(
@@ -340,11 +509,85 @@ mod tests {
         clean(&root);
     }
     #[test]
+    fn missing_public_key_is_unsupported() {
+        let (configured_launcher, root, _) = setup("missing-key");
+        let l = Launcher::new(
+            configured_launcher.root(),
+            configured_launcher.user_data(),
+            "studio.exe",
+        )
+        .with_policy("stable", 1, false);
+        assert!(matches!(
+            l.switch_current("1.0.0"),
+            Err(LauncherError::Unsupported(_))
+        ));
+        clean(&root);
+    }
+
+    #[test]
+    fn invalid_signature_is_untrusted() {
+        let (l, root, _) = setup("bad-signature");
+        let path = root.join("release/metadata.json");
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        let signature = value["releases"][0]["signature"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        value["releases"][0]["signature"] =
+            serde_json::Value::String(format!("{}A", &signature[..signature.len() - 1]));
+        fs::write(path, serde_json::to_vec(&value).unwrap()).unwrap();
+        assert!(matches!(
+            l.switch_current("1.0.0"),
+            Err(LauncherError::Untrusted(_))
+        ));
+        clean(&root);
+    }
+
+    #[test]
+    fn modified_package_fails_hash_verification() {
+        let (l, root, _) = setup("modified-package");
+        fs::write(l.version_root().join("1.0.0/studio.exe"), b"modified").unwrap();
+        assert!(matches!(
+            l.switch_current("1.0.0"),
+            Err(LauncherError::Update(UpdateError::SizeMismatch { .. }))
+                | Err(LauncherError::Update(UpdateError::HashMismatch { .. }))
+        ));
+        clean(&root);
+    }
+
+    #[test]
+    fn downgrade_is_rejected() {
+        let (l, root, _) = setup("downgrade");
+        l.switch_current("2.0.0").unwrap();
+        assert!(matches!(
+            l.switch_current("1.0.0"),
+            Err(LauncherError::Update(UpdateError::Downgrade))
+        ));
+        clean(&root);
+    }
+
+    #[test]
     fn timeout_rolls_back_pointer() {
         let (l, root, _) = setup("timeout");
         let executable = std::env::current_exe().unwrap();
         fs::copy(&executable, l.version_root().join("1.0.0/studio.exe")).unwrap();
         fs::copy(&executable, l.version_root().join("2.0.0/studio.exe")).unwrap();
+        let key = SigningKey::from_bytes(&[7; 32]);
+        metadata(
+            &root,
+            &key,
+            &[
+                (
+                    "1.0.0",
+                    &fs::read(l.version_root().join("1.0.0/studio.exe")).unwrap(),
+                ),
+                (
+                    "2.0.0",
+                    &fs::read(l.version_root().join("2.0.0/studio.exe")).unwrap(),
+                ),
+            ],
+        );
         l.switch_current("1.0.0").unwrap();
         l.switch_current("2.0.0").unwrap();
         let result = l.run(Duration::from_millis(30));
