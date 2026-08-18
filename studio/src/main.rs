@@ -7,6 +7,7 @@
 
 mod block_editor;
 mod build;
+pub mod build_snapshot;
 mod components;
 mod data_dir;
 mod debug;
@@ -9586,9 +9587,7 @@ fn configuration_fingerprint(
     component_draft: &components::ComponentsConfig,
     output_dir: &str,
 ) -> String {
-    // JSON keeps this stable and unambiguous; all included types are persisted
-    // configuration types, so field order is deterministic.
-    serde_json::to_string(&(
+    build_snapshot::BuildInputSnapshot::from_state(
         board.label(),
         presets,
         watch_config,
@@ -9597,8 +9596,8 @@ fn configuration_fingerprint(
         component_profile,
         component_draft,
         output_dir,
-    ))
-    .expect("build configuration must be serializable")
+    )
+    .fingerprint()
 }
 
 fn invalidate_stale_artifact_state(

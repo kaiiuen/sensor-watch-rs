@@ -20,7 +20,7 @@ pub const TIMEZONE_OFFSETS: [i16; 41] = [
 ];
 
 /// The watch configuration, mirroring the firmware `Settings` register.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WatchConfig {
     /// Whether pressing a button emits a sound.
     pub button_should_sound: bool,
