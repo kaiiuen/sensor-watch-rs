@@ -13,11 +13,13 @@ use crate::watch::utility;
 
 const SET_TIME_FACE_NUM_SETTINGS: u8 = 7;
 const TITLES: [&str; 7] = ["HR", "M1", "SE", "YR", "MO", "DA", "ZO"];
+const RTC_YEAR_COUNT: u8 = 64;
 
 /// The set time face state.
 pub struct SetTimeFace {
     current_page: u8,
     quick_ticks_running: bool,
+    rtc_write_failed: bool,
 }
 
 impl SetTimeFace {
@@ -26,6 +28,7 @@ impl SetTimeFace {
         SetTimeFace {
             current_page: 0,
             quick_ticks_running: false,
+            rtc_write_failed: false,
         }
     }
 
@@ -38,7 +41,7 @@ impl SetTimeFace {
             0 => date_time.hour = (date_time.hour + 1) % 24,
             1 => date_time.minute = (date_time.minute + 1) % 60,
             2 => date_time.second = 0,
-            3 => date_time.year = (date_time.year % 60) + 1,
+            3 => date_time.year = (date_time.year + 1) % RTC_YEAR_COUNT,
             4 => date_time.month = (date_time.month % 12) + 1,
             5 => date_time.day += 1,
             6 => {
@@ -57,7 +60,7 @@ impl SetTimeFace {
         {
             date_time.day = 1;
         }
-        let _ = rtc::set_date_time(date_time);
+        self.rtc_write_failed = rtc::set_date_time(date_time).is_err();
     }
 
     fn abort_quick_ticks(&mut self) {
@@ -71,6 +74,7 @@ impl WatchFace for SetTimeFace {
     fn activate(&mut self, _settings: &Settings) {
         self.current_page = 0;
         self.quick_ticks_running = false;
+        self.rtc_write_failed = false;
     }
 
     fn loop_(&mut self, event: Event, settings: &mut Settings) {
@@ -168,6 +172,9 @@ impl WatchFace for SetTimeFace {
         watch::slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
         if set_leading_zero {
             watch::slcd::display_string("0", 4);
+        }
+        if self.rtc_write_failed {
+            watch::slcd::display_string("Err", 0);
         }
     }
 

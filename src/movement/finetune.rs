@@ -17,6 +17,7 @@ pub struct FinetuneFace {
     finetune_page: u8,
     last_correction_time: u32,
     freq_correction: i32,
+    rtc_write_failed: bool,
 }
 
 impl FinetuneFace {
@@ -27,6 +28,7 @@ impl FinetuneFace {
             finetune_page: 0,
             last_correction_time: 0,
             freq_correction: 0,
+            rtc_write_failed: false,
         }
     }
 
@@ -111,9 +113,15 @@ impl FinetuneFace {
                 slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
             }
         }
+        if self.rtc_write_failed {
+            slcd::display_string("Err", 0);
+        }
     }
 
     fn adjust_subseconds(&mut self, delta: i32) {
+        if self.last_correction_time == 0 {
+            self.last_correction_time = utility::date_time_to_unix_time(rtc::get_date_time(), 0);
+        }
         if delta > 500 {
             self.total_adjustment += delta - 1000;
         } else {
@@ -129,10 +137,26 @@ impl FinetuneFace {
                     date_time.hour = (date_time.hour + 1) % 24;
                     if date_time.hour == 0 {
                         date_time.day += 1;
+                        if date_time.day
+                            > utility::days_in_month(
+                                date_time.month,
+                                date_time.year as u16 + rtc::WATCH_RTC_REFERENCE_YEAR,
+                            )
+                        {
+                            date_time.day = 1;
+                            date_time.month += 1;
+                            if date_time.month > 12 {
+                                date_time.month = 1;
+                                date_time.year = date_time.year.wrapping_add(1) % 64;
+                            }
+                        }
                     }
                 }
             }
-            let _ = rtc::set_date_time(date_time);
+            self.rtc_write_failed = rtc::set_date_time(date_time).is_err();
+            if self.rtc_write_failed {
+                self.update_display();
+            }
         }
     }
 
@@ -149,6 +173,8 @@ impl WatchFace for FinetuneFace {
         slcd::display_string("FT", 0);
         self.total_adjustment = 0;
         self.finetune_page = 0;
+        self.last_correction_time = utility::date_time_to_unix_time(rtc::get_date_time(), 0);
+        self.rtc_write_failed = false;
     }
 
     fn loop_(&mut self, event: Event, _settings: &mut Settings) {

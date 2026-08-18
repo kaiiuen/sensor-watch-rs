@@ -41,3 +41,21 @@ pub fn freqcorr_write(value: i16, sign: i16) {
 pub fn freqcorr_read() -> i16 {
     seam::with_current_hw(|hw| hw.freqcorr_read())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rejected_date_write_is_reported_to_host_callers() {
+        let invalid = DateTime {
+            year: 63,
+            month: 2,
+            day: 30,
+            hour: 0,
+            minute: 0,
+            second: 0,
+        };
+        assert_eq!(set_date_time(invalid), Err(()));
+    }
+}

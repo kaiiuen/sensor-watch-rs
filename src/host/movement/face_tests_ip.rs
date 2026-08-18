@@ -8,10 +8,10 @@ use crate::watch::seam;
 use sensor_watch_core::mock_hw::{Indicator, MockHw, dt};
 
 use super::{
-    interval, invaders, ish, kitchen_conversions, lander, lightmeter, lis2dw_logging, mars_time,
-    menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal, moon_phase,
-    morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time, preferences,
-    probability, pulsometer,
+    finetune, interval, invaders, ish, kitchen_conversions, lander, lightmeter, lis2dw_logging,
+    mars_time, menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal,
+    moon_phase, morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time,
+    preferences, probability, pulsometer, set_time,
 };
 
 /// A deterministic steady state: Friday 2023-01-06 15:04:00, healthy battery.
@@ -27,6 +27,90 @@ fn h24_settings() -> Settings {
     let mut s = Settings::default();
     s.set_clock_mode_24h(true);
     s
+}
+
+#[test]
+fn real_finetune_activation_anchors_elapsed_time_and_enforces_six_hour_gate() {
+    let mut mock = MockHw::new();
+    mock.set_time(dt(2024, 1, 1, 0, 0, 0));
+    let mut settings = h24_settings();
+    let mut face = finetune::FinetuneFace::new();
+
+    seam::with_hw(&mut mock, || face.activate(&settings));
+    seam::with_hw(&mut mock, || face.loop_(Event::Activate, &mut settings));
+    seam::with_hw(&mut mock, || {
+        face.loop_(
+            Event::Button(Button::Mode, ButtonEvent::LongPress),
+            &mut settings,
+        );
+        face.loop_(
+            Event::Button(Button::Mode, ButtonEvent::LongPress),
+            &mut settings,
+        );
+    });
+    assert!(mock.text().contains("6HR"));
+
+    mock.set_time(dt(2024, 1, 1, 5, 59, 59));
+    seam::with_hw(&mut mock, || face.loop_(Event::Tick, &mut settings));
+    assert!(mock.text().contains("6HR"));
+
+    mock.set_time(dt(2024, 1, 1, 6, 0, 0));
+    seam::with_hw(&mut mock, || face.loop_(Event::Tick, &mut settings));
+    assert!(!mock.text().contains("6HR"));
+}
+
+#[test]
+fn real_finetune_subsecond_correction_rolls_month_and_year() {
+    let mut mock = MockHw::new();
+    mock.set_time(dt(2083, 12, 31, 23, 59, 59));
+    let mut settings = h24_settings();
+    let mut face = finetune::FinetuneFace::new();
+
+    seam::with_hw(&mut mock, || face.activate(&settings));
+    seam::with_hw(&mut mock, || {
+        face.loop_(
+            Event::Button(Button::Alarm, ButtonEvent::LongPress),
+            &mut settings,
+        )
+    });
+    assert_eq!(mock.now, dt(2020, 1, 1, 0, 0, 0));
+}
+
+#[test]
+fn real_set_time_cycles_the_complete_supported_year_range() {
+    let mut mock = MockHw::new();
+    let mut settings = h24_settings();
+    let mut face = set_time::SetTimeFace::new();
+
+    mock.set_time(dt(2020, 1, 1, 0, 0, 0));
+    seam::with_hw(&mut mock, || face.activate(&settings));
+    for _ in 0..3 {
+        seam::with_hw(&mut mock, || {
+            face.loop_(
+                Event::Button(Button::Light, ButtonEvent::Down),
+                &mut settings,
+            )
+        });
+    }
+    seam::with_hw(&mut mock, || {
+        face.loop_(Event::Button(Button::Alarm, ButtonEvent::Up), &mut settings)
+    });
+    assert_eq!(mock.now.year, 1);
+
+    mock.set_time(dt(2083, 1, 1, 0, 0, 0));
+    seam::with_hw(&mut mock, || face.activate(&settings));
+    for _ in 0..3 {
+        seam::with_hw(&mut mock, || {
+            face.loop_(
+                Event::Button(Button::Light, ButtonEvent::Down),
+                &mut settings,
+            )
+        });
+    }
+    seam::with_hw(&mut mock, || {
+        face.loop_(Event::Button(Button::Alarm, ButtonEvent::Up), &mut settings)
+    });
+    assert_eq!(mock.now.year, 0);
 }
 
 #[test]
