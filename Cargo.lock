@@ -3262,6 +3262,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sensor-watch-launcher"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "sensor-watch-studio"
 version = "0.1.0"
 dependencies = [
