@@ -83,18 +83,23 @@ enum BuildEstimatorState {
     Failed(String),
 }
 
-fn configured_estimator_status(state: &BuildEstimatorState, flash: u32, ram: u32) -> String {
+fn configured_estimator_status(
+    state: &BuildEstimatorState,
+    plan: &firmware_inputs::BuildPlan,
+) -> String {
+    if let firmware_inputs::PreflightStatus::Invalid(reason) = &plan.preflight {
+        return format!("Build estimate unavailable: {reason}");
+    }
     match state {
-        BuildEstimatorState::NeedsValidation => {
-            "Build estimate pending validation or unsupported configuration".to_string()
-        }
+        BuildEstimatorState::NeedsValidation => "Build estimate pending validation".to_string(),
         BuildEstimatorState::Building => "Building configured UF2...".to_string(),
-        BuildEstimatorState::Verified => format!(
-            "Estimated component impact: +{flash} KiB flash, +{ram} KiB RAM (planning estimate). UF2 verified locally. Approval required"
-        ),
-        BuildEstimatorState::Failed(reason) => {
-            format!("Build estimate unavailable: {reason}")
+        BuildEstimatorState::Verified => {
+            let (flash, ram) = plan.estimate.expect("valid build plan has estimate");
+            format!(
+                "Estimated component impact: +{flash} KiB flash, +{ram} KiB RAM (planning estimate). UF2 verified locally. Approval required"
+            )
         }
+        BuildEstimatorState::Failed(reason) => format!("Build estimate unavailable: {reason}"),
     }
 }
 
@@ -1622,11 +1627,10 @@ impl eframe::App for StudioApp {
                 ui.label("Watch:");
                 ui.monospace(format!("{selected} faces selected"));
                 ui.separator();
-                let (flash, ram) = components::estimate(&self.component_effective);
+                let plan = self.current_build_plan();
                 ui.monospace(configured_estimator_status(
                     &self.build_estimator_state,
-                    flash,
-                    ram,
+                    &plan,
                 ));
                 ui.separator();
                 // Window size.
@@ -3126,6 +3130,43 @@ impl StudioApp {
             });
     }
 
+    fn build_revision(board: Board) -> &'static str {
+        match board {
+            Board::Green | Board::Blue => "OSO-SWAT-A1-05",
+            Board::RedLite => "OSO-SWAT-A1-02",
+            Board::Pro => "OSO-FEAL-A1-00",
+        }
+    }
+
+    fn current_build_plan(&self) -> firmware_inputs::BuildPlan {
+        let (preset_name, ordered_faces) = self
+            .presets
+            .presets
+            .get(self.presets.active)
+            .map(|preset| (preset.name.clone(), preset.faces.clone()))
+            .unwrap_or_default();
+        let enabled_modules = self
+            .modules
+            .modules
+            .iter()
+            .filter(|module| module.enabled)
+            .map(|module| module.name.clone())
+            .collect();
+        firmware_inputs::resolve_build_plan(
+            self.board,
+            Self::build_revision(self.board),
+            &self.component_profiles,
+            self.component_profile,
+            &self.component_draft,
+            &self.component_effective,
+            preset_name,
+            ordered_faces,
+            enabled_modules,
+            &self.watch_config,
+            &self.output_dir,
+        )
+    }
+
     /// Starts exactly one background firmware build.
     fn start_build(&mut self) {
         if !self.unsafe_action_allowed() {
@@ -3142,40 +3183,9 @@ impl StudioApp {
             return;
         }
 
-        let profile = self
-            .component_profiles
-            .get(self.component_profile)
-            .cloned()
-            .unwrap_or_else(|| {
-                components::BuildProfile::new("Custom", self.component_effective.clone())
-            });
-        let revision = match self.board {
-            Board::Green | Board::Blue => "OSO-SWAT-A1-05",
-            Board::RedLite => "OSO-SWAT-A1-02",
-            Board::Pro => "OSO-FEAL-A1-00",
-        };
-        let (preset_name, ordered_faces) = self
-            .presets
-            .presets
-            .get(self.presets.active)
-            .map(|preset| (preset.name.clone(), preset.faces.clone()))
-            .unwrap_or_default();
-        let request = firmware_inputs::FirmwareInputRequest {
-            board: self.board,
-            revision: revision.into(),
-            profile,
-            components: self.component_effective.clone(),
-            preset_name,
-            ordered_faces,
-            modules: self
-                .modules
-                .modules
-                .iter()
-                .filter(|module| module.enabled)
-                .map(|module| module.name.clone())
-                .collect(),
-        };
-        if let Err(reason) = build::preflight_request(&request) {
+        let plan = self.current_build_plan();
+        if let firmware_inputs::PreflightStatus::Invalid(reason) = &plan.preflight {
+            let reason = reason.clone();
             self.build_message = format!("Build preflight failed: {reason}");
             self.status = self.build_message.clone();
             self.build_estimator_state = BuildEstimatorState::Failed(reason.to_string());
@@ -3185,7 +3195,17 @@ impl StudioApp {
             self.push_terminal(message);
             return;
         }
-        let build_fingerprint = self.build_configuration_fingerprint();
+        if let Err(reason) = build::preflight_request(&plan.request) {
+            self.build_message = format!("Build preflight failed: {reason}");
+            self.status = self.build_message.clone();
+            self.build_estimator_state = BuildEstimatorState::Failed(reason.clone());
+            self.log.log(&self.build_message);
+            self.build_log.log(&self.build_message);
+            let message = self.build_message.clone();
+            self.push_terminal(message);
+            return;
+        }
+        let build_fingerprint = plan.request_identity.clone();
         let out = std::path::PathBuf::from(self.output_dir.clone());
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
@@ -3194,6 +3214,7 @@ impl StudioApp {
         } else {
             self.begin_compile_session(build_fingerprint);
         }
+        let request = plan.request;
         self.pending_build = Some(std::thread::spawn(move || {
             build::build_firmware(request, &out)
         }));
@@ -3208,11 +3229,8 @@ impl StudioApp {
         self.pending_build_fingerprint = Some(build_fingerprint);
         self.current_progress = None;
         self.build_estimator_state = BuildEstimatorState::Building;
-        self.status = configured_estimator_status(
-            &self.build_estimator_state,
-            components::estimate(&self.component_effective).0,
-            components::estimate(&self.component_effective).1,
-        );
+        self.status =
+            configured_estimator_status(&self.build_estimator_state, &self.current_build_plan());
         self.build_message = self.status.clone();
         self.building = true;
     }
@@ -3226,17 +3244,7 @@ impl StudioApp {
     }
 
     fn build_configuration_fingerprint(&self) -> String {
-        configuration_fingerprint_with_effective(
-            self.board,
-            &self.presets,
-            &self.watch_config,
-            &self.modules,
-            &self.component_profiles,
-            self.component_profile,
-            &self.component_draft,
-            &self.component_effective,
-            &self.output_dir,
-        )
+        self.current_build_plan().request_identity
     }
 
     fn invalidate_stale_artifact(&mut self) {
@@ -4606,11 +4614,10 @@ impl StudioApp {
                         &previous_effective,
                     );
                 }
-                let (flash, ram) = components::estimate(&self.component_effective);
+                let plan = self.current_build_plan();
                 ui.weak(configured_estimator_status(
                     &self.build_estimator_state,
-                    flash,
-                    ram,
+                    &plan,
                 ));
                 ui.add_space(8.0);
                 self.register_anchor_rect(
@@ -4625,8 +4632,7 @@ impl StudioApp {
                     ui.spinner();
                     ui.label(configured_estimator_status(
                         &self.build_estimator_state,
-                        flash,
-                        ram,
+                        &self.current_build_plan(),
                     ));
                 } else {
                     let build_response = ui
@@ -10499,18 +10505,31 @@ fn configuration_fingerprint_with_effective(
     component_effective: &components::ComponentsConfig,
     output_dir: &str,
 ) -> String {
-    build_snapshot::BuildInputSnapshot::from_state(
-        board.label(),
-        presets,
-        watch_config,
-        modules,
+    let (preset_name, ordered_faces) = presets
+        .presets
+        .get(presets.active)
+        .map(|preset| (preset.name.clone(), preset.faces.clone()))
+        .unwrap_or_default();
+    let enabled_modules = modules
+        .modules
+        .iter()
+        .filter(|module| module.enabled)
+        .map(|module| module.name.clone())
+        .collect();
+    firmware_inputs::resolve_build_plan(
+        board,
+        StudioApp::build_revision(board),
         component_profiles,
         component_profile,
         component_draft,
         component_effective,
+        preset_name,
+        ordered_faces,
+        enabled_modules,
+        watch_config,
         output_dir,
     )
-    .fingerprint()
+    .request_identity
 }
 
 fn invalidate_stale_artifact_state(
@@ -10613,6 +10632,24 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 
 #[cfg(test)]
 mod tests {
+    fn valid_plan() -> crate::firmware_inputs::BuildPlan {
+        let profiles = crate::components::default_profiles();
+        let preset = crate::presets::PresetManager::new().presets[0].clone();
+        crate::firmware_inputs::resolve_build_plan(
+            crate::components::BoardKind::Green,
+            "OSO-SWAT-A1-05",
+            &profiles,
+            0,
+            &profiles[0].config,
+            &profiles[0].config,
+            preset.name,
+            preset.faces,
+            vec![],
+            &crate::watch_config::WatchConfig::default(),
+            "output",
+        )
+    }
+
     use super::configured_estimator_status;
     use super::Board;
     use super::{
@@ -10665,17 +10702,11 @@ mod tests {
 
     #[test]
     fn estimator_status_uses_live_effective_configuration_estimate() {
-        let config = components::ComponentsConfig::default();
-        let initial = components::estimate(&config);
-        let mut changed = config.clone();
-        changed.uart_shell = true;
-        let refreshed = components::estimate(&changed);
-
-        assert_ne!(initial, refreshed);
-        let status =
-            configured_estimator_status(&BuildEstimatorState::Verified, refreshed.0, refreshed.1);
-        assert!(status.contains(&format!("+{} KiB flash", refreshed.0)));
-        assert!(status.contains(&format!("+{} KiB RAM", refreshed.1)));
+        let plan = valid_plan();
+        let (flash, ram) = plan.estimate.unwrap();
+        let status = configured_estimator_status(&BuildEstimatorState::Verified, &plan);
+        assert!(status.contains(&format!("+{} KiB flash", flash)));
+        assert!(status.contains(&format!("+{} KiB RAM", ram)));
     }
 
     fn test_progress_event(operation_id: u64, phase: Phase, message: &str) -> ProgressEvent {
@@ -11898,8 +11929,7 @@ mod tests {
     fn estimator_reports_the_actual_unsupported_preflight_reason() {
         let message = super::configured_estimator_status(
             &super::BuildEstimatorState::Failed("unsupported component mapping".to_string()),
-            12,
-            4,
+            &valid_plan(),
         );
 
         assert_eq!(
@@ -11911,16 +11941,21 @@ mod tests {
     #[test]
     fn estimator_reports_configured_build_while_compiling() {
         assert_eq!(
-            super::configured_estimator_status(&super::BuildEstimatorState::Building, 12, 4),
+            super::configured_estimator_status(
+                &super::BuildEstimatorState::Building,
+                &valid_plan()
+            ),
             "Building configured UF2..."
         );
     }
 
     #[test]
     fn estimator_reports_verified_artifact_with_planning_estimate() {
+        let plan = valid_plan();
+        let (flash, ram) = plan.estimate.unwrap();
         assert_eq!(
-            super::configured_estimator_status(&super::BuildEstimatorState::Verified, 12, 4),
-            "Estimated component impact: +12 KiB flash, +4 KiB RAM (planning estimate). UF2 verified locally. Approval required"
+            super::configured_estimator_status(&super::BuildEstimatorState::Verified, &plan),
+            format!("Estimated component impact: +{flash} KiB flash, +{ram} KiB RAM (planning estimate). UF2 verified locally. Approval required")
         );
     }
 
@@ -11928,8 +11963,7 @@ mod tests {
     fn estimator_reports_build_failure_reason_and_no_estimate() {
         let message = super::configured_estimator_status(
             &super::BuildEstimatorState::Failed("toolchain exited with code 1".to_string()),
-            12,
-            4,
+            &valid_plan(),
         );
 
         assert_eq!(
@@ -11940,10 +11974,8 @@ mod tests {
 
     #[test]
     fn build_contract_is_fail_closed_and_ui_does_not_promise_artifacts() {
-        assert!(super::build::validate_configuration_inputs().is_err());
-        assert!(
-            super::build::CONFIGURATION_BUILD_BLOCKED.contains("no configured UF2 was generated")
-        );
+        assert!(super::build::validate_configuration_inputs().is_ok());
+        assert!(super::build::CONFIGURATION_BUILD_BLOCKED.contains("validated"));
         assert!(super::build::missing_configuration_inputs().len() >= 5);
     }
 
@@ -12227,6 +12259,7 @@ mod tests {
         app.held_button = Some(super::ButtonId::L);
         app.watch.light = true;
         let output_dir = app.output_dir.clone();
+        app.component_profiles[0].name = "Custom".into();
 
         app.start_build();
 

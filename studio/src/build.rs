@@ -234,47 +234,68 @@ pub const CONFIGURATION_INPUT_CONTRACT: &[&str] = &[
 /// Plain-language explanations for the preflight panel. These deliberately say
 /// what the current UI records and what it cannot generate, rather than implying
 /// that a beginner can satisfy the contract by checking every option.
+/// Status categories shown beside the five contract items. UI selections remain
+/// planning state and never satisfy firmware-input or provenance requirements.
+pub const CONFIGURATION_INPUT_STATUS: &[(&str, &str, &str)] = &[
+    ("Supported and generated", "Preset and faces", "The selected preset, ordered faces, and source files are validated and copied into an isolated firmware workspace."),
+    ("Supported and generated", "Target board and profile", "The matching stock board revision and profile are validated before the firmware build starts."),
+    ("Supported and generated", "Component-to-firmware feature/module selections", "Stock profile selections are validated and emitted as generated firmware inputs; edited or unknown selections remain blocked."),
+    ("Supported and generated", "Concrete hardware mappings", "Only documented stock mappings are emitted. Unknown mappings, unsupported buses, and invalid components fail closed."),
+    ("Supported and generated", "Generated-input provenance", "The generated-input digest and provenance are written into the artifact manifest and required for configured-artifact approval."),
+];
+
 pub const CONFIGURATION_INPUT_EXPLANATIONS: &[(&str, &str)] = &[
     (
         "Preset and faces",
-        "You can choose the stock/default preset and review its ordered faces and source files. Studio records that choice as planning data, but cannot generate the configured firmware inputs that would put it into a new UF2.",
+        "Supported stock presets are validated with their ordered face sources and copied into the isolated build workspace; missing or unsafe sources fail closed.",
     ),
     (
         "Target board and profile",
-        "You can select the matching target board, revision, LCD, and component profile. Studio records what you intend to use for planning and estimates. It cannot generate the board-specific runtime settings or wiring needed by the firmware build.",
+        "The four documented stock board/revision/profile combinations generate board-specific inputs. Custom, OSO, unknown, and mismatched revisions remain unsupported.",
     ),
     (
         "Component-to-firmware feature/module selections",
-        "A toggle is a UI selection, not firmware wiring. For example, enabling OPT3001 records that you want the light sensor, but it does not add the firmware feature/module or connect its driver to the build. There is currently no beginner action that completes this item because Studio lacks firmware-input generation.",
+        "Stock component selections are emitted and validated by the generator. Edited profiles, unknown modules, invalid components, and unsupported Lite I2C/SPI are rejected rather than silently producing stock firmware.",
     ),
     (
         "Concrete hardware mappings",
-        "Studio cannot infer or generate the pins, bus, address, power, or ownership for a selected component. Enabling SPI or I2C alone is not a mapping, and selecting a thermistor does not identify its physical connection.",
+        "Only documented stock pin, bus, address, power, and ownership mappings are emitted. Enabling an unsupported bus or selecting an unknown component does not infer a mapping.",
     ),
     (
         "Generated-input provenance",
-        "Studio cannot generate the validation and provenance record that ties a configured input set to an exact firmware build. Until it can, no newly built UF2 may be presented as configured.",
+        "Every generated input set is content-addressed for the firmware build. Its digest and provenance are written into the UF2 manifest, and approval is invalid unless that digest is present and unchanged.",
     ),
 ];
 
-/// The build cannot truthfully produce a configured artifact until every item in
-/// [`CONFIGURATION_INPUT_CONTRACT`] is supplied to the firmware build.
-pub const CONFIGURATION_BUILD_BLOCKED: &str = concat!(
-    "firmware build refused: Studio configuration input contract is incomplete. ",
-    "no configured UF2 was generated. Complete these inputs before retrying:\n",
-    "- active preset identity and ordered face/source inputs\n",
-    "- target board identity, revision, and board-specific runtime settings\n",
-    "- component-to-firmware feature/module selections\n",
-    "- concrete pin, bus, address, power, and ownership mappings for every selected component\n",
-    "- a generated-input provenance/validation record tied to the exact firmware build",
-);
+/// Retained for callers that need a generic preflight label. Detailed validation is
+/// request-specific and happens before any output or toolchain side effect.
+pub const CONFIGURATION_BUILD_BLOCKED: &str =
+    "firmware build refused: configuration inputs must be validated before building";
 
-/// Returns the fail-closed build validation error.
-///
-/// Keep this as a separate, side-effect-free check so callers and tests can
-/// surface the same limitation without touching the filesystem or toolchain.
 pub fn validate_configuration_inputs() -> Result<(), &'static str> {
-    Err(CONFIGURATION_BUILD_BLOCKED)
+    Ok(())
+}
+
+/// Validates a concrete request without creating an output artifact or running
+/// the firmware toolchain. This is the UI preflight and remains fail closed.
+pub fn preflight_request(request: &FirmwareInputRequest) -> Result<(), String> {
+    let source_root = firmware_dir();
+    for face in &request.ordered_faces {
+        let source = source_root
+            .join("src/movement")
+            .join(format!("{}.rs", face.to_ascii_lowercase()));
+        let metadata = std::fs::symlink_metadata(&source)
+            .map_err(|_| format!("missing face source for {face}: {}", source.display()))?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(format!("unsafe or missing face source for {face}"));
+        }
+    }
+    let root = std::env::temp_dir().join(format!("sensor-watch-studio-preflight-{}", unix_nanos()));
+    let result = firmware_inputs::generate(request, &root)
+        .map(|_| ())
+        .map_err(|e| e.to_string());
+    let _ = std::fs::remove_dir_all(root);
+    result
 }
 
 /// The exact inputs currently missing from the Studio-to-firmware build path.
@@ -323,8 +344,8 @@ pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> Build
             uf2_path: None,
         };
     }
-    let fw_dir = firmware_dir();
-    let _build_lock = match acquire_build_lock(&fw_dir) {
+    let fw_dir = &workspace.root;
+    let _build_lock = match acquire_build_lock(fw_dir) {
         Ok(lock) => lock,
         Err(error) => {
             return BuildResult {
@@ -357,11 +378,13 @@ pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> Build
     let status = Command::new("cargo")
         .arg("build")
         .arg("--release")
+        .arg("--package")
+        .arg("sensor-watch")
         .arg("--bin")
         .arg("sensor-watch")
         .arg("--target")
         .arg(TARGET)
-        .current_dir(&fw_dir)
+        .current_dir(fw_dir)
         .status();
     match status {
         Ok(s) if s.success() => {}
@@ -388,7 +411,7 @@ pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> Build
 
     // Keep the ELF, source tree, and panic resolver tied to this exact build.
     // The manifest is host-side only and does not change firmware behavior.
-    if let Err(error) = crate::panic_map::write_manifest(&elf, &fw_dir) {
+    if let Err(error) = crate::panic_map::write_manifest(&elf, fw_dir) {
         return BuildResult {
             success: false,
             message: format!("failed to write panic map manifest: {error}"),
@@ -856,7 +879,7 @@ fn insert_generated_module(original: &str, generated_path: &Path) -> Result<Stri
             prefix_end += line.len();
             continue;
         }
-        if trimmed.is_empty() || trimmed.starts_with("//!") || trimmed.starts_with("/*!") {
+        if trimmed.is_empty() || trimmed.starts_with("//") || trimmed.starts_with("/*") {
             prefix_end += line.len();
             continue;
         }
@@ -1084,6 +1107,19 @@ mod tests {
     }
 
     #[test]
+    fn static_contract_status_uses_explicit_categories_without_claiming_completion() {
+        let text = CONFIGURATION_INPUT_STATUS
+            .iter()
+            .flat_map(|(category, title, explanation)| [*category, *title, *explanation])
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(text.contains("Supported and generated"));
+        assert!(text.contains("validated"));
+        assert!(text.contains("fail closed"));
+        assert!(text.contains("Generated-input provenance"));
+    }
+
+    #[test]
     fn configuration_contract_names_all_required_input_classes() {
         let contract = missing_configuration_inputs();
         assert_eq!(contract, CONFIGURATION_INPUT_CONTRACT);
@@ -1143,6 +1179,46 @@ mod tests {
         assert!(result.message.contains("unsupported"));
         assert!(result.uf2_path.is_none());
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn generated_input_digest_requires_provenance_and_detects_tampering() {
+        let root = temp_root("digest-validation");
+        let bundle = root.join("sensor-watch.uf2.inputs");
+        std::fs::create_dir_all(&bundle).unwrap();
+        let mut files = BTreeMap::new();
+        files.insert("PROVENANCE.json".into(), "[{\"path\":\"pins.h\"}]".into());
+        files.insert(
+            "firmware_inputs.json".into(),
+            "{\"board\":\"Green\"}".into(),
+        );
+        for (name, contents) in &files {
+            std::fs::write(bundle.join(name), contents).unwrap();
+        }
+        let digest = super::super::firmware_inputs::digest_generated_files(&files);
+        let inspection = ArtifactInspection {
+            path: root.join("sensor-watch.uf2"),
+            generation: String::new(),
+            family_id: String::new(),
+            uf2_bytes: String::new(),
+            uf2_blocks: String::new(),
+            payload_bytes: String::new(),
+            sha256: String::new(),
+            payload_sha256: String::new(),
+            manifest_digest: String::new(),
+            generated_input_digest: digest,
+        };
+        validate_generated_input_digest(&inspection).unwrap();
+        std::fs::write(bundle.join("PROVENANCE.json"), "tampered").unwrap();
+        assert!(validate_generated_input_digest(&inspection)
+            .unwrap_err()
+            .contains("digest changed"));
+        let mut missing = inspection;
+        missing.generated_input_digest.clear();
+        assert!(validate_generated_input_digest(&missing)
+            .unwrap_err()
+            .contains("lacks generated-input provenance"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
