@@ -51,3 +51,20 @@ project/resource capability or optional tool/target bundle is absent.
 The footer displays the mode, current package version when available, and
 whether the distribution is complete or partial. Missing resources are shown
 as capability warnings rather than being inferred from the executable.
+
+## Launcher startup handshake and recovery
+
+The standalone launcher passes an attempt-specific
+`--sensor-watch-startup-marker` (and may pass `--sensor-watch-version`,
+`--sensor-watch-startup-attempt`, and `--sensor-watch-user-data`). Studio
+consumes these bootstrap arguments before CLI dispatch, performs its failed
+activation recovery check before distribution/resource/project initialization,
+and writes the exact `ok\n` acknowledgement only after initialization completes.
+The acknowledgement is written through a same-directory temporary file and
+atomic rename, so a partial marker cannot be accepted. A supplied version
+that does not match the running Studio is rejected and never acknowledged.
+
+The launcher remains responsible for its bounded startup timeout and final
+launcher-state pointer rollback. Studio never replaces the running executable;
+new packages remain immutable version directories, while settings and projects
+remain under user data.

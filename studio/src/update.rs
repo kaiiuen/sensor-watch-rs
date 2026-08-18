@@ -6,6 +6,7 @@
 //! immutable, versioned directory and activated by atomically replacing one
 //! small state file.
 
+use sensor_watch_desktop_update::Authentication;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs;
@@ -19,6 +20,112 @@ const STATE_FILE: &str = "update-state.json";
 const STATE_TEMP_FILE: &str = "update-state.json.pending";
 const STARTUP_SUCCESS_FILE: &str = "startup-success";
 static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static STARTUP_STATUS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+/// Arguments and environment supplied by the standalone launcher.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct StartupContext {
+    pub marker: Option<PathBuf>,
+    pub version: Option<String>,
+    pub attempt: Option<String>,
+    pub user_data: Option<PathBuf>,
+}
+
+pub fn startup_status() -> Option<&'static str> {
+    STARTUP_STATUS.get().map(String::as_str)
+}
+
+pub fn record_startup_status(message: impl Into<String>) {
+    let _ = STARTUP_STATUS.set(message.into());
+}
+
+/// Parse launcher arguments without treating them as Studio CLI commands.
+pub fn parse_startup_context<I, S>(args: I) -> (StartupContext, Vec<String>)
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    let mut context = StartupContext::default();
+    let mut remaining = Vec::new();
+    let mut args = args.into_iter().map(Into::into);
+    while let Some(arg) = args.next() {
+        let (key, value) = arg
+            .split_once('=')
+            .map_or((arg.as_str(), None), |(k, v)| (k, Some(v)));
+        let value = value.map(str::to_owned).or_else(|| {
+            matches!(
+                key,
+                "--sensor-watch-startup-marker"
+                    | "--sensor-watch-version"
+                    | "--sensor-watch-startup-attempt"
+                    | "--sensor-watch-user-data"
+            )
+            .then(|| args.next())
+            .flatten()
+        });
+        match key {
+            "--sensor-watch-startup-marker" => context.marker = value.map(PathBuf::from),
+            "--sensor-watch-version" => context.version = value,
+            "--sensor-watch-startup-attempt" => context.attempt = value,
+            "--sensor-watch-user-data" => context.user_data = value.map(PathBuf::from),
+            _ => remaining.push(arg),
+        }
+    }
+    if context.marker.is_none() {
+        context.marker = std::env::var_os("SENSOR_WATCH_STARTUP_MARKER").map(PathBuf::from);
+    }
+    if context.user_data.is_none() {
+        context.user_data = std::env::var_os("SENSOR_WATCH_USER_DATA").map(PathBuf::from);
+    }
+    (context, remaining)
+}
+
+/// Atomically acknowledge the exact launcher attempt. A supplied version must
+/// match the running Studio version; mismatches fail closed and are never acked.
+pub fn mark_startup_success(context: &StartupContext) -> Result<(), UpdateError> {
+    let Some(marker) = context.marker.as_ref() else {
+        return Ok(());
+    };
+    if let Some(version) = context.version.as_deref() {
+        let actual = env!("CARGO_PKG_VERSION");
+        if version != actual {
+            let message = format!("Launcher requested Studio {version}, running {actual}");
+            record_startup_status(format!("Startup acknowledgement rejected: {message}"));
+            return Err(UpdateError::Manifest(message));
+        }
+    }
+    let parent = marker
+        .parent()
+        .ok_or_else(|| UpdateError::Manifest("startup marker has no parent directory".into()))?;
+    fs::create_dir_all(parent)?;
+    let temp = parent.join(format!(
+        ".{}.pending-{}",
+        STARTUP_SUCCESS_FILE,
+        unique_token()
+    ));
+    fs::write(&temp, b"ok\n")?;
+    fs::rename(&temp, marker)?;
+    let detail = match (&context.version, &context.attempt) {
+        (Some(version), Some(attempt)) => {
+            format!("Startup succeeded for version {version}, attempt {attempt}")
+        }
+        (Some(version), None) => format!("Startup succeeded for version {version}"),
+        _ => "Startup succeeded".into(),
+    };
+    record_startup_status(detail);
+    Ok(())
+}
+
+fn unique_token() -> String {
+    format!(
+        "{}-{}",
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        STAGE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct PackageVersion {
@@ -101,26 +208,15 @@ struct UpdateState {
     previous: Option<String>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum AuthenticationStatus {
-    Authenticated,
-    Unsupported,
-    Untrusted(String),
-}
-
 /// Authentication is intentionally an interface: no key means fail closed.
 pub trait MetadataAuthenticator {
-    fn authenticate(
-        &self,
-        manifest_bytes: &[u8],
-        manifest: &PackageManifest,
-    ) -> AuthenticationStatus;
+    fn authenticate(&self, manifest_bytes: &[u8], manifest: &PackageManifest) -> Authentication;
 }
 
 pub struct NoAuthenticator;
 impl MetadataAuthenticator for NoAuthenticator {
-    fn authenticate(&self, _: &[u8], _: &PackageManifest) -> AuthenticationStatus {
-        AuthenticationStatus::Unsupported
+    fn authenticate(&self, _: &[u8], _: &PackageManifest) -> Authentication {
+        Authentication::Unsupported
     }
 }
 
@@ -204,11 +300,9 @@ impl UpdateManager {
         let manifest: PackageManifest = serde_json::from_slice(&bytes)?;
         manifest.validate()?;
         match auth.authenticate(&bytes, &manifest) {
-            AuthenticationStatus::Authenticated => {}
-            AuthenticationStatus::Unsupported => {
-                return Err(UpdateError::AuthenticationUnsupported)
-            }
-            AuthenticationStatus::Untrusted(e) => return Err(UpdateError::UntrustedMetadata(e)),
+            Authentication::Authenticated { .. } => {}
+            Authentication::Unsupported => return Err(UpdateError::AuthenticationUnsupported),
+            Authentication::Untrusted(e) => return Err(UpdateError::UntrustedMetadata(e)),
         }
         fs::create_dir_all(&self.root)?;
         let name = format!(
@@ -369,8 +463,10 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
     struct Trusted;
     impl MetadataAuthenticator for Trusted {
-        fn authenticate(&self, _: &[u8], _: &PackageManifest) -> AuthenticationStatus {
-            AuthenticationStatus::Authenticated
+        fn authenticate(&self, _: &[u8], _: &PackageManifest) -> Authentication {
+            Authentication::Authenticated {
+                key_id: "test".into(),
+            }
         }
     }
     fn temp(name: &str) -> PathBuf {
@@ -544,6 +640,62 @@ mod tests {
         assert!(two.exists());
         clean(&[&source, &root, &user]);
     }
+    #[test]
+    fn launcher_arguments_are_separated_from_studio_commands() {
+        let marker = temp("attempt.marker");
+        let (context, remaining) = parse_startup_context([
+            "--sensor-watch-startup-marker",
+            marker.to_str().unwrap(),
+            "--sensor-watch-version=0.1.0",
+            "--sensor-watch-startup-attempt=7",
+            "--sensor-watch-user-data",
+            "C:/studio-user-data",
+            "status",
+        ]);
+        assert_eq!(context.marker, Some(marker));
+        assert_eq!(context.version.as_deref(), Some("0.1.0"));
+        assert_eq!(context.attempt.as_deref(), Some("7"));
+        assert_eq!(
+            context.user_data,
+            Some(PathBuf::from("C:/studio-user-data"))
+        );
+        assert_eq!(remaining, vec!["status"]);
+    }
+
+    #[test]
+    fn startup_success_is_atomic_and_rejects_wrong_version() {
+        let marker = temp("marker");
+        let wrong = StartupContext {
+            marker: Some(marker.clone()),
+            version: Some("99.0.0".into()),
+            attempt: Some("attempt-1".into()),
+            user_data: None,
+        };
+        assert!(matches!(
+            mark_startup_success(&wrong),
+            Err(UpdateError::Manifest(_))
+        ));
+        assert!(!marker.exists());
+
+        let valid = StartupContext {
+            version: Some(env!("CARGO_PKG_VERSION").into()),
+            ..wrong
+        };
+        mark_startup_success(&valid).unwrap();
+        assert_eq!(fs::read(&marker).unwrap(), b"ok\n");
+        let _ = fs::remove_dir_all(marker.parent().unwrap());
+    }
+
+    #[test]
+    fn corrupt_state_is_reported_fail_closed() {
+        let root = temp("corrupt-state");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join(STATE_FILE), b"not-json").unwrap();
+        let manager = UpdateManager::new(&root, temp("user"));
+        assert!(matches!(manager.current_path(), Err(UpdateError::Json(_))));
+        clean(&[&root, manager.user_data_root()]);
+    }
+
     #[test]
     fn user_data_is_separate_from_versions() {
         let source = temp("source");

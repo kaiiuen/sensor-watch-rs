@@ -49,6 +49,9 @@ sysinfo = { version = "0.35", features = ["network"] }
 # HTTP client for fetching the release checksum
 ureq = "2"
 
+# Shared signed desktop release metadata and authentication policy
+sensor-watch-desktop-update = { path = "../desktop-update" }
+
 # Offline artifact manifests and generation checksums
 sha2 = "0.10"
 

@@ -1094,6 +1094,10 @@ impl Default for StudioApp {
         // Check for updates on launch.
         app.check_for_updates();
         app.status = tr(app.language, Key::Ready).to_string();
+        if let Some(startup_status) = update::startup_status() {
+            app.status = startup_status.to_owned();
+            app.package_status.warnings.push(startup_status.to_owned());
+        }
         app
     }
 }
@@ -9095,10 +9099,31 @@ fn ensure_cli_console() {
 fn ensure_cli_console() {}
 
 fn main() -> eframe::Result<()> {
+    // Launcher bootstrap arguments are consumed before Studio CLI dispatch.
+    // They identify one version/attempt and must never be treated as commands.
+    let (startup, studio_args) = update::parse_startup_context(std::env::args().skip(1));
+    let executable = std::env::current_exe().unwrap_or_default();
+    let user_data = startup
+        .user_data
+        .clone()
+        .unwrap_or_else(data_dir::default_path);
+
+    // Recover an interrupted local package activation before any distribution,
+    // resource, or project initialization can select the new version.
+    let package_root = executable
+        .parent()
+        .map(|path| path.join("versions"))
+        .unwrap_or_else(|| std::path::PathBuf::from("versions"));
+    let recovery_manager = update::UpdateManager::new(&package_root, &user_data);
+    if let Err(error) = recovery_manager.recover_failed_startup() {
+        let message = format!("Studio update recovery failed: {error}");
+        eprintln!("{message}");
+        update::record_startup_status(message);
+    }
+
     // Bootstrap preferences are deliberately unscoped: they must be read
     // before selecting an executable-hash profile. Distribution discovery is
-    // initialized first so all project/resource paths use the same contract.
-    let executable = std::env::current_exe().unwrap_or_default();
+    // initialized only after failed-startup recovery.
     let developer_mode = distribution::developer_mode_requested();
     let package_status = distribution::initialize(&executable, developer_mode);
     if !package_status.warnings.is_empty() {
@@ -9108,7 +9133,10 @@ fn main() -> eframe::Result<()> {
     }
     let bootstrap = persist::load_runtime_preferences();
     let fresh = bootstrap.fresh_test_executable_profile;
-    let requested_root = std::path::PathBuf::from(&bootstrap.data_folder);
+    let requested_root = startup
+        .user_data
+        .clone()
+        .unwrap_or_else(|| std::path::PathBuf::from(&bootstrap.data_folder));
     let fallback_root = data_dir::default_path();
     let firmware = build::firmware_dir();
     // The bootstrap output directory is the only safe output value available
@@ -9165,11 +9193,9 @@ fn main() -> eframe::Result<()> {
         eprintln!("{warning}: {}", profile.root.display());
     }
 
-    let mut args = std::env::args();
-    let _executable = args.next();
-    if args.next().is_some() {
+    if !studio_args.is_empty() {
         ensure_cli_console();
-        let exit_code = match run_cli(std::env::args().skip(1)) {
+        let exit_code = match run_cli(studio_args.into_iter()) {
             Ok(()) => 0,
             Err(error) => {
                 eprintln!("error: {error}");
@@ -9185,6 +9211,12 @@ fn main() -> eframe::Result<()> {
             }
         };
         std::process::exit(exit_code);
+    }
+
+    // Acknowledgement is deliberately last: distribution discovery, mutable
+    // project preparation, and profile initialization have all completed.
+    if let Err(error) = update::mark_startup_success(&startup) {
+        eprintln!("Studio startup acknowledgement: {error}");
     }
 
     let options = eframe::NativeOptions {

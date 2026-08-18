@@ -3384,6 +3384,7 @@ dependencies = [
  "resvg",
  "sensor-watch",
  "sensor-watch-core",
+ "sensor-watch-desktop-update",
  "sensor-watch-tools",
  "serde",
  "serde_json",
