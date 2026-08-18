@@ -203,7 +203,7 @@ pub struct AppSettings {
     #[serde(default = "default_output_dir")]
     pub output_dir: String,
     /// Whether the first-run welcome overlay has been dismissed.
-    #[serde(default)]
+    #[serde(default = "default_first_run")]
     pub first_run: bool,
     /// Stable IDs of panel tours explicitly completed or skipped.
     /// Missing in legacy settings, which means no panel has been claimed.
@@ -495,7 +495,7 @@ impl Default for AppSettings {
             modules: ModuleManager::default(),
             data_folder: default_data_folder(),
             output_dir: default_output_dir(),
-            first_run: false,
+            first_run: true,
             tour_claims: Vec::new(),
             persist_user_changes: true,
             reset_test_session_on_compile: true,
@@ -540,6 +540,10 @@ fn valid_ntp_host(host: &str) -> bool {
 }
 
 pub fn default_true() -> bool {
+    true
+}
+
+fn default_first_run() -> bool {
     true
 }
 

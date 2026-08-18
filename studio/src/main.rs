@@ -1143,6 +1143,10 @@ impl Default for StudioApp {
             app.apply_settings(saved);
             app.log.log("Loaded persisted settings");
         }
+        if app.first_run {
+            // Preserve the beginner path for a new or legacy profile.
+            app.block_editor.set_blocks_mode(true);
+        }
         app.apply_bootstrap_preferences(&bootstrap_preferences);
         // Auto-fetch the time from the default NTP server (Cloudflare) on launch.
         app.fetch_ntp();
@@ -11498,6 +11502,7 @@ mod tests {
         let mut app = super::StudioApp::default();
         let mut settings = super::settings::AppSettings::default();
         settings.developer_mode = true;
+        settings.persist_user_changes = false;
         let mut ux = settings.panel_ux("simulator");
         ux.tutorial_input_barrier = false;
         settings.set_panel_ux("simulator", ux);
