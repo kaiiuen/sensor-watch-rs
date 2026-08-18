@@ -40,6 +40,7 @@ mod sysstats;
 mod test_runtime;
 mod theme;
 mod transport;
+pub mod update;
 mod watch_config;
 mod watch_display;
 mod watch_sim;
