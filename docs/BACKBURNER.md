@@ -62,7 +62,7 @@ registered firmware faces can run the real firmware implementation in the
 simulator.
 
 **Status:** Open. 108 faces currently use the default-enabled `real-faces`
-seam; the remaining 3 faces use the `face_sim` engine because their modules are
+seam. The remaining 3 faces use the `face_sim` engine because their modules are
 not yet exported through the host firmware library.
 
 ### 6. Physical hardware validation

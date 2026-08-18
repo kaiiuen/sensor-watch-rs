@@ -18,7 +18,7 @@ The ROM/UF2 bootloader remains the device-side recovery mechanism.
    size, block count, payload CRC-32, UF2 SHA-256, payload SHA-256, and a
    generation ID. Structural validation checks UF2 format, family, addresses,
    ordering, sizes, and CRCs. Local digest consistency checks that the manifest
-   and adjacent `.sig` describe the same fields; `sha256:` is only a digest
+   and adjacent `.sig` describe the same fields. `sha256:` is only a digest
    label, not a cryptographic signature. The legacy `signature` field and `.sig`
    filename are retained for compatibility. Neither establishes provenance or
    authenticity. Existing manifest or digest files are never overwritten.
@@ -59,7 +59,7 @@ family, payload size, and end magic before copying. Malformed, oversized,
 wrong-family, wrong-board, or CRC-mismatched artifacts must be rejected. A
 A trusted release SHA-256 is provenance for the exact release only when it was
 obtained through a separately trusted channel and explicitly supplied. If it is
-missing, verification reports trusted provenance as **not provided**; local
+missing, verification reports trusted provenance as **not provided**. Local
 structural validation and digest consistency still remain available. A matching
 SHA-256 is not a signature and does not prove publisher identity. No public-key
 or other authenticity mechanism is implemented here.

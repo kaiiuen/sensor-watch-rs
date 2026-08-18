@@ -193,7 +193,7 @@ pub const CONFIGURATION_INPUT_EXPLANATIONS: &[(&str, &str)] = &[
     ),
     (
         "Target board and profile",
-        "You can select the matching target board, revision, LCD, and component profile. Studio records what you intend to use for planning and estimates; it cannot generate the board-specific runtime settings or wiring needed by the firmware build.",
+        "You can select the matching target board, revision, LCD, and component profile. Studio records what you intend to use for planning and estimates. It cannot generate the board-specific runtime settings or wiring needed by the firmware build.",
     ),
     (
         "Component-to-firmware feature/module selections",
@@ -212,7 +212,7 @@ pub const CONFIGURATION_INPUT_EXPLANATIONS: &[(&str, &str)] = &[
 /// The build cannot truthfully produce a configured artifact until every item in
 /// [`CONFIGURATION_INPUT_CONTRACT`] is supplied to the firmware build.
 pub const CONFIGURATION_BUILD_BLOCKED: &str = concat!(
-    "firmware build refused: Studio configuration input contract is incomplete; ",
+    "firmware build refused: Studio configuration input contract is incomplete. ",
     "no configured UF2 was generated. Complete these inputs before retrying:\n",
     "- active preset identity and ordered face/source inputs\n",
     "- target board identity, revision, and board-specific runtime settings\n",
@@ -596,7 +596,7 @@ where
         )
         .map_err(|error| {
             format!(
-                "UF2 and manifest published, but {error}; newly published artifact was preserved"
+                "UF2 and manifest published, but {error}. Newly published artifact was preserved"
             )
         })?;
     }
@@ -624,7 +624,7 @@ where
     if failures.is_empty() {
         Ok(())
     } else {
-        Err(format!("recovery cleanup failed: {}", failures.join("; ")))
+        Err(format!("recovery cleanup failed: {}", failures.join(", ")))
     }
 }
 
@@ -1080,7 +1080,7 @@ mod tests {
         assert!(error.contains("recovery cleanup failed"));
         assert!(error.contains("sensor-watch.uf2.previous.json"));
         assert!(error.contains("sensor-watch.uf2.previous.json.sig"));
-        assert!(error.contains("newly published artifact was preserved"));
+        assert!(error.contains("Newly published artifact was preserved"));
         assert_eq!(attempted.borrow().len(), 3);
         assert_eq!(std::fs::read(&uf2).unwrap(), new_data);
         assert!(uf2.with_extension("uf2.json").is_file());

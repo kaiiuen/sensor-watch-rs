@@ -240,7 +240,7 @@ no attempt was made.
 
 The current host validation baseline is 284 passing tests: 109 firmware
 host-seam, 67 core, 94 Studio, and 14 tools. These are host, mock, or simulated
-checks; the ARM build and SWD/UART procedures document ways to exercise real
+checks. The ARM build and SWD/UART procedures document ways to exercise real
 hardware, but no on-silicon validation has been run. Report physical results
 only with the explicit `PASS`, `FAIL`, `NOT AVAILABLE`, or `NOT TESTED` labels
 above.

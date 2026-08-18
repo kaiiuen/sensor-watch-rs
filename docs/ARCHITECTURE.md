@@ -407,9 +407,9 @@ receive-only path for Pro hardware and has not been tested on hardware. RX is
 nonblocking with
 a bounded ring and bounded line/error responses. Mutating commands are always
 fail-closed. With the `shell-auth` feature enabled, they are authorized by
-`movement::shell_auth` only while the physical Alarm/service button is held;
-without that feature they remain locked. The 30-second window expires
-automatically, and a button release revokes it immediately; read-only commands
+`movement::shell_auth` only while the physical Alarm/service button is held.
+Without that feature they remain locked. The 30-second window expires
+automatically, and a button release revokes it immediately. Read-only commands
 remain available.
 
 ### 6.21 `watch/memory.rs` - Memory usage

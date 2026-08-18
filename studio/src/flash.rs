@@ -245,7 +245,7 @@ where
             FlashResult {
             status: FlashStatus::Ambiguous,
             message: format!(
-                "Refusing to flash: {count} Sensor Watch bootloader drives are present; disconnect all but one"
+                "Refusing to flash: {count} Sensor Watch bootloader drives are present. Disconnect all but one"
             ),
             }
         }
@@ -550,7 +550,7 @@ where
                     Err(rollback_error) => FlashResult {
                         status: FlashStatus::Failed,
                         message: format!(
-                            "{}; rollback failed: {}",
+                            "{}. Rollback failed: {}",
                             read_result.message, rollback_error.message
                         ),
                     },
@@ -591,7 +591,7 @@ where
         }
         progress.emit(
             Phase::Complete,
-            "Flash copy succeeded; drive may disconnect next",
+            "Flash copy succeeded. Drive may disconnect next",
             Some(data.len() as u64),
             Some(data.len() as u64),
         );
@@ -602,7 +602,7 @@ where
         Ok(()) => FlashResult {
             status: FlashStatus::HostCopySucceeded,
             message: format!(
-                "Flashed to {dest} (host copy complete; the drive may disconnect next)"
+                "Flashed to {dest} (host copy complete. The drive may disconnect next)"
             ),
         },
         Err(result) => {

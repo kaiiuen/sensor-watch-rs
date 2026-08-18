@@ -522,14 +522,14 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         led: "RGB (red/green/blue)",
         light_sensor: "Onboard IR light sensor",
         thermistor: "Board/revision-dependent",
-        accelerometer: "Accessory/optional; not built in",
+        accelerometer: "Accessory/optional: not built in",
         buzzer: "Piezo",
-        buses: "I2C/SPI available; pin mapping revision-dependent",
-        uart: "Multiplexed; not dedicated",
-        confidence: "High for RGB/IR; medium for buses",
-        source: "Official maintained pin evidence; community IR evidence",
+        buses: "I2C/SPI available: pin mapping revision-dependent",
+        uart: "Multiplexed: not dedicated",
+        confidence: "High for RGB/IR: medium for buses",
+        source: "Official maintained pin evidence: community IR evidence",
         revision_notes: "Do not generalize across commercial revisions",
-        verification: "Core LED/LCD evidence maintained; fitted sensors remain revision-sensitive",
+        verification: "Core LED/LCD evidence maintained. Fitted sensors remain revision-sensitive",
     },
     CapabilityChartRow {
         board: "Red / Lite",
@@ -537,12 +537,12 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         led: "Red + green",
         light_sensor: "No onboard sensor",
         thermistor: "Board/revision-dependent",
-        accelerometer: "Accessory/optional; not built in",
+        accelerometer: "Accessory/optional: not built in",
         buzzer: "Piezo",
         buses: "I2C/SPI not exposed on current Lite pins",
         uart: "Dedicated UART",
-        confidence: "High for current Lite pinout; medium for revisions",
-        source: "Official maintained pin evidence; community board evidence",
+        confidence: "High for current Lite pinout: medium for revisions",
+        source: "Official maintained pin evidence: community board evidence",
         revision_notes: "Statement is limited to the current Lite pinout",
         verification: "No inferred buses or sensors beyond the documented current pins",
     },
@@ -552,14 +552,14 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         led: "Red + blue",
         light_sensor: "Unknown / revision-dependent",
         thermistor: "Board/revision-dependent",
-        accelerometer: "Accessory/optional; not built in",
+        accelerometer: "Accessory/optional: not built in",
         buzzer: "Piezo",
-        buses: "I2C/SPI available; pin mapping revision-dependent",
-        uart: "Multiplexed; not dedicated",
-        confidence: "High for red/blue; low for fitted sensors",
-        source: "Official maintained pin evidence; community LED evidence",
+        buses: "I2C/SPI available: pin mapping revision-dependent",
+        uart: "Multiplexed: not dedicated",
+        confidence: "High for red/blue: low for fitted sensors",
+        source: "Official maintained pin evidence: community LED evidence",
         revision_notes: "Thermistor and accessory population may vary",
-        verification: "LED colors corrected; sensor fit remains unknown",
+        verification: "LED colors corrected. Sensor fit remains unknown",
     },
     CapabilityChartRow {
         board: "Pro",
@@ -567,12 +567,12 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         led: "Red + green",
         light_sensor: "Unknown / revision-dependent",
         thermistor: "Board/revision-dependent",
-        accelerometer: "Accessory/optional; not built in",
+        accelerometer: "Accessory/optional: not built in",
         buzzer: "Timed driver",
-        buses: "I2C/SPI available; OSO BU9796 requires I2C",
-        uart: "Multiplexed; not dedicated",
-        confidence: "High for red/green and OSO requirement; medium overall",
-        source: "Official maintained pin evidence; community OSO/BU9796 evidence",
+        buses: "I2C/SPI available: OSO BU9796 requires I2C",
+        uart: "Multiplexed: not dedicated",
+        confidence: "High for red/green and OSO requirement: medium overall",
+        source: "Official maintained pin evidence: community OSO/BU9796 evidence",
         revision_notes: "Classic/OSO fit and sensors are not identical on every revision",
         verification: "OSO is compatible only with a board exposing the required I2C",
     },
@@ -609,7 +609,7 @@ fn capability_chart_cells(row: &CapabilityChartRow) -> [(&'static str, &'static 
 /// horizontal scroll is intentional: it keeps the evidence column readable
 /// without allowing the chart to widen the Build & Flash panel itself.
 pub fn show_capability_chart(ui: &mut Ui) {
-    ui.label("Capability status is authoritative for Studio review; uncertain hardware is never assumed buildable.");
+    ui.label("Capability status is authoritative for Studio review. Uncertain hardware is never assumed buildable.");
     egui::ScrollArea::horizontal()
         .id_source("board_capability_chart_scroll")
         .auto_shrink([false, true])
@@ -786,7 +786,7 @@ pub fn validate_compatibility(
                 "RGB LED",
                 CompatibilitySeverity::Warning,
                 "RGB LED is not buildable from current evidence: firmware proves only bi-color red/green and ignores blue",
-                "Do not build RGB; confirm a blue channel implementation or select a verified bi-color configuration",
+                "Do not build RGB. Confirm a blue channel implementation or select a verified bi-color configuration",
             )),
             _ => {}
         }
@@ -970,7 +970,7 @@ pub fn show_configurator(
     ui.label("Describe a custom Sensor Watch board or OSO accessory LCD/sensor board.");
     ui.colored_label(
         egui::Color32::from_rgb(220, 160, 80),
-        "UF2 build disabled: this profile is planning data only; it is not a firmware build input.",
+        "UF2 build disabled: this profile is planning data only. It is not a firmware build input.",
     );
     ui.collapsing("Missing Studio-to-firmware input contract", |ui| {
         ui.label("A configured build cannot be published until all of these are supplied:");
@@ -1071,7 +1071,7 @@ pub fn show_configurator(
             let response = if let Some(reason) = reason {
                 ui.add_enabled(
                     false,
-                    egui::Checkbox::new(value, format!("{label} — unavailable: {reason}")),
+                    egui::Checkbox::new(value, format!("{label}: unavailable: {reason}")),
                 )
             } else {
                 ui.checkbox(value, label)
@@ -1082,7 +1082,7 @@ pub fn show_configurator(
         }
     });
     let effective = effective_config(board, &BuildProfile::new("draft", draft.clone()), draft);
-    ui.label("Requested selections are preserved; effective state is fail-closed:");
+    ui.label("Requested selections are preserved. Effective state is fail-closed:");
     ui.monospace(format!("Effective: LCD={}, accelerometer={}, light sensor={}, thermistor={}, buzzer={}, LED={}, RGB LED={}", effective.lcd.label(), effective.accelerometer, effective.light_sensor, effective.thermistor, effective.buzzer, effective.led, effective.rgb_led));
     let (flash, ram) = estimate(&effective);
     let draft_profile = BuildProfile::new("draft", draft.clone());
@@ -1097,7 +1097,7 @@ pub fn show_configurator(
         ui.colored_label(
             color,
             format!(
-                "{:?}: {} — {}",
+                "{:?}: {}: {}",
                 finding.severity, finding.reason, finding.suggested_action
             ),
         );
@@ -1107,14 +1107,14 @@ pub fn show_configurator(
     ));
     let mut warnings = Vec::new();
     if draft.lcd == LcdVariant::OsoAccessory && !(draft.spi || draft.i2c) {
-        warnings.push("OSO accessory LCD usually needs SPI or I2C enabled; verify the registered module interface.");
+        warnings.push("OSO accessory LCD usually needs SPI or I2C enabled. Verify the registered module interface.");
     }
     if draft.light_sensor && draft.lcd == LcdVariant::OsoAccessory {
         warnings
             .push("Confirm the OSO accessory light-sensor address and power budget before use.");
     }
     if draft.thermistor && draft.i2c {
-        warnings.push("Thermistor is commonly analog; enabling I2C does not provide an automatic analog pin mapping.");
+        warnings.push("Thermistor is commonly analog. Enabling I2C does not provide an automatic analog pin mapping.");
     }
     for warning in warnings {
         ui.colored_label(
@@ -1122,6 +1122,6 @@ pub fn show_configurator(
             format!("Warning: {warning}"),
         );
     }
-    ui.weak("Profile edits remain available for planning and review. Studio does not infer pins, buses, addresses, power sequencing, or firmware modules from these choices; the build preflight therefore refuses to generate a configured UF2.");
+    ui.weak("Profile edits remain available for planning and review. Studio does not infer pins, buses, addresses, power sequencing, or firmware modules from these choices. The build preflight therefore refuses to generate a configured UF2.");
     (changed, profile_selection)
 }

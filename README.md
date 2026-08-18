@@ -148,7 +148,7 @@ cargo build -p sensor-watch --release --target thumbv6m-none-eabi
 ```
 
 The release image must fit the `0x3A000`-byte firmware flash region shown in the
-memory map above; CI enforces this budget before producing artifacts.
+memory map above. CI enforces this budget before producing artifacts.
 
 For optional SWD/RTT structured logging, opt in explicitly:
 
@@ -175,8 +175,8 @@ cargo run -p sensor-watch-studio -- build  # rejects configured builds for now
 cargo run -p sensor-watch-studio -- help
 ```
 
-The `sensor-watch-tools` command above produces the stock firmware UF2; it does
-not apply Studio selections. To build a deterministic, offline Studio folder package, run this from the repository root. The command first builds the release `sensor-watch-launcher` and Studio artifacts through the workspace; a launcher build failure or missing artifact stops packaging:
+The `sensor-watch-tools` command above produces the stock firmware UF2. It does
+not apply Studio selections. To build a deterministic, offline Studio folder package, run this from the repository root. The command first builds the release `sensor-watch-launcher` and Studio artifacts through the workspace. A launcher build failure or missing artifact stops packaging:
 
 ```
 cargo run -p sensor-watch-tools -- package-studio
@@ -186,7 +186,7 @@ cargo run -p sensor-watch-tools -- package-studio --output target/releases/senso
 cargo run -p sensor-watch-tools -- package-studio --launcher path/to/sensor-watch-studio-launcher.exe
 ```
 
-The default output is `target/studio-package/sensor-watch-studio-<Studio version>.zip`;
+The default output is `target/studio-package/sensor-watch-studio-<Studio version>.zip`.
 `--output` replaces an existing `.zip` only after the new ZIP has been completely
 written. The archive has one versioned root folder,
 contains the launcher plus the versioned Studio executable under the A/B layout,
@@ -195,7 +195,7 @@ contains the launcher plus the versioned Studio executable under the A/B layout,
 and startup/update pointer contracts. The SHA-256 entries are integrity digests,
 not release keys or authenticity proof. A published release needs a private
 signing key and a separately trusted public verification key (for example,
-Ed25519); the private key must never be committed or packaged. A mutable GitHub
+Ed25519). The private key must never be committed or packaged. A mutable GitHub
 branch/checksum alone cannot establish provenance because an attacker can change
 both the artifact and its checksum. Firmware tools/cross targets are reported as
 unavailable rather than implied. User settings, secrets, `target/`, and `.git/`
@@ -273,7 +273,7 @@ validation.
       the protocol framing and validation core. It has not been tested on hardware.
 - [x] 108 real firmware faces are wired into the Studio host seam, which is
       enabled by default by Studio's `real-faces` feature. The remaining 3
-      firmware faces use the `face_sim` fallback; this is host coverage, not
+      firmware faces use the `face_sim` fallback. This is host coverage, not
       hardware coverage.
 - [ ] Firmware component profiles for board-wide hardware presets. Studio has
       persisted profile/configuration UI and planning estimates, but profiles do
@@ -285,7 +285,7 @@ validation.
 
 - The latest validated workspace run passes 121 firmware host-seam tests, 69
   core tests, 145 Studio tests, and 30 tools tests, for 365 passing tests total.
-- `sensor-watch-tools -- build` produces a stock firmware UF2; Studio's
+- `sensor-watch-tools -- build` produces a stock firmware UF2. Studio's
   configured Build & Flash path remains fail-closed until its selections become
   firmware build inputs.
 - Host tests, simulated diagnostics, and the ARM build do not validate physical

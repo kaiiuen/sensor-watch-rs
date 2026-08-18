@@ -63,7 +63,7 @@ impl FileBrowser {
                 self.root.clear();
                 self.current_dir.clear();
                 self.entries.clear();
-                self.message = "Mutable project unavailable; bundled firmware is read-only".into();
+                self.message = "Mutable project unavailable: bundled firmware is read-only".into();
                 return;
             }
         };
@@ -188,7 +188,7 @@ impl FileBrowser {
             self.preview.clear();
             self.preview_allowed = false;
             self.message = if metadata.is_dir() {
-                "Directory selected; open it to browse its contents.".to_string()
+                "Directory selected. Open it to browse its contents.".to_string()
             } else {
                 "Content preview is disabled for credentials, secrets, and binary files."
                     .to_string()

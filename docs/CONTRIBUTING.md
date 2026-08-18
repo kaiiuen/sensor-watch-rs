@@ -31,7 +31,7 @@ cargo build --release --target thumbv6m-none-eabi -p sensor-watch
 ```
 
 The output ELF is at `target/thumbv6m-none-eabi/release/sensor-watch`. The
-release image must fit the `0x3A000`-byte firmware flash region; CI enforces
+release image must fit the `0x3A000`-byte firmware flash region. CI enforces
 this budget before producing artifacts.
 
 ## Testing
@@ -56,7 +56,7 @@ The current host suites pass 109 firmware host-seam tests, 67 core tests, 94
 Studio tests, and 14 tools tests, for 284 tests total. The core suite covers date
 math, settings bit-packing, DateTime pack/unpack, UF2 encoding, event logging,
 transfer validation, optical protocol validation, and other pure logic.
-Passing host tests provide confidence in software and mock seams; they do not
+Passing host tests provide confidence in software and mock seams. They do not
 validate physical hardware or count as on-silicon validation.
 
 ## Building a UF2
@@ -73,7 +73,7 @@ host tool builds the stock release firmware, extracts the raw binary with
 recovery manifest. It does not apply Studio profile selections. `build.sh`
 remains a compatibility launcher. The same host-side UF2 verification,
 recovery-staging, and probe-flash operations are available through
-`cargo run -p sensor-watch-studio -- help`; Studio's configured `build` command
+`cargo run -p sensor-watch-studio -- help`. Studio's configured `build` command
 is fail-closed until preset, board, and component selections become firmware
 build inputs.
 
@@ -94,7 +94,7 @@ The firmware clippy job is informational because the full C-reference HAL API
 and many ported faces carry intentional dead-code and pedantic style lints. The
 `core` clippy job is the strict gate (`-D warnings`). The firmware host-seam,
 Studio, and tools host test commands are separate from physical hardware
-validation; simulated diagnostics and a successful ARM build
+validation. Simulated diagnostics and a successful ARM build
 have the same boundary. No on-silicon validation is implied by these checks.
 
 ## Formatting
@@ -112,12 +112,12 @@ A GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every push:
 - Firmware host-seam tests (`hostmock` + `std`)
 - Core and tooling host tests
 - Format check
-- Cargo audit vulnerability gate (blocking for audit failures; warnings remain
+- Cargo audit vulnerability gate (blocking for audit failures, warnings remain
   visible and nonblocking)
 
 The cargo-audit CI job is a blocking vulnerability gate. Its current
 `cargo audit --no-fetch` status includes known unmaintained-crate warnings but
-no vulnerability failures; warnings remain visible and nonblocking under the
+no vulnerability failures. Warnings remain visible and nonblocking under the
 existing warning policy. Local audit results may differ when the advisory
  database or network is unavailable.
 

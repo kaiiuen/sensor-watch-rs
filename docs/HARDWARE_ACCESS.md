@@ -108,10 +108,10 @@ Commands use strict ASCII forms: `settime` requires exactly 12 decimal digits,
 and drift values must be signed decimal values in the hardware range. Mutating
 commands are locked by default in every firmware build. The `shell-auth`
 feature must be enabled for the physical Alarm/service-button hook to unlock
-mutations; when enabled, they unlock only while that button is held, for at
+mutations. When enabled, they unlock only while that button is held, for at
 most 30 seconds, and revoke immediately on release. Without `shell-auth`,
 mutations remain locked even when the button is pressed. A UART connection
-alone never unlocks mutations; reads remain available at all times.
+alone never unlocks mutations. Reads remain available at all times.
 
 This is how clock setting and drift correction can be driven from a PC, for
 example by the companion app during calibration. Studio's **Shell Access**

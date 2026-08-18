@@ -19,7 +19,7 @@ pub const ENTRIES: &[Entry] = &[
         area: "Firmware",
         meaning: "WatchdogReset: the hardware watchdog reset the watch.",
         likely_cause: "A hang or code path did not service the watchdog in time.",
-        safe_action: "Record the reset and recent changes; reproduce in the simulator first. On physical hardware, inspect logs before reflashing.",
+        safe_action: "Record the reset and recent changes. Reproduce in the simulator first. On physical hardware, inspect logs before reflashing.",
         do_not_do: "Do not repeatedly power-cycle a watch that is hot or has a low battery.",
     },
     Entry {
@@ -35,7 +35,7 @@ pub const ENTRIES: &[Entry] = &[
         area: "Firmware",
         meaning: "WakeTooLong: wake-event processing exceeded its time budget.",
         likely_cause: "A slow face, peripheral operation, or unexpected work ran during wake handling.",
-        safe_action: "Reduce work in the wake path and test the change in the simulator; inspect the physical watch only after it is stable.",
+        safe_action: "Reduce work in the wake path and test the change in the simulator. Inspect the physical watch only after it is stable.",
         do_not_do: "Do not disable the watchdog or hold buttons while the watch is unresponsive.",
     },
     Entry {
@@ -43,7 +43,7 @@ pub const ENTRIES: &[Entry] = &[
         area: "Firmware",
         meaning: "InvalidState: an invalid event or state was encountered.",
         likely_cause: "Unexpected input, corrupted state, or a firmware logic bug.",
-        safe_action: "Save the log and reproduction steps; reset only when the device is cool and adequately powered.",
+        safe_action: "Save the log and reproduction steps. Reset only when the device is cool and adequately powered.",
         do_not_do: "Do not clear fault storage before recording the code and count.",
     },
     Entry {
@@ -59,7 +59,7 @@ pub const ENTRIES: &[Entry] = &[
         area: "Firmware",
         meaning: "RtcLostTime: the RTC heartbeat stopped advancing or time was lost.",
         likely_cause: "RTC reset, oscillator issue, or a stalled clock path.",
-        safe_action: "Set time again after checking power; compare against NTP in Studio. Physical clock hardware needs inspection if it recurs.",
+        safe_action: "Set time again after checking power. Compare against NTP in Studio. Physical clock hardware needs inspection if it recurs.",
         do_not_do: "Do not claim NTP fixed the oscillator or rely on stale time for safety decisions.",
     },
     Entry {
@@ -74,7 +74,7 @@ pub const ENTRIES: &[Entry] = &[
         code: "FAULT-8",
         area: "Firmware",
         meaning: "ClockFailure: the 32 kHz crystal failed and the RTC fell back.",
-        likely_cause: "Crystal or clock circuit failure; the internal oscillator is less accurate.",
+        likely_cause: "Crystal or clock circuit failure. The internal oscillator is less accurate.",
         safe_action: "Treat displayed time as approximate, sync time if possible, and seek physical hardware inspection if persistent.",
         do_not_do: "Do not calibrate around a suspected failed crystal as if it were normal drift.",
     },
@@ -83,7 +83,7 @@ pub const ENTRIES: &[Entry] = &[
         area: "Reset",
         meaning: "PowerOn reset reason.",
         likely_cause: "Normal power application or a complete power loss.",
-        safe_action: "No action is required unless it is unexpected; compare with battery and power history.",
+        safe_action: "No action is required unless it is unexpected. Compare with battery and power history.",
         do_not_do: "Do not infer a software crash from POR alone.",
     },
     Entry {
@@ -123,7 +123,7 @@ pub const ENTRIES: &[Entry] = &[
         area: "NTP",
         meaning: "NTP host name could not be resolved.",
         likely_cause: "No DNS, offline network, invalid host, or blocked resolver.",
-        safe_action: "Check the host name and network; try a known configured server. Studio networking is host-side.",
+        safe_action: "Check the host name and network. Try a known configured server. Studio networking is host-side.",
         do_not_do: "Do not change watch time based on an unverified server.",
     },
     Entry {
@@ -219,7 +219,7 @@ pub const ENTRIES: &[Entry] = &[
         area: "Settings",
         meaning: "Studio settings could not be saved.",
         likely_cause: "Permission, full disk, or interrupted file replacement.",
-        safe_action: "Check the path and free space; export settings before retrying.",
+        safe_action: "Check the path and free space. Export settings before retrying.",
         do_not_do: "Do not assume a setting persisted just because the UI changed.",
     },
     Entry {

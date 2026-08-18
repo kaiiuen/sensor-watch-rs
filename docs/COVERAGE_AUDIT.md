@@ -23,14 +23,14 @@ The latest validated standard workspace test run reported:
 | `sensor-watch` host seam (`hostmock,std`) | 121 | Real firmware-face and host HAL seam behavior |
 | `sensor-watch-core` | 69 | Pure date/time, settings, UF2, ECC, transfer, optical, and safety logic |
 | `sensor-watch-studio` default features | 145 | Studio default path, including the default `real-faces` bridge |
-| `sensor-watch-studio` `--no-default-features` | 121 | Covered fallback/simulator path; passing |
+| `sensor-watch-studio` `--no-default-features` | 121 | Covered fallback/simulator path. Passing |
 | `sensor-watch-tools` | 30 | Tools library and CLI behavior |
 | `sensor-watch` (`usb-cdc` only) | 1 | USB CDC descriptor-contract coverage |
 | `sensor-watch` (`hostmock,std,optical,shell-auth,usb-cdc`) | 122 | Combined firmware host-contract coverage |
 | **Workspace aggregate** | **365** | Host/software coverage only |
 
 The separate command-scoped firmware totals are 1 test for `usb-cdc` only
-and 122 tests for `hostmock,std,optical,shell-auth,usb-cdc`; these are not
+and 122 tests for `hostmock,std,optical,shell-auth,usb-cdc`. These are not
 additional tests to add to the 365-test workspace aggregate.
 
 No command in this audit validates real watch silicon, USB enumeration, UART
@@ -72,7 +72,7 @@ metadata-only and does not validate controller transfers, enumeration,
 suspend/resume, or power behavior, consistent with `docs/USB_CDC.md`.
 
 ARM compile coverage for `defmt-log` is kept as a separate ARM check. The
-feature is explicitly ARM-only; host use is rejected by a compile error. This
+feature is explicitly ARM-only. Host use is rejected by a compile error. This
 ARM check still does not validate SWD/RTT probe behavior.
 
 ### 3. Claimed behaviors with no host substitute
@@ -80,12 +80,12 @@ ARM check still does not validate SWD/RTT probe behavior.
 The following status claims remain software-only or unexecuted, rather than
 being covered by the passing test counts:
 
-- real silicon boot, button/LCD/LED/buzzer/accelerometer/I2C behavior;
-- current draw, RTC drift, brown-out, watchdog reset, and clock-failure recovery;
-- USB CDC device enumeration and endpoint transfers;
-- UART jig wiring and SWD/RTT probe behavior;
+- real silicon boot, button/LCD/LED/buzzer/accelerometer/I2C behavior.
+- current draw, RTC drift, brown-out, watchdog reset, and clock-failure recovery.
+- USB CDC device enumeration and endpoint transfers.
+- UART jig wiring and SWD/RTT probe behavior.
 - Studio configured UF2 generation with user selections. The path is correctly
-  fail-closed until selections become firmware build inputs;
+  fail-closed until selections become firmware build inputs.
 - experimental receive-only optical support for Pro hardware. The protocol
   framing and authentication logic are host-testable, but the optical path has
   not been tested on hardware.
@@ -95,7 +95,7 @@ being covered by the passing test counts:
 - The README baseline of `106 + 67 + 90 + 16 = 279` and the later audit
   snapshot of `109 + 67 + 94 + 14 = 284` are historical totals, not the current
   validation contract. The latest standard workspace run is `121 + 69 + 145 +
-  30 = 365`; the separate Studio no-default-features run reports 121 tests.
+  30 = 365`. The separate Studio no-default-features run reports 121 tests.
   The command-scoped firmware runs report 1 test for `usb-cdc` only and 122
   tests for `hostmock,std,optical,shell-auth,usb-cdc`.
 - The current Studio mapping uses 108 real firmware faces and 3 `face_sim`

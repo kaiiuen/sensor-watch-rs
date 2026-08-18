@@ -1282,14 +1282,14 @@ impl eframe::App for StudioApp {
                                             inspection.path.display()
                                         ));
                                         self.push_terminal(
-                                            "Artifact verified locally; explicit approval required",
+                                            "Artifact verified locally. Explicit approval required",
                                         );
                                     }
                                 }
                                 (Some(_), Ok(_)) | (None, Ok(_)) => {
                                     self.pending_artifact = None;
                                     self.pending_artifact_fingerprint = None;
-                                    self.status = "Build configuration changed; artifact discarded"
+                                    self.status = "Build configuration changed. Artifact discarded"
                                         .to_string();
                                     self.build_message = self.status.clone();
                                 }
@@ -1718,7 +1718,7 @@ impl eframe::App for StudioApp {
                 .resizable(false)
                 .show(ctx, |ui| {
                     ui.label("Advanced controls can affect firmware configuration and hardware.");
-                    ui.label("Simulated actions remain simulated; this mode does not make hardware claims.");
+                    ui.label("Simulated actions remain simulated. This mode does not make hardware claims.");
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if ui.button("Enable Advanced mode").clicked() {
@@ -1754,7 +1754,7 @@ impl eframe::App for StudioApp {
                             self.first_run = false;
                             self.block_editor.set_blocks_mode(true);
                             self.open_tutorial(HelpId::Startup, false);
-                            self.status = "Beginner tour started — Normal mode is the safe default"
+                            self.status = "Beginner tour started: Normal mode is the safe default"
                                 .to_string();
                             self.save_settings_internal();
                         }
@@ -1762,7 +1762,7 @@ impl eframe::App for StudioApp {
                             self.first_run = false;
                             self.tour_claims.claim_startup_sequence();
                             self.status =
-                                "Startup tour skipped; reopen any tour with ? Help".to_string();
+                                "Startup tour skipped. Reopen any tour with ? Help".to_string();
                             self.save_settings_internal();
                         }
                         if ui.button("Pause").clicked() {
@@ -1787,7 +1787,7 @@ impl eframe::App for StudioApp {
                                 self.first_run = false;
                                 self.tour_claims.claim_startup_sequence();
                                 self.status =
-                                    "Startup tour skipped; reopen any tour with ? Help".to_string();
+                                    "Startup tour skipped. Reopen any tour with ? Help".to_string();
                                 self.save_settings_internal();
                             }
                         });
@@ -1859,7 +1859,7 @@ impl eframe::App for StudioApp {
                                     Ok(()) => {
                                         self.status = format!("Deleted face {name}");
                                         self.log.log(format!(
-                                            "Deleted face {name}; removed {removed} preset entries"
+                                            "Deleted face {name}. Removed {removed} preset entries"
                                         ));
                                     }
                                     Err(error) => {
@@ -1915,7 +1915,7 @@ impl eframe::App for StudioApp {
                             self.probe_progress = Some(probe::ProbeProgress {
                                 completed: 0,
                                 total: probe::COMMAND_COUNT,
-                                message: "Starting physical probe; drive count pending".into(),
+                                message: "Starting physical probe. Drive count pending".into(),
                             });
                             self.probe_progress_rx = Some(progress_rx);
                             self.pending_probe = Some(handle);
@@ -2025,7 +2025,7 @@ impl StudioApp {
                 ui.heading(&pending.title);
                 ui.label("The requested configuration is preserved. Choose how the effective configuration should proceed:");
                 for finding in &pending.issues {
-                    ui.colored_label(egui::Color32::RED, format!("{}: {} — {}", finding.component, finding.reason, finding.suggested_action));
+                    ui.colored_label(egui::Color32::RED, format!("{}: {}: {}", finding.component, finding.reason, finding.suggested_action));
                 }
                 ui.add_space(8.0);
                 ui.horizontal(|ui| {
@@ -2164,10 +2164,10 @@ impl StudioApp {
             panel_for_help_id(help::route(id, self.help_step).panel).unwrap_or(self.current_panel);
         if !self.help_owns_input() || self.current_panel != target_panel {
             let label = if self.help_minimized {
-                format!("Tour paused — {}", help::tutorial(id).title)
+                format!("Tour paused: {}", help::tutorial(id).title)
             } else {
                 format!(
-                    "Tour paused — return to {}",
+                    "Tour paused: return to {}",
                     target_panel.label(self.language)
                 )
             };

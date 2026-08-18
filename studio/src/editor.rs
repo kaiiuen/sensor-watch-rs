@@ -70,7 +70,7 @@ pub fn validate_face_name(name: &str) -> Result<(), String> {
         || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
         || name.starts_with(|c: char| c.is_ascii_digit())
     {
-        return Err(format!("invalid face name {name:?}; use ASCII snake_case"));
+        return Err(format!("invalid face name {name:?}: use ASCII snake_case"));
     }
     Ok(())
 }
@@ -85,7 +85,7 @@ fn project_dir() -> Result<std::path::PathBuf, String> {
             return Ok(path);
         }
     }
-    Err("mutable project is unavailable; bundled firmware is read-only".into())
+    Err("mutable project is unavailable: bundled firmware is read-only".into())
 }
 
 /// Returns a validated face path under the active mutable project's movement directory.

@@ -396,7 +396,7 @@ impl TutorialStep {
         if self.anchor(tutorial, index).is_some() {
             "Try the highlighted control, or continue manually."
         } else {
-            "Read this guidance; no action is required."
+            "Read this guidance. No action is required."
         }
     }
 }
@@ -564,13 +564,13 @@ const TUTORIALS: &[Tutorial] = &[
         stable_key: "startup",
         title: "Start here: the beginner journey",
         steps: steps!
-        ("Welcome and choose a mode" => "Normal mode is the safe beginner starting point. Advanced mode exists for diagnostics and deliberate hardware work; enabling it does not validate hardware. Start with the guided path and keep physical actions off until you understand the safeguards.",
+        ("Welcome and choose a mode" => "Normal mode is the safe beginner starting point. Advanced mode exists for diagnostics and deliberate hardware work. Enabling it does not validate hardware. Start with the guided path and keep physical actions off until you understand the safeguards.",
          "Dashboard: know the target" => "Dashboard is the project checkpoint. Confirm the target board, selected project, and warnings before changing anything. These values are planning/status information, not hardware validation.",
-         "Watch Faces: use the stock preset" => "Open Watch Faces and keep the stock/default preset as a known-good starting point. Select a face and review the preset before editing; this changes local project state only.",
+         "Watch Faces: use the stock preset" => "Open Watch Faces and keep the stock/default preset as a known-good starting point. Select a face and review the preset before editing. This changes local project state only.",
          "Editor: Blocks workflow" => "In Editor, stay in Blocks mode: name the face, arrange starter blocks, generate source, then explicitly Load into Rust editor before saving. Generated code still needs review and may not compile.",
-         "LCD, target board, and profile" => "Review LCD/component settings, target board revision, and the active profile in Build & Flash. Compatibility conflicts require an explicit choice; a profile is planning data and is never proof of electrical or firmware compatibility.",
+         "LCD, target board, and profile" => "Review LCD/component settings, target board revision, and the active profile in Build & Flash. Compatibility conflicts require an explicit choice. A profile is planning data and is never proof of electrical or firmware compatibility.",
          "Simulator: try the result" => "Select the face in Simulator, set a recognizable date/time, and use simulated buttons. Simulation is host-side and cannot validate the physical LCD, sensors, power, timing, or watch hardware.",
-         "Build & Flash: limitations and existing artifacts" => "Configured builds remain fail-closed while the Studio-to-firmware input contract is incomplete. No configured UF2 is generated. If you already have a UF2, enter its path, inspect its required sidecars, and approve only that exact artifact; local verification is not hardware validation.",
+         "Build & Flash: limitations and existing artifacts" => "Configured builds remain fail-closed while the Studio-to-firmware input contract is incomplete. No configured UF2 is generated. If you already have a UF2, enter its path, inspect its required sidecars, and approve only that exact artifact. Local verification is not hardware validation.",
          "Safe next steps" => "Save a backup, read Diagnostics when status is unclear, and make one small host-side change at a time. Only later consider UART, bootloader, or probe actions after checking the target, wiring, voltage, and physical safeguards."),
     },
     Tutorial {
@@ -580,7 +580,7 @@ const TUTORIALS: &[Tutorial] = &[
         steps: steps!
         ("Why Advanced exists" => "Advanced mode exposes diagnostics, shell, UART, and probe tools for deliberate development work. It is not required for the beginner workflow and it does not make simulated results or documentation into hardware validation.",
          "Simulated, UART, UF2, and SWD are different" => "Simulated commands run on the host. UART is a serial command path to a connected watch. UF2 is a file-copy path through the bootloader drive. SWD/probe is a separate debug/programming boundary. Never treat one transport's success as proof of another.",
-         "Read-only before mutating shell" => "Use status/help/read-only shell commands first and inspect the response. Mutating commands can change watch state; verify the exact target and command before sending, and do not paste unknown input.",
+         "Read-only before mutating shell" => "Use status/help/read-only shell commands first and inspect the response. Mutating commands can change watch state. Verify the exact target and command before sending, and do not paste unknown input.",
          "3.3V UART safety" => "UART requires the documented wiring, ground, baud, and 3.3V logic levels. Do not connect an incompatible voltage or assume USB drive detection is UART. If wiring or target identity is uncertain, stop.",
          "Physical actions need a deliberate gate" => "Probe and flash actions can affect hardware. Confirm the exact board, cable, port, and intended artifact, then use the explicit confirmation/report path. A canceled or unavailable probe is safer than guessing.",
          "Diagnostics status meanings" => "Diagnostics describe host-side checks and transport observations: pass means that check returned its expected result, warning means review a limitation or input, and error means the check did not establish the expected state. None is a certification.",
@@ -603,17 +603,17 @@ const TUTORIALS: &[Tutorial] = &[
         steps: steps!
         ("Catalog and preset" => "Use the catalog search/category controls to find faces, then use the preset area to choose the faces used by the project. Inspect descriptions before changing the active preset.",
          "Beginner workflow" => "1. Search or refresh the catalog. 2. Add one simple face to the active preset. 3. Open Simulator and select it. Expected result: the selected face appears in the simulated watch without changing firmware or hardware.",
-         "Safety and limits" => "Import, restore, and delete actions can replace or remove local data; review confirmation dialogs and keep backups. Catalog metadata and the simulator are host-side only; a face has not been validated on hardware until separately tested."),
+         "Safety and limits" => "Import, restore, and delete actions can replace or remove local data. Review confirmation dialogs and keep backups. Catalog metadata and the simulator are host-side only. A face has not been validated on hardware until separately tested."),
     },
     Tutorial {
         id: HelpId::Editor,
         stable_key: "editor",
         title: "Editor tutorial",
         steps: steps!
-        ("What you can edit" => "The Editor provides the face name, description, templates, source editor, and beginner Blocks mode. Generate source when you are ready to inspect it; the generated Rust appears in the source editor.",
+        ("What you can edit" => "The Editor provides the face name, description, templates, source editor, and beginner Blocks mode. Generate source when you are ready to inspect it. The generated Rust appears in the source editor.",
          "Name the face" => "Give the face a snake_case name. Blocks mode is the beginner starting point and does not require choosing a Rust template.",
          "Generate and load" => "Arrange starter blocks, generate Rust/source, then explicitly choose Load into Rust editor. This is the mode transition where the generated source becomes editable Rust.",
-         "Save in Rust mode" => "Review the generated source and click Save face. Then select the saved face in Watch Faces and run Simulator. Saving changes local project data; it does not flash a watch.",
+         "Save in Rust mode" => "Review the generated source and click Save face. Then select the saved face in Watch Faces and run Simulator. Saving changes local project data. It does not flash a watch.",
          "Safety and limits" => "Generated code may still need review and may not compile. The simulator is an approximation and does not prove timing, power, display, or sensor behavior on hardware."),
     },
     Tutorial {
@@ -661,7 +661,7 @@ const TUTORIALS: &[Tutorial] = &[
         steps: steps!
         ("Purpose and controls" => "Modules lists custom hardware modules and their target, name, description, and removal controls. These values become part of configuration review.",
          "Beginner workflow" => "1. Add or select a module. 2. Fill in its identity and target. 3. Review the component/build configuration. 4. Save settings before building. Expected result: the module is visible in the selected configuration.",
-         "Safety and limits" => "Remove is destructive to local configuration and requires confirmation. A declared module is not detected or electrically tested by Studio; unsupported hardware must not be treated as validated."),
+         "Safety and limits" => "Remove is destructive to local configuration and requires confirmation. A declared module is not detected or electrically tested by Studio. Unsupported hardware must not be treated as validated."),
     },
     Tutorial {
         id: HelpId::ShellAccess,
@@ -670,7 +670,7 @@ const TUTORIALS: &[Tutorial] = &[
         steps: steps!
         ("Purpose and controls" => "Shell Access exposes advanced command input, activity logs, terminal history, filtering, Clear, Copy all, and Export. It is for inspection and controlled development work.",
          "Beginner workflow" => "1. Read the warning and current transport mode. 2. Start with a read-only/status command. 3. Check the response in the log. 4. Export useful output for troubleshooting. Expected result: you can inspect a session without changing the watch.",
-         "Safety and limits" => "Advanced commands can change configuration or hardware state; verify every command and never paste unknown input. Simulated transport is not UART and does not validate a physical watch. Logs can contain sensitive local details."),
+         "Safety and limits" => "Advanced commands can change configuration or hardware state. Verify every command and never paste unknown input. Simulated transport is not UART and does not validate a physical watch. Logs can contain sensitive local details."),
     },
     Tutorial {
         id: HelpId::Diagnostics,
@@ -679,7 +679,7 @@ const TUTORIALS: &[Tutorial] = &[
         steps: steps!
         ("Purpose and controls" => "Diagnostics groups offline checks, protocol/status information, filters, and result output. Use it to understand Studio state before escalating a problem.",
          "Beginner workflow" => "1. Run the least invasive check first. 2. Read each result and its limitations. 3. Repeat after correcting the named input. 4. Open Bugs or Debug Output when evidence is needed. Expected result: a reproducible host-side diagnosis.",
-         "Safety and limits" => "Diagnostics are not a hardware certification. Physical transport requires the appropriate connection and may be unavailable. Prefer read-only checks; destructive or write operations need deliberate confirmation."),
+         "Safety and limits" => "Diagnostics are not a hardware certification. Physical transport requires the appropriate connection and may be unavailable. Prefer read-only checks. Destructive or write operations need deliberate confirmation."),
     },
     Tutorial {
         id: HelpId::DebugOutput,
@@ -704,18 +704,18 @@ const TUTORIALS: &[Tutorial] = &[
         stable_key: "file-browser",
         title: "File Browser tutorial",
         steps: steps!
-        ("Purpose and controls" => "File Browser is a read-only view of workspace files, paths, and metadata. Refresh updates the host-side view; it does not scan the watch.",
+        ("Purpose and controls" => "File Browser is a read-only view of workspace files, paths, and metadata. Refresh updates the host-side view. It does not scan the watch.",
          "Beginner workflow" => "1. Refresh the listing. 2. Select a relevant source or artifact. 3. Inspect its path and metadata. 4. Use Build & Flash for explicit artifact inspection and approval. Expected result: you know which local file you are reviewing.",
-         "Safety and limits" => "This panel does not edit or flash files. Import/restore/delete actions elsewhere can be destructive; confirm them and keep backups. File presence does not mean the artifact is valid or hardware-tested."),
+         "Safety and limits" => "This panel does not edit or flash files. Import/restore/delete actions elsewhere can be destructive. Confirm them and keep backups. File presence does not mean the artifact is valid or hardware-tested."),
     },
     Tutorial {
         id: HelpId::Tutorials,
         stable_key: "tutorials",
         title: "Tutorials tutorial",
         steps: steps!
-        ("Choose a path" => "Tutorials is the directory of beginner walkthroughs. Choose the page that matches your goal; the same contextual help is also available from each panel's ? Help button.",
+        ("Choose a path" => "Tutorials is the directory of beginner walkthroughs. Choose the page that matches your goal. The same contextual help is also available from each panel's ? Help button.",
          "Beginner workflow" => "1. Start with Dashboard. 2. Continue to Watch Faces, Editor, and Simulator. 3. Read Build & Flash before any artifact action. 4. Use Diagnostics and Bugs when something differs from the expected result.",
-         "Safety and limits" => "These tutorials explain the current Studio behavior, including known limitations. They do not replace board-specific electrical, USB, UART, or firmware documentation; hardware has not been validated by this UI."),
+         "Safety and limits" => "These tutorials explain the current Studio behavior, including known limitations. They do not replace board-specific electrical, USB, UART, or firmware documentation. Hardware has not been validated by this UI."),
     },
     Tutorial {
         id: HelpId::Wiki,
@@ -733,7 +733,7 @@ const TUTORIALS: &[Tutorial] = &[
         steps: steps!
         ("Purpose and controls" => "Settings controls language, theme, text size, tab layout, firmware project/output paths, board/configuration, and Import/Restore/Delete operations where available.",
          "Beginner workflow" => "1. Change one setting. 2. Review the visible result. 3. Save or export a backup before importing another configuration. 4. Restart only when a setting says it is needed. Expected result: the selected Studio configuration is clear and recoverable.",
-         "Safety and limits" => "Import/Restore/Delete can replace or remove local settings; confirm and keep a backup. Settings do not prove a firmware build is valid, do not bypass fail-closed gates, and do not validate connected hardware."),
+         "Safety and limits" => "Import/Restore/Delete can replace or remove local settings. Confirm and keep a backup. Settings do not prove a firmware build is valid, do not bypass fail-closed gates, and do not validate connected hardware."),
     },
     Tutorial {
         id: HelpId::ProbeTest,
@@ -742,7 +742,7 @@ const TUTORIALS: &[Tutorial] = &[
         steps: steps!
         ("Purpose and controls" => "Probe / Test contains transport selection, port detection, UART Connect/Send, probe progress, and report output. It is an advanced hardware boundary.",
          "Beginner workflow" => "1. Connect the documented UART jig. 2. Refresh detection and choose the expected port. 3. Click UART Connect and verify the status. 4. Send only a known-safe test command and read the report. Expected result: a UART response is captured or a clear connection error is shown.",
-         "Safety and limits" => "Probe requires UART; USB drive detection is not UART. Check wiring, voltage, port, and baud settings before sending. Probe results are not full hardware validation, and Studio makes no claim that an untested board works."),
+         "Safety and limits" => "Probe requires UART. USB drive detection is not UART. Check wiring, voltage, port, and baud settings before sending. Probe results are not full hardware validation, and Studio makes no claim that an untested board works."),
     },
 ];
 

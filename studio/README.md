@@ -2,8 +2,8 @@
 
 A **GUI companion app** for the Sensor-Watch firmware. This is the end-goal
 product: an editor, debugger, simulator, and assembler. The Studio UI currently
-refuses its UF2 build because its configuration input contract is incomplete;
-this prevents a stock artifact from being misrepresented as configured firmware.
+refuses its UF2 build because its configuration input contract is incomplete.
+This prevents a stock artifact from being misrepresented as configured firmware.
 
 Built with **egui/eframe** (pure Rust, cross-platform GUI).
 
@@ -42,7 +42,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   and the engine's actual loaded face for catching face-switching bugs. These
   diagnostics are simulated unless a UART jig is connected. With Studio's
   default `real-faces` feature, 108 of the 111 registered firmware faces run
-  through the real host seam; the remaining 3 use `face_sim`. Host seam
+  through the real host seam. The remaining 3 use `face_sim`. Host seam
   coverage does not constitute physical hardware testing.
 - **Build & Flash** - combined panel: review the target board and component
   profile, then request a firmware build. The build preflight is explicitly
@@ -86,13 +86,13 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Settings** - language (English, Simplified Chinese, Traditional Chinese), theme, text size
   (small/normal/big), configurable **log line limit**, app resource usage
   (app-only, adjustable update rate), settings save/export/import, source
-  export, integrity (SHA-256 digest/checksum checks only; not authenticity), community credits
+  export, integrity (SHA-256 digest/checksum checks only, not authenticity), community credits
   (see [`docs/CREDITS.md`](../docs/CREDITS.md)), code statistics, and license.
 
 ## Studio build input contract
 
 A safe profile-to-build path is not available yet. The current profile contains
-only an LCD variant and component booleans; those values cannot identify a valid
+only an LCD variant and component booleans. Those values cannot identify a valid
 firmware configuration or concrete hardware wiring. Before the fail-closed gate
 can be removed, Studio and firmware must agree on all of the following inputs:
 
@@ -192,7 +192,7 @@ cargo run -p sensor-watch-studio -- flash [ELF]
 ```
 
 These commands operate on the host. The stock `sensor-watch-tools -- build`
-path remains the command for producing an unconfigured firmware UF2; Studio does
+path remains the command for producing an unconfigured firmware UF2. Studio does
 not apply its selections to that artifact. `flash` requires a
 probe-rs-compatible SWD probe, the CLI does not add USB CDC, modify the UF2
 bootloader, or provide device-side rollback. With no command, Firmware Studio
@@ -203,7 +203,7 @@ itself is not a full distribution. Folder-based packages must place
 `sensor-watch-package.json` beside the package root and identify the launcher,
 versioned app directory, resources, templates, firmware project, and optional
 tools/targets. Studio reports **Packaged mode** only after validating that
-manifest. Missing project sources or tools are reported as unavailable; Studio
+manifest. Missing project sources or tools are reported as unavailable. Studio
 never claims full self-containment in that case. Mutable settings and user data
 remain under the platform user-data directory, separate from the package.
 
@@ -231,11 +231,11 @@ so the rendered digits come from the same code the firmware runs. The host seam
 and its real-face coverage are available through Studio's default `real-faces`
 feature because it requires the firmware host lib to compile as a host
 dependency. If the feature is disabled, the Simulator falls back to the
-hand-written `face_sim` engine; CI checks this configuration with
+hand-written `face_sim` engine. CI checks this configuration with
 `cargo test -p sensor-watch-studio --no-default-features`. This remains
 host-side coverage, not physical hardware validation. The latest validated
 workspace run passed 365 host tests: 121 firmware host-seam, 69 core, 145
-Studio, and 30 tools. The ARM release package build is a separate build check;
+Studio, and 30 tools. The ARM release package build is a separate build check.
 none of these results represent on-silicon validation.
 
 ## Dependencies
@@ -266,7 +266,7 @@ none of these results represent on-silicon validation.
 - `ntp.rs` - NTP time client
 - `settings.rs` - settings save/export/import
 - `persist.rs` - internal settings persistence (exe-adjacent file)
-- `integrity.rs` - SHA-256 integrity hashing/checks; release authenticity requires separately trusted public-key signature verification
+- `integrity.rs` - SHA-256 integrity hashing/checks. Release authenticity requires separately trusted public-key signature verification
 - `sysstats.rs` - app resource usage
 - `watch_config.rs` - watch configuration (mirrors the firmware Settings register)
 - `components.rs` - persisted component/build profiles and planning estimates

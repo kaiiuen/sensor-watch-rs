@@ -6,7 +6,7 @@ Before flashing, keep these checks distinct: UF2 structural validation, local
 manifest/digest consistency, optional trusted release SHA-256 matching, and
 publisher authenticity. The host tools implement the first three. A `sha256:`
 value and the legacy `.sig` sidecar are not signatures. When no trusted release
-SHA-256 is supplied, tooling reports trusted provenance as **not provided**; it
+SHA-256 is supplied, tooling reports trusted provenance as **not provided**. It
 must not imply authenticity. Publisher authenticity requires a separately
 verified signing/provenance system and is not provided by these tools.
 

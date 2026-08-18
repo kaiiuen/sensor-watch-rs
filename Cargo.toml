@@ -28,7 +28,7 @@ license = "MIT OR Apache-2.0"
 #
 # On the `thumbv6m-none-eabi` target the library artifact is also produced but is
 # NOT referenced by the on-device binary (which falls back to Cargo's autolink
-# only if the bin path `use`s it); the firmware build is verified to link the same
+# only if the bin path `use`s it). The firmware build is verified to link the same
 # machine code as before this change.
 [lib]
 name = "sensor_watch"
@@ -78,7 +78,7 @@ shell-auth = []
 # Reserve the native SAM L22 USB CDC application path. It is intentionally
 # disabled by default because USB raises the clock/power floor and the current
 # PAC/dependency graph cannot implement endpoint transfers. ARM builds with this
-# feature fail explicitly at firmware startup; host feature checks are tests only.
+# feature fail explicitly at firmware startup. Host feature checks are tests only.
 usb-cdc = []
 # Opt-in structured logs over the SWD probe's RTT channel. This is deliberately
 # not part of any default feature and is valid only for the ARM firmware target.
