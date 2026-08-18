@@ -17,6 +17,8 @@ pub const MAX_FRAME_LEN: usize = HEADER_LEN + MAX_PAYLOAD + AUTH_TAG_LEN + CRC_L
 pub const RX_TIMEOUT_MS: u32 = 100;
 pub const DUTY_WINDOW_MS: u32 = 1_000;
 pub const MAX_FRAMES_PER_WINDOW: u8 = 4;
+pub const TIME_SYNC_PAYLOAD_LEN: usize = 8;
+pub const MAX_TIME_SYNC_SKEW_SECONDS: u32 = 300;
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -64,6 +66,110 @@ impl Frame {
 pub trait AuthenticationHook {
     /// Verifies the optional tag over the header and payload (including preamble).
     fn verify(&self, authenticated_part: &[u8], tag: &[u8; AUTH_TAG_LEN]) -> bool;
+}
+
+/// Canonical UTC time-sync payload. The frame sequence is separate and is
+/// checked by [`Decoder`]; freshness is the sender's UTC seconds value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeSyncPayload {
+    pub packed_datetime: u32,
+    pub freshness: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TimeSyncError {
+    InvalidLength,
+    InvalidDateTime,
+    Stale,
+    NotAuthenticated,
+    NotAuthorized,
+    MutationDisabled,
+}
+
+impl TimeSyncPayload {
+    pub fn parse(bytes: &[u8]) -> Result<Self, TimeSyncError> {
+        if bytes.len() != TIME_SYNC_PAYLOAD_LEN {
+            return Err(TimeSyncError::InvalidLength);
+        }
+        let packed_datetime = u32::from_be_bytes(bytes[..4].try_into().unwrap());
+        let freshness = u32::from_be_bytes(bytes[4..].try_into().unwrap());
+        if !valid_packed_datetime(packed_datetime) {
+            return Err(TimeSyncError::InvalidDateTime);
+        }
+        Ok(Self {
+            packed_datetime,
+            freshness,
+        })
+    }
+
+    pub fn is_fresh(self, now: u32) -> bool {
+        now.abs_diff(self.freshness) <= MAX_TIME_SYNC_SKEW_SECONDS
+    }
+}
+
+/// Guards the final RTC mutation separately from framing and CRC validation.
+/// Production firmware constructs this with `crypto_provisioned = false` until
+/// a real key-provisioning/authentication implementation exists.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TimeSyncPolicy {
+    pub crypto_provisioned: bool,
+    pub authenticated: bool,
+    pub physically_authorized: bool,
+    pub rtc_mutation_enabled: bool,
+}
+
+impl TimeSyncPolicy {
+    pub const fn receive_only() -> Self {
+        Self {
+            crypto_provisioned: false,
+            authenticated: false,
+            physically_authorized: false,
+            rtc_mutation_enabled: false,
+        }
+    }
+
+    pub fn authorize(self, payload: TimeSyncPayload, now: u32) -> Result<(), TimeSyncError> {
+        if !payload.is_fresh(now) {
+            return Err(TimeSyncError::Stale);
+        }
+        if !self.crypto_provisioned || !self.authenticated {
+            return Err(TimeSyncError::NotAuthenticated);
+        }
+        if !self.physically_authorized {
+            return Err(TimeSyncError::NotAuthorized);
+        }
+        if !self.rtc_mutation_enabled {
+            return Err(TimeSyncError::MutationDisabled);
+        }
+        Ok(())
+    }
+}
+
+fn valid_packed_datetime(reg: u32) -> bool {
+    let second = reg & 0x3f;
+    let minute = (reg >> 6) & 0x3f;
+    let hour = (reg >> 12) & 0x1f;
+    let day = (reg >> 17) & 0x1f;
+    let month = (reg >> 22) & 0x0f;
+    let year = (reg >> 26) & 0x3f;
+    if second > 59 || minute > 59 || hour > 23 || month == 0 || month > 12 || day == 0 {
+        return false;
+    }
+    let full_year = 2020 + year;
+    let leap = full_year.is_multiple_of(4)
+        && (!full_year.is_multiple_of(100) || full_year.is_multiple_of(400));
+    let days = match month {
+        2 => {
+            if leap {
+                29
+            } else {
+                28
+            }
+        }
+        4 | 6 | 9 | 11 => 30,
+        _ => 31,
+    };
+    day <= days
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -452,6 +558,50 @@ mod tests {
             Err(DecodeError::InvalidLength)
         );
         assert_eq!(len, HEADER_LEN + MAX_PAYLOAD + CRC_LEN);
+    }
+
+    #[test]
+    fn time_sync_payload_rejects_invalid_dates_and_checks_freshness() {
+        let valid = (3u32 << 26) | (12u32 << 22) | (29u32 << 17) | (23u32 << 12);
+        let mut bytes = [0; TIME_SYNC_PAYLOAD_LEN];
+        bytes[..4].copy_from_slice(&valid.to_be_bytes());
+        bytes[4..].copy_from_slice(&1_000u32.to_be_bytes());
+        let payload = TimeSyncPayload::parse(&bytes).unwrap();
+        assert!(payload.is_fresh(1_250));
+        assert!(!payload.is_fresh(1_301));
+        bytes[..4].copy_from_slice(&((3u32 << 26) | (2u32 << 22) | (29u32 << 17)).to_be_bytes());
+        assert_eq!(
+            TimeSyncPayload::parse(&bytes),
+            Err(TimeSyncError::InvalidDateTime)
+        );
+    }
+
+    #[test]
+    fn time_sync_policy_requires_auth_presence_and_mutation_enable() {
+        let payload = TimeSyncPayload {
+            packed_datetime: 3u32 << 26,
+            freshness: 100,
+        };
+        assert_eq!(
+            TimeSyncPolicy::receive_only().authorize(payload, 100),
+            Err(TimeSyncError::NotAuthenticated)
+        );
+        let policy = TimeSyncPolicy {
+            crypto_provisioned: true,
+            authenticated: true,
+            physically_authorized: false,
+            rtc_mutation_enabled: true,
+        };
+        assert_eq!(
+            policy.authorize(payload, 100),
+            Err(TimeSyncError::NotAuthorized)
+        );
+        let policy = TimeSyncPolicy {
+            physically_authorized: true,
+            ..policy
+        };
+        assert!(policy.authorize(payload, 100).is_ok());
+        assert_eq!(policy.authorize(payload, 401), Err(TimeSyncError::Stale));
     }
 
     #[test]

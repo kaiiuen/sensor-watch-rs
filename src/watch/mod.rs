@@ -81,5 +81,7 @@ pub fn init() {
     irq::init();
     clock::init();
     rtc::init();
+    #[cfg(feature = "pro-irda-rx")]
+    optical::enable();
     wdt::init();
 }

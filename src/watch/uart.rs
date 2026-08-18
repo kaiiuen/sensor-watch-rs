@@ -7,6 +7,9 @@ use crate::watch::gpio::{self, Direction, Function, Pin};
 use crate::watch::timeout::wait_until;
 use atsaml22j::sercom0::usart::Usart;
 
+#[cfg(feature = "pro-irda-rx")]
+use atsaml22j::sercom0::usart::Usart as Sercom0Usart;
+
 const RX_CAPACITY: usize = 64;
 
 struct RxRing {
@@ -51,6 +54,14 @@ impl RxRing {
 
 static mut RX_RING: RxRing = RxRing::new();
 
+#[cfg(feature = "pro-irda-rx")]
+static mut PRO_IRDA_RING: RxRing = RxRing::new();
+
+#[cfg(feature = "pro-irda-rx")]
+const PRO_IR_ENABLE: Pin = Pin(1, 22); // PB22, active low
+#[cfg(feature = "pro-irda-rx")]
+const PRO_IRSENSE: Pin = Pin(0, 4); // PA04, SERCOM0 PAD0 / PMUX D
+
 /// The UART-capable pins.
 const A1: Pin = Pin(1, 1);
 const A2: Pin = Pin(1, 2);
@@ -75,6 +86,85 @@ fn usart() -> &'static Usart {
     // SAFETY: the SERCOM3 register block lives at a fixed address for the whole
     // program; this is the standard svd2rust `PTR` access pattern.
     unsafe { (*atsaml22j::Sercom3::PTR).usart() }
+}
+
+#[cfg(feature = "pro-irda-rx")]
+fn pro_usart() -> &'static Sercom0Usart {
+    // SAFETY: SERCOM0 is a fixed memory-mapped peripheral.
+    unsafe { (*atsaml22j::Sercom0::PTR).usart() }
+}
+
+/// Enables the Sensor Watch Pro's receive-only IrDA input.
+///
+/// This is intentionally separate from the debug UART: the reference board
+/// wiring is PB22 (IR_ENABLE, active low) and PA04 (IRSENSE, SERCOM0 PAD0).
+/// The PAC has no IrDA API; SAM L22 USART FORM=2 is the documented IrDA mode.
+#[cfg(feature = "pro-irda-rx")]
+pub fn enable_pro_irda_receive(baud: u32) -> bool {
+    if !valid_baud(baud) {
+        return false;
+    }
+    gpio::set_pin_direction(PRO_IR_ENABLE, Direction::Out);
+    gpio::set_pin_level(PRO_IR_ENABLE, false);
+    gpio::set_pin_direction(PRO_IRSENSE, Direction::In);
+    gpio::set_pin_function(PRO_IRSENSE, Function::Mux(3)); // PMUX D
+    gclk()
+        .pchctrl(11)
+        .write(|w| w.r#gen().gclk0().chen().set_bit());
+    mclk().apbcmask().modify(|_, w| w.sercom0_().set_bit());
+    let sercom = pro_usart();
+    if sercom.ctrla().read().enable().bit_is_set() {
+        sercom.ctrla().modify(|_, w| w.enable().clear_bit());
+        let _ = wait_until(|| sercom.syncbusy().read().bits() == 0);
+    }
+    sercom.ctrla().write(|w| w.swrst().set_bit());
+    let _ = wait_until(|| sercom.syncbusy().read().bits() == 0);
+    unsafe {
+        sercom.ctrla().write(|w| {
+            w.mode()
+                .bits(1)
+                .dord()
+                .set_bit()
+                .form()
+                .bits(2)
+                .runstdby()
+                .set_bit()
+        });
+        sercom
+            .ctrlb()
+            .write(|w| w.chsize().bits(0).rxen().set_bit());
+        let br = 65536u32 - ((65536u32 * 16 * baud) / 4_000_000);
+        sercom.baud().write(|w| w.bits(br as u16));
+    }
+    sercom.ctrla().modify(|_, w| w.enable().set_bit());
+    let _ = wait_until(|| sercom.syncbusy().read().bits() == 0);
+    true
+}
+
+#[cfg(feature = "pro-irda-rx")]
+pub fn disable_pro_irda_receive() {
+    pro_usart().ctrla().modify(|_, w| w.enable().clear_bit());
+    mclk().apbcmask().modify(|_, w| w.sercom0_().clear_bit());
+    gpio::set_pin_function(PRO_IRSENSE, Function::Off);
+    gpio::set_pin_direction(PRO_IRSENSE, Direction::Off);
+    gpio::set_pin_direction(PRO_IR_ENABLE, Direction::Off);
+}
+
+#[cfg(feature = "pro-irda-rx")]
+pub fn service_pro_irda_rx() {
+    for _ in 0..RX_CAPACITY {
+        let sercom = pro_usart();
+        if !sercom.intflag().read().rxc().bit_is_set() {
+            break;
+        }
+        let byte = sercom.data().read().bits() as u8;
+        critical_section::with(|_| unsafe { PRO_IRDA_RING.push(byte) });
+    }
+}
+
+#[cfg(feature = "pro-irda-rx")]
+pub fn try_getc_pro_irda() -> Option<u8> {
+    critical_section::with(|_| unsafe { PRO_IRDA_RING.pop() })
 }
 
 /// Returns a reference to the MCLK peripheral register block.

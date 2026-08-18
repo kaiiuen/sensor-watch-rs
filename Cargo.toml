@@ -56,9 +56,12 @@ critical-section = "1.2.0"
 sensor-watch-core = { path = "./core", optional = true }
 
 [features]
-# Optional optical command/status scaffolding. Keep it out of the default
-# firmware image until a board-level optical receiver is available.
-optical = []
+# Host/firmware optical framing and diagnostics. This does not imply a physical
+# receiver or a Studio transmitter.
+optical = ["dep:sensor-watch-core"]
+# Sensor Watch Pro-only IrDA receive path. Disabled by default and deliberately
+# not enabled by any Lite/legacy board feature.
+pro-irda-rx = ["optical"]
 # Only available to the host (`cargo test` / `cargo build` / `cargo run`, NOT the
 # `thumbv6m-none-eabi` firmware target). Gates the mock HW dispatch in `watch`.
 hostmock = ["dep:sensor-watch-core"]

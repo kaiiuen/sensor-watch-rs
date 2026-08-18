@@ -8,6 +8,7 @@
 
 #![no_std]
 
+#[cfg(not(target_arch = "arm"))]
 extern crate alloc;
 
 pub mod background_tasks;
@@ -16,16 +17,19 @@ pub mod ecc;
 pub mod event_log;
 // The hardware seam: the `Hw` trait, reference mock, and the reusable
 // `Event`/`Button`/`Indicator` types used by face logic.
+#[cfg(not(target_arch = "arm"))]
 pub mod mock_hw;
 pub mod optical;
 pub mod rtc_calibration;
 pub mod safety;
 pub mod settings;
 pub mod transfer;
+#[cfg(not(target_arch = "arm"))]
 pub mod uf2;
 pub mod utility;
 
 // Proof-of-concept: runs a verbatim copy of the firmware `simple_clock` face
 // against the mock `Hw` on the host (see the module docs for the extension
 // plan).
+#[cfg(not(target_arch = "arm"))]
 pub mod hostsim;

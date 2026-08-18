@@ -1875,6 +1875,12 @@ pub fn app_loop() {
             face.loop_(event, &mut MOVEMENT_STATE.settings);
         }
 
+        // Drain a bounded amount of Pro IrDA input before sleeping. The
+        // receiver stays powered as a board-level feature and this does not
+        // perform RTC mutation; TimeSync remains receive-only.
+        #[cfg(feature = "pro-irda-rx")]
+        watch::optical::poll_at(FAST_TICKS as u32 * 8);
+
         // Poll the serial shell for incoming commands.
         SHELL.poll();
 
