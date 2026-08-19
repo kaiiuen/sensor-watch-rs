@@ -59,3 +59,6 @@ webbrowser = "1"
 
 # Cross-platform host serial ports for the documented UART jig (not USB CDC)
 serialport = "4.7"
+
+# Native Windows file and folder dialogs for path-based Studio inputs
+rfd = "0.15"

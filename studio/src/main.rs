@@ -32,6 +32,7 @@ mod ntp;
 mod optical;
 mod panic_map;
 mod persist;
+mod pickers;
 mod presets;
 mod probe;
 mod progress;
@@ -4751,6 +4752,19 @@ impl StudioApp {
                             .hint_text("Path to .uf2"),
                     );
                     self.register_anchor(Panel::BuildFlash, AnchorId::BuildArtifactPath, &path_response);
+                    if ui
+                        .add_enabled(!artifact_actions_blocked, egui::Button::new("Browse"))
+                        .clicked()
+                    {
+                        let fallback = self.package_status.user_data_root.clone();
+                        if let Some(path) = pickers::pick_file(
+                            pickers::FilePickerKind::Uf2,
+                            &self.artifact_path_input,
+                            &fallback,
+                        ) {
+                            self.artifact_path_input = path.display().to_string();
+                        }
+                    }
                     let inspect_response = ui.add_enabled(
                         !artifact_actions_blocked,
                         egui::Button::new("Inspect UF2"),
@@ -7999,6 +8013,12 @@ impl StudioApp {
                 ui.label("Studio data folder");
                 ui.horizontal(|ui| {
                     ui.text_edit_singleline(&mut self.pending_data_folder);
+                    if ui.button("Browse").clicked() {
+                        let fallback = data_dir::default_path();
+                        if let Some(path) = pickers::pick_folder(&self.pending_data_folder, &fallback) {
+                            self.pending_data_folder = path.display().to_string();
+                        }
+                    }
                     if ui.button("Apply").clicked() { self.apply_data_folder(); }
                     if ui.button("Reset to default").clicked() {
                         self.pending_data_folder = data_dir::default_path().display().to_string();
@@ -8053,6 +8073,16 @@ impl StudioApp {
             ui.horizontal(|ui| {
                 ui.label("Explicit developer path:");
                 ui.text_edit_singleline(&mut self.master_clock_path);
+                if ui.button("Browse").clicked() {
+                    let fallback = self.package_status.user_data_root.clone();
+                    if let Some(path) = pickers::pick_file(
+                        pickers::FilePickerKind::MasterClock,
+                        &self.master_clock_path,
+                        &fallback,
+                    ) {
+                        self.master_clock_path = path.display().to_string();
+                    }
+                }
                 if ui.button("Validate path").clicked() {
                     match master_clock::validate_developer_tool(std::path::Path::new(
                         self.master_clock_path.trim(),
