@@ -77,6 +77,7 @@ pub struct PackageStatus {
     /// Validated package-local Master Clock executable, if declared and present.
     pub master_clock: Option<PathBuf>,
     pub user_data_root: PathBuf,
+    pub storage_mode: crate::storage::StorageMode,
     pub current_version: Option<String>,
     pub previous_version: Option<String>,
     pub capabilities: CapabilityStatus,
@@ -91,8 +92,19 @@ pub fn developer_mode_requested() -> bool {
         .unwrap_or(false)
 }
 
-pub fn initialize(executable: &Path, developer_mode: bool) -> PackageStatus {
-    let status = resolve(executable, developer_mode, compiled_workspace_root());
+pub fn initialize(
+    executable: &Path,
+    developer_mode: bool,
+    portable: bool,
+    user_data: Option<PathBuf>,
+) -> PackageStatus {
+    let status = resolve_with_user_data(
+        executable,
+        developer_mode,
+        compiled_workspace_root(),
+        portable,
+        user_data,
+    );
     let _ = ACTIVE.set(status.clone());
     status
 }
@@ -113,9 +125,34 @@ pub fn resolve(
     developer_mode: bool,
     developer_workspace: Option<PathBuf>,
 ) -> PackageStatus {
-    let user_data_root = crate::data_dir::default_path();
+    resolve_with_portable(executable, developer_mode, developer_workspace, false)
+}
+
+pub fn resolve_with_portable(
+    executable: &Path,
+    developer_mode: bool,
+    developer_workspace: Option<PathBuf>,
+    portable: bool,
+) -> PackageStatus {
+    resolve_with_user_data(
+        executable,
+        developer_mode,
+        developer_workspace,
+        portable,
+        None,
+    )
+}
+
+pub fn resolve_with_user_data(
+    executable: &Path,
+    developer_mode: bool,
+    developer_workspace: Option<PathBuf>,
+    portable: bool,
+    explicit_user_data: Option<PathBuf>,
+) -> PackageStatus {
+    let user_data_root = explicit_user_data.unwrap_or_else(crate::data_dir::default_path);
     if let Some((root, manifest)) = discover_package(executable) {
-        return package_status(root, manifest, user_data_root);
+        return package_status(root, manifest, user_data_root, portable);
     }
     if developer_mode {
         let project = developer_workspace.filter(|path| path.is_dir());
@@ -137,6 +174,7 @@ pub fn resolve(
             targets: None,
             master_clock: None,
             user_data_root,
+            storage_mode: crate::storage::StorageMode::Developer,
             current_version: Some(env!("CARGO_PKG_VERSION").to_string()),
             previous_version: None,
             capabilities: CapabilityStatus {
@@ -163,6 +201,7 @@ pub fn resolve(
         targets: None,
         master_clock: None,
         user_data_root,
+        storage_mode: crate::storage::StorageMode::Unavailable,
         current_version: None,
         previous_version: None,
         capabilities: CapabilityStatus {
@@ -173,15 +212,24 @@ pub fn resolve(
             targets: false,
             master_clock: false,
         },
-        warnings: vec!["No package manifest found; developer fallback is disabled".into()],
+        warnings: vec!["No package manifest found: developer fallback is disabled".into()],
     }
 }
 
 fn package_status(
     root: PathBuf,
     manifest: PackageManifest,
-    user_data_root: PathBuf,
+    installed_root: PathBuf,
+    explicit_portable: bool,
 ) -> PackageStatus {
+    let storage = crate::storage::roots(
+        &root.join(&manifest.launcher_executable),
+        Some(&root),
+        crate::storage::StorageMode::Installed,
+        explicit_portable,
+        installed_root,
+    );
+    let user_data_root = storage.user_data_root;
     let path = |value: &str| root.join(value);
     let launcher = path(&manifest.launcher_executable);
     let app_directory = path(&manifest.app_directory);
@@ -240,6 +288,7 @@ fn package_status(
         targets: targets.clone(),
         master_clock: validated_master_clock.clone(),
         user_data_root,
+        storage_mode: storage.mode,
         current_version: Some(manifest.current_version.version),
         previous_version: manifest.previous_version.map(|v| v.version),
         capabilities: CapabilityStatus {
@@ -436,15 +485,20 @@ impl PackageStatus {
     pub fn display_label(&self) -> String {
         match self.mode {
             DistributionMode::Packaged => format!(
-                "Packaged mode · {} · {}",
+                "{} mode · {} · {} · data: {}",
+                self.storage_mode.label(),
                 self.current_version.as_deref().unwrap_or("version unknown"),
                 if self.active_project_dir().is_some() {
                     "bundled template → mutable project"
                 } else {
                     "mutable project unavailable"
-                }
+                },
+                self.user_data_root.display()
             ),
-            DistributionMode::Developer => "Developer checkout mode · explicit fallback".into(),
+            DistributionMode::Developer => format!(
+                "Developer checkout mode · data: {}",
+                self.user_data_root.display()
+            ),
             DistributionMode::Unavailable => {
                 "Unavailable mode · package resources not found".into()
             }
@@ -518,6 +572,20 @@ mod tests {
         assert!(!status.warnings.is_empty());
         std::fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn launcher_user_data_is_propagated_to_packaged_project() {
+        let root = temp("explicit-data");
+        let exe = root.join("app/sensor-watch-studio.exe");
+        let user_data = temp("launcher-data");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::write(root.join(MANIFEST_FILE), manifest()).unwrap();
+        let status = resolve_with_user_data(&exe, false, None, false, Some(user_data.clone()));
+        assert_eq!(status.user_data_root, user_data);
+        let _ = std::fs::remove_dir_all(root);
+        let _ = std::fs::remove_dir_all(user_data);
+    }
+
     #[test]
     fn separates_user_data_from_package_root() {
         let root = temp("data");

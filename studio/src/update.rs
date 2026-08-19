@@ -17,7 +17,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MANIFEST_FILE: &str = "sensor-watch-package.json";
 const STATE_FILE: &str = "update-state.json";
-const STATE_TEMP_FILE: &str = "update-state.json.pending";
+const STATE_LOCK_FILE: &str = "update-state.lock";
 const STARTUP_SUCCESS_FILE: &str = "startup-success";
 static STAGE_COUNTER: AtomicU64 = AtomicU64::new(0);
 static STARTUP_STATUS: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -29,6 +29,8 @@ pub struct StartupContext {
     pub version: Option<String>,
     pub attempt: Option<String>,
     pub user_data: Option<PathBuf>,
+    /// Explicit launcher context; portable mode is never inferred from the exe.
+    pub portable: bool,
 }
 
 pub fn startup_status() -> Option<&'static str> {
@@ -68,6 +70,9 @@ where
             "--sensor-watch-version" => context.version = value,
             "--sensor-watch-startup-attempt" => context.attempt = value,
             "--sensor-watch-user-data" => context.user_data = value.map(PathBuf::from),
+            "--portable" => {
+                context.portable = value.as_deref().map_or(true, |v| v == "1" || v == "true");
+            }
             _ => remaining.push(arg),
         }
     }
@@ -94,17 +99,24 @@ pub fn mark_startup_success(context: &StartupContext) -> Result<(), UpdateError>
             return Err(UpdateError::Manifest(message));
         }
     }
-    let parent = marker
+    let user_data = context.user_data.as_ref().ok_or_else(|| {
+        UpdateError::Manifest("startup acknowledgement requires an explicit user-data path".into())
+    })?;
+    let state_root = user_data.join("update-state");
+    ensure_state_root(&state_root)?;
+    let state_root_real = state_root.canonicalize()?;
+    let marker_parent = marker
         .parent()
-        .ok_or_else(|| UpdateError::Manifest("startup marker has no parent directory".into()))?;
-    fs::create_dir_all(parent)?;
-    let temp = parent.join(format!(
-        ".{}.pending-{}",
-        STARTUP_SUCCESS_FILE,
-        unique_token()
-    ));
-    fs::write(&temp, b"ok\n")?;
-    fs::rename(&temp, marker)?;
+        .ok_or_else(|| UpdateError::PathTraversal("startup marker has no parent".into()))?
+        .canonicalize()?;
+    if marker_parent != state_root_real
+        || marker.file_name().and_then(|name| name.to_str()).is_none()
+    {
+        return Err(UpdateError::PathTraversal(
+            "startup marker is outside the user-data update-state directory".into(),
+        ));
+    }
+    atomic_write(&state_root_real.join(marker.file_name().unwrap()), b"ok\n")?;
     let detail = match (&context.version, &context.attempt) {
         (Some(version), Some(attempt)) => {
             format!("Startup succeeded for version {version}, attempt {attempt}")
@@ -332,8 +344,13 @@ impl UpdateManager {
             ));
         }
         let state = self.read_state()?;
+        let current = staged
+            .file_name()
+            .and_then(|name| name.to_str())
+            .ok_or_else(|| UpdateError::Manifest("staged package has an invalid name".into()))?;
+        validate_state_entry(current)?;
         let next = UpdateState {
-            current: Some(staged.file_name().unwrap().to_string_lossy().into_owned()),
+            current: Some(current.to_owned()),
             previous: state.current,
         };
         self.write_state(&next)
@@ -341,10 +358,16 @@ impl UpdateManager {
 
     pub fn mark_startup_success(&self) -> Result<(), UpdateError> {
         let current = self
-            .current_path()?
+            .read_state()?
+            .current
             .ok_or(UpdateError::Manifest("no current package".into()))?;
-        fs::write(current.join(STARTUP_SUCCESS_FILE), b"ok\n")?;
-        Ok(())
+        validate_state_entry(&current)?;
+        let state_root = self.state_root();
+        ensure_state_root(&state_root)?;
+        atomic_write(
+            &state_root.join(format!("{STARTUP_SUCCESS_FILE}-{current}")),
+            b"ok\n",
+        )
     }
 
     /// Call once at startup. An activated version without its marker is rolled back.
@@ -353,14 +376,22 @@ impl UpdateManager {
         let Some(current) = state.current.as_ref() else {
             return Ok(None);
         };
-        if state.previous.is_some() && !self.root.join(current).join(STARTUP_SUCCESS_FILE).is_file()
+        validate_state_entry(current)?;
+        if let Some(previous) = state.previous.as_deref() {
+            validate_state_entry(previous)?;
+        }
+        if state.previous.is_some()
+            && !self
+                .state_root()
+                .join(format!("{STARTUP_SUCCESS_FILE}-{current}"))
+                .is_file()
         {
             let previous = state.previous.clone().unwrap();
             self.write_state(&UpdateState {
                 current: Some(previous.clone()),
                 previous: Some(current.clone()),
             })?;
-            return Ok(Some(self.root.join(previous)));
+            return Ok(Some(self.version_path(&previous)?));
         }
         Ok(None)
     }
@@ -373,27 +404,110 @@ impl UpdateManager {
             current: Some(previous.clone()),
             previous: current,
         })?;
-        Ok(self.root.join(previous))
+        self.version_path(&previous)
     }
 
     pub fn current_path(&self) -> Result<Option<PathBuf>, UpdateError> {
-        Ok(self.read_state()?.current.map(|v| self.root.join(v)))
+        self.read_state()?
+            .current
+            .map(|value| self.version_path(&value))
+            .transpose()
+    }
+    fn state_root(&self) -> PathBuf {
+        self.user_data.join("update-state")
+    }
+    fn version_path(&self, value: &str) -> Result<PathBuf, UpdateError> {
+        validate_state_entry(value)?;
+        Ok(self.root.join(value))
     }
     fn read_state(&self) -> Result<UpdateState, UpdateError> {
-        if !self.root.join(STATE_FILE).exists() {
+        let path = self.state_root().join(STATE_FILE);
+        if !path.exists() {
             return Ok(UpdateState::default());
         }
-        Ok(serde_json::from_slice(&fs::read(
-            self.root.join(STATE_FILE),
-        )?)?)
+        let state: UpdateState = serde_json::from_slice(&fs::read(path)?)?;
+        if let Some(value) = state.current.as_deref() {
+            validate_state_entry(value)?;
+        }
+        if let Some(value) = state.previous.as_deref() {
+            validate_state_entry(value)?;
+        }
+        Ok(state)
     }
     fn write_state(&self, state: &UpdateState) -> Result<(), UpdateError> {
-        fs::create_dir_all(&self.root)?;
+        ensure_state_root(&self.state_root())?;
+        if let Some(value) = state.current.as_deref() {
+            validate_state_entry(value)?;
+        }
+        if let Some(value) = state.previous.as_deref() {
+            validate_state_entry(value)?;
+        }
         let bytes = serde_json::to_vec_pretty(state)?;
-        fs::write(self.root.join(STATE_TEMP_FILE), bytes)?;
-        fs::rename(self.root.join(STATE_TEMP_FILE), self.root.join(STATE_FILE))?;
-        Ok(())
+        atomic_write(&self.state_root().join(STATE_FILE), &bytes)
     }
+}
+
+fn validate_state_entry(value: &str) -> Result<(), UpdateError> {
+    validate_relative_path(Path::new(value))?;
+    if Path::new(value).components().count() != 1 {
+        return Err(UpdateError::PathTraversal(value.into()));
+    }
+    Ok(())
+}
+
+fn ensure_state_root(path: &Path) -> Result<(), UpdateError> {
+    fs::create_dir_all(path)?;
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        let metadata = fs::symlink_metadata(candidate)?;
+        if metadata.file_type().is_symlink() || is_reparse_point(&metadata) || !metadata.is_dir() {
+            return Err(UpdateError::PathTraversal(candidate.display().to_string()));
+        }
+        current = candidate.parent();
+    }
+    Ok(())
+}
+
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), UpdateError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| UpdateError::Manifest("state path has no parent".into()))?;
+    ensure_state_root(parent)?;
+    let lock = parent.join(STATE_LOCK_FILE);
+    let _guard = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&lock)
+        .map_err(|e| UpdateError::Manifest(format!("update state is busy or unavailable: {e}")))?;
+    let temp = parent.join(format!(
+        ".{}.pending-{}",
+        path.file_name().unwrap().to_string_lossy(),
+        unique_token()
+    ));
+    let result = (|| {
+        let mut file = fs::File::create(&temp)?;
+        std::io::Write::write_all(&mut file, bytes)?;
+        file.sync_all()?;
+        #[cfg(windows)]
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        fs::rename(&temp, path)?;
+        Ok::<(), io::Error>(())
+    })();
+    let _ = fs::remove_file(&temp);
+    let _ = fs::remove_file(&lock);
+    result.map_err(UpdateError::Io)
+}
+
+#[cfg(windows)]
+fn is_reparse_point(metadata: &fs::Metadata) -> bool {
+    use std::os::windows::fs::MetadataExt;
+    metadata.file_attributes() & 0x400 != 0
+}
+#[cfg(not(windows))]
+fn is_reparse_point(_metadata: &fs::Metadata) -> bool {
+    false
 }
 
 fn validate_relative_path(path: &Path) -> Result<(), UpdateError> {
@@ -415,8 +529,9 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), UpdateError> {
     for entry in fs::read_dir(source)? {
         let entry = entry?;
         let ty = entry.file_type()?;
+        let metadata = entry.metadata()?;
         let target = destination.join(entry.file_name());
-        if ty.is_symlink() {
+        if ty.is_symlink() || is_reparse_point(&metadata) {
             return Err(UpdateError::PathTraversal(
                 entry.path().display().to_string(),
             ));
@@ -439,7 +554,8 @@ fn copy_tree(source: &Path, destination: &Path) -> Result<(), UpdateError> {
 fn validate_package(root: &Path, manifest: &PackageManifest) -> Result<(), UpdateError> {
     for file in &manifest.files {
         let path = root.join(&file.path);
-        if !path.is_file() {
+        let metadata = fs::symlink_metadata(&path)?;
+        if !metadata.is_file() || metadata.file_type().is_symlink() || is_reparse_point(&metadata) {
             return Err(UpdateError::MissingFile(file.path.clone()));
         }
         let actual = hex(&Sha256::digest(fs::read(path)?));
@@ -650,6 +766,7 @@ mod tests {
             "--sensor-watch-startup-attempt=7",
             "--sensor-watch-user-data",
             "C:/studio-user-data",
+            "--portable",
             "status",
         ]);
         assert_eq!(context.marker, Some(marker));
@@ -659,17 +776,27 @@ mod tests {
             context.user_data,
             Some(PathBuf::from("C:/studio-user-data"))
         );
+        assert!(context.portable);
         assert_eq!(remaining, vec!["status"]);
     }
 
     #[test]
     fn startup_success_is_atomic_and_rejects_wrong_version() {
         let marker = temp("marker");
+        let user_data = temp("startup-user");
         let wrong = StartupContext {
             marker: Some(marker.clone()),
             version: Some("99.0.0".into()),
             attempt: Some("attempt-1".into()),
-            user_data: None,
+            user_data: Some(user_data.clone()),
+            portable: false,
+        };
+        let marker = user_data
+            .join("update-state")
+            .join("startup-success-attempt-1");
+        let wrong = StartupContext {
+            marker: Some(marker.clone()),
+            ..wrong
         };
         assert!(matches!(
             mark_startup_success(&wrong),
@@ -689,11 +816,30 @@ mod tests {
     #[test]
     fn corrupt_state_is_reported_fail_closed() {
         let root = temp("corrupt-state");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(root.join(STATE_FILE), b"not-json").unwrap();
-        let manager = UpdateManager::new(&root, temp("user"));
+        let user = temp("corrupt-state-user");
+        fs::create_dir_all(user.join("update-state")).unwrap();
+        fs::write(user.join("update-state").join(STATE_FILE), b"not-json").unwrap();
+        let manager = UpdateManager::new(&root, &user);
         assert!(matches!(manager.current_path(), Err(UpdateError::Json(_))));
         clean(&[&root, manager.user_data_root()]);
+    }
+
+    #[test]
+    fn persisted_version_entries_must_be_single_safe_names() {
+        let root = temp("unsafe-state-root");
+        let user = temp("unsafe-state-user");
+        fs::create_dir_all(user.join("update-state")).unwrap();
+        fs::write(
+            user.join("update-state").join(STATE_FILE),
+            br#"{"current":"../outside","previous":"C:\\evil"}"#,
+        )
+        .unwrap();
+        let manager = UpdateManager::new(&root, &user);
+        assert!(matches!(
+            manager.current_path(),
+            Err(UpdateError::PathTraversal(_))
+        ));
+        clean(&[&root, &user]);
     }
 
     #[test]

@@ -39,6 +39,7 @@ mod real_face;
 mod restore;
 mod settings;
 mod sim_provenance;
+mod storage;
 mod sysstats;
 mod test_runtime;
 mod theme;
@@ -3251,7 +3252,21 @@ impl StudioApp {
             return;
         }
         let build_fingerprint = plan.request_identity.clone();
-        let out = std::path::PathBuf::from(self.output_dir.clone());
+        let out = match storage::artifact_paths(
+            &self.package_status.user_data_root,
+            plan.request.board.label(),
+            &plan.request.revision,
+            &plan.request.profile.name,
+        ) {
+            Ok(paths) => paths.latest,
+            Err(reason) => {
+                self.build_message = format!("Build output path rejected: {reason}");
+                self.status = self.build_message.clone();
+                self.build_estimator_state = BuildEstimatorState::Failed(reason.clone());
+                self.push_terminal(self.build_message.clone());
+                return;
+            }
+        };
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
         if self.reset_test_session_on_compile {
@@ -9706,7 +9721,14 @@ fn parse_configured_build(
 }
 
 fn run_configured_build(cli: ConfiguredBuildCli) -> Result<(), String> {
-    let result = build::build_firmware(cli.request, &cli.output);
+    let output = storage::artifact_paths(
+        &distribution::active().user_data_root,
+        cli.request.board.label(),
+        &cli.request.revision,
+        &cli.request.profile.name,
+    )?
+    .latest;
+    let result = build::build_firmware(cli.request, &output);
     if !result.success {
         return Err(result.message);
     }
@@ -9914,12 +9936,25 @@ fn ensure_cli_console() {}
 fn main() -> eframe::Result<()> {
     // Launcher bootstrap arguments are consumed before Studio CLI dispatch.
     // They identify one version/attempt and must never be treated as commands.
-    let (startup, studio_args) = update::parse_startup_context(std::env::args().skip(1));
+    let (mut startup, studio_args) = update::parse_startup_context(std::env::args().skip(1));
     let executable = std::env::current_exe().unwrap_or_default();
-    let user_data = startup
-        .user_data
-        .clone()
-        .unwrap_or_else(data_dir::default_path);
+    let portable_requested = startup.portable || storage::has_valid_portable_flag(&executable);
+    let user_data = if portable_requested {
+        executable
+            .parent()
+            .and_then(std::path::Path::parent)
+            .map(|root| root.join("user-data"))
+            .unwrap_or_else(data_dir::default_path)
+    } else {
+        startup
+            .user_data
+            .clone()
+            .unwrap_or_else(data_dir::default_path)
+    };
+
+    if startup.user_data.is_none() {
+        startup.user_data = Some(user_data.clone());
+    }
 
     // Recover an interrupted local package activation before any distribution,
     // resource, or project initialization can select the new version.
@@ -9938,7 +9973,12 @@ fn main() -> eframe::Result<()> {
     // before selecting an executable-hash profile. Distribution discovery is
     // initialized only after failed-startup recovery.
     let developer_mode = distribution::developer_mode_requested();
-    let package_status = distribution::initialize(&executable, developer_mode);
+    let package_status = distribution::initialize(
+        &executable,
+        developer_mode,
+        portable_requested,
+        Some(user_data.clone()),
+    );
     if !package_status.warnings.is_empty() {
         for warning in &package_status.warnings {
             eprintln!("Studio distribution: {warning}");
@@ -9946,10 +9986,14 @@ fn main() -> eframe::Result<()> {
     }
     let bootstrap = persist::load_runtime_preferences();
     let fresh = bootstrap.fresh_test_executable_profile;
-    let requested_root = startup
-        .user_data
-        .clone()
-        .unwrap_or_else(|| std::path::PathBuf::from(&bootstrap.data_folder));
+    let requested_root = if portable_requested {
+        package_status.user_data_root.clone()
+    } else {
+        startup
+            .user_data
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from(&bootstrap.data_folder))
+    };
     let fallback_root = data_dir::default_path();
     let firmware = build::firmware_dir();
     // The bootstrap output directory is the only safe output value available

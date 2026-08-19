@@ -137,6 +137,14 @@ pub fn migrate(old_root: &Path, new_root: &Path) -> Result<(), String> {
         if !source.exists() {
             continue;
         }
+        let source_meta = std::fs::symlink_metadata(&source)
+            .map_err(|e| format!("cannot inspect {name}: {e}"))?;
+        if !source_meta.is_file()
+            || source_meta.file_type().is_symlink()
+            || is_reparse_point(&source_meta)
+        {
+            return Err(format!("refusing to migrate linked or non-file {name}"));
+        }
         let target = new_root.join(name);
         if target.exists() {
             continue;
@@ -215,6 +223,22 @@ mod tests {
         assert!(validate(&nested, &[]).is_ok());
         assert!(validate(&nested, &[root.as_path()]).is_err());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn migration_rejects_symlink_source_file() {
+        use std::os::unix::fs::symlink;
+        let old = temp("migration-link-old");
+        let new = temp("migration-link-new");
+        std::fs::create_dir_all(&old).unwrap();
+        let target = temp("migration-link-target");
+        std::fs::write(&target, b"secret").unwrap();
+        symlink(&target, old.join(SETTINGS_FILE)).unwrap();
+        assert!(migrate(&old, &new).is_err());
+        let _ = std::fs::remove_dir_all(old);
+        let _ = std::fs::remove_dir_all(new);
+        let _ = std::fs::remove_file(target);
     }
 
     #[cfg(windows)]
