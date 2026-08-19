@@ -90,6 +90,21 @@ fn build_completion_configuration_matches(
     captured_fingerprint == Some(current_fingerprint)
 }
 
+fn latest_artifact_action_enabled(
+    state: &BuildEstimatorState,
+    pending: Option<&build::ArtifactInspection>,
+    pending_fingerprint: Option<&str>,
+    current_fingerprint: &str,
+    busy: bool,
+) -> bool {
+    !busy
+        && matches!(state, BuildEstimatorState::Verified)
+        && pending.is_some_and(|inspection| {
+            !inspection.generated_input_digest.is_empty()
+                && pending_fingerprint == Some(current_fingerprint)
+        })
+}
+
 fn configured_estimator_status(
     state: &BuildEstimatorState,
     plan: &firmware_inputs::BuildPlan,
@@ -4712,6 +4727,30 @@ impl StudioApp {
                     {
                         self.inspect_artifact_from_input();
                     }
+                    let latest_enabled = latest_artifact_action_enabled(
+                        &self.build_estimator_state,
+                        self.pending_artifact.as_ref(),
+                        self.pending_artifact_fingerprint.as_deref(),
+                        &self.build_configuration_fingerprint(),
+                        artifact_actions_blocked,
+                    );
+                    let latest_response = ui.add_enabled(
+                        latest_enabled,
+                        egui::Button::new("Use latest UF2"),
+                    );
+                    if latest_response
+                        .on_hover_text("Use the verified configured build artifact without approving or flashing it")
+                        .clicked()
+                    {
+                        if let Some(inspection) = self.pending_artifact.as_ref() {
+                            self.artifact_path_input = inspection.path.display().to_string();
+                            path_response.request_focus();
+                            self.inspection_scroll_requested = true;
+                            self.status = "Latest configured UF2 selected; review inspection before approval".to_string();
+                            self.build_message = self.status.clone();
+                            self.log.log(format!("Selected latest verified UF2: {}", inspection.path.display()));
+                        }
+                    }
                 });
                 if !self.artifact_path_input.trim().is_empty() {
                     ui.weak("Path entered: ready for explicit artifact inspection.");
@@ -4746,11 +4785,7 @@ impl StudioApp {
                             .clicked()
                             && self.guided_action_allowed(AnchorId::BuildApprove)
                         {
-                            let provenance_ok = self
-                                .pending_artifact
-                                .as_ref()
-                                .map(build::validate_generated_input_digest)
-                                .unwrap_or_else(|| Err("no artifact is awaiting approval".into()));
+                            let provenance_ok = self.revalidate_pending_artifact();
                             if let Err(error) = provenance_ok {
                                 set_failed_artifact_state(
                                     &mut self.status,
@@ -9079,6 +9114,24 @@ impl StudioApp {
         }
     }
 
+    fn revalidate_pending_artifact(&self) -> Result<(), String> {
+        let pending = self
+            .pending_artifact
+            .as_ref()
+            .ok_or_else(|| "no artifact is awaiting approval".to_string())?;
+        let current_fingerprint = self.build_configuration_fingerprint();
+        if self.pending_artifact_fingerprint.as_deref() != Some(current_fingerprint.as_str()) {
+            return Err("configured build fingerprint changed; artifact is stale".into());
+        }
+        let fresh = build::inspect_artifact(&pending.path)
+            .map_err(|error| format!("artifact re-inspection failed: {error}"))?;
+        if fresh != *pending {
+            return Err("artifact path or verified sidecars changed since inspection".into());
+        }
+        build::validate_generated_input_digest(&fresh)
+            .map_err(|error| format!("generated-input provenance validation failed: {error}"))
+    }
+
     fn inspect_artifact_from_input(&mut self) {
         let trimmed = self.artifact_path_input.trim();
         if trimmed.is_empty() {
@@ -12110,6 +12163,84 @@ mod tests {
             manifest_digest: "manifest-sha".to_string(),
             generated_input_digest: "inputs-sha".to_string(),
         }
+    }
+
+    #[test]
+    fn latest_artifact_action_accepts_matching_verified_configured_candidate() {
+        let inspection = test_inspection("configured.uf2");
+        assert!(super::latest_artifact_action_enabled(
+            &BuildEstimatorState::Verified,
+            Some(&inspection),
+            Some("same"),
+            "same",
+            false,
+        ));
+    }
+
+    #[test]
+    fn latest_artifact_action_rejects_changed_fingerprint() {
+        let inspection = test_inspection("configured.uf2");
+        assert!(!super::latest_artifact_action_enabled(
+            &BuildEstimatorState::Verified,
+            Some(&inspection),
+            Some("old"),
+            "new",
+            false,
+        ));
+    }
+
+    #[test]
+    fn latest_artifact_action_rejects_stock_artifact_without_provenance() {
+        let mut inspection = test_inspection("stock.uf2");
+        inspection.generated_input_digest.clear();
+        assert!(!super::latest_artifact_action_enabled(
+            &BuildEstimatorState::Verified,
+            Some(&inspection),
+            Some("same"),
+            "same",
+            false,
+        ));
+    }
+
+    #[test]
+    fn latest_artifact_action_rejects_busy_or_non_verified_state() {
+        let inspection = test_inspection("configured.uf2");
+        assert!(!super::latest_artifact_action_enabled(
+            &BuildEstimatorState::Building,
+            Some(&inspection),
+            Some("same"),
+            "same",
+            false,
+        ));
+        assert!(!super::latest_artifact_action_enabled(
+            &BuildEstimatorState::Verified,
+            Some(&inspection),
+            Some("same"),
+            "same",
+            true,
+        ));
+    }
+
+    #[test]
+    fn approval_revalidation_rejects_missing_sidecars_and_replaced_path() {
+        let mut app = super::StudioApp::default();
+        app.pending_artifact = Some(test_inspection("missing.uf2"));
+        app.pending_artifact_fingerprint = Some(app.build_configuration_fingerprint());
+        let error = app.revalidate_pending_artifact().unwrap_err();
+        assert!(error.contains("artifact re-inspection failed"));
+
+        app.pending_artifact.as_mut().unwrap().path = "replaced.uf2".into();
+        let error = app.revalidate_pending_artifact().unwrap_err();
+        assert!(error.contains("artifact re-inspection failed"));
+    }
+
+    #[test]
+    fn approval_revalidation_rejects_tampered_provenance_bundle() {
+        let mut app = super::StudioApp::default();
+        app.pending_artifact = Some(test_inspection("tampered.uf2"));
+        app.pending_artifact_fingerprint = Some(app.build_configuration_fingerprint());
+        let error = app.revalidate_pending_artifact().unwrap_err();
+        assert!(error.contains("artifact re-inspection failed"));
     }
 
     #[test]
