@@ -10,6 +10,82 @@ static LATEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 pub const PORTABLE_FLAG: &str = "portable.flag";
 
+/// The default configured-build root is always user data, never the package.
+pub fn default_artifact_root(user_data_root: &Path) -> PathBuf {
+    user_data_root.to_path_buf()
+}
+
+/// Validates a configured-build root without creating it. Missing roots are a
+/// valid, not-yet-created state; Create folder performs the write separately.
+pub fn validate_artifact_root(root: &Path, package_root: Option<&Path>) -> Result<(), String> {
+    if root.as_os_str().is_empty() || !root.is_absolute() {
+        return Err("artifact root must be a non-empty absolute path".into());
+    }
+    if root.to_string_lossy().chars().any(char::is_control) {
+        return Err("artifact root cannot contain control characters".into());
+    }
+    if root.parent().is_none() || root.components().count() <= 1 {
+        return Err("artifact root cannot be a filesystem root".into());
+    }
+    validate_path_chain(root)?;
+    let resolved = canonical_for_overlap(root)?;
+    if let Some(package) = package_root {
+        let package = canonical_for_overlap(package)?;
+        if resolved == package || resolved.starts_with(&package) || package.starts_with(&resolved) {
+            return Err("artifact root overlaps the immutable package directory".into());
+        }
+    }
+    if let Ok(meta) = std::fs::symlink_metadata(root) {
+        if !meta.is_dir() {
+            return Err("artifact root must be a directory, not a file".into());
+        }
+    }
+    Ok(())
+}
+
+pub fn create_artifact_root(root: &Path, package_root: Option<&Path>) -> Result<(), String> {
+    validate_artifact_root(root, package_root)?;
+    std::fs::create_dir_all(root).map_err(|e| format!("cannot create artifact root: {e}"))?;
+    validate_artifact_root(root, package_root)
+}
+
+fn canonical_for_overlap(path: &Path) -> Result<PathBuf, String> {
+    if path.exists() {
+        return path
+            .canonicalize()
+            .map_err(|e| format!("cannot resolve artifact root: {e}"));
+    }
+    let mut current = path;
+    let mut missing = Vec::new();
+    while !current.exists() {
+        missing.push(current.file_name().ok_or("invalid artifact root")?);
+        current = current.parent().ok_or("cannot resolve artifact root")?;
+    }
+    let mut resolved = current
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve artifact root: {e}"))?;
+    for part in missing.iter().rev() {
+        resolved.push(part);
+    }
+    Ok(resolved)
+}
+
+fn validate_path_chain(path: &Path) -> Result<(), String> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        if let Ok(meta) = std::fs::symlink_metadata(candidate) {
+            if meta.file_type().is_symlink() || is_reparse_point(&meta) {
+                return Err(format!(
+                    "artifact root cannot use a symlink or reparse-point path: {}",
+                    candidate.display()
+                ));
+            }
+        }
+        current = candidate.parent();
+    }
+    Ok(())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StorageMode {
     Portable,
@@ -251,22 +327,6 @@ fn ensure_regular_or_absent(path: &Path) -> Result<(), String> {
     }
 }
 
-fn validate_path_chain(path: &Path) -> Result<(), String> {
-    let mut current = Some(path);
-    while let Some(candidate) = current {
-        if let Ok(meta) = std::fs::symlink_metadata(candidate) {
-            if meta.file_type().is_symlink() || is_reparse_point(&meta) {
-                return Err(format!(
-                    "artifact root contains a link or reparse point: {}",
-                    candidate.display()
-                ));
-            }
-        }
-        current = candidate.parent();
-    }
-    Ok(())
-}
-
 #[cfg(windows)]
 fn is_reparse_point(meta: &std::fs::Metadata) -> bool {
     use std::os::windows::fs::MetadataExt;
@@ -291,6 +351,28 @@ mod tests {
                 .unwrap()
                 .as_nanos()
         ))
+    }
+
+    #[test]
+    fn default_and_custom_roots_keep_the_required_suffix() {
+        let default = temp("default-root");
+        let custom = temp("custom-root");
+        let a = artifact_paths(&default, "Green", "rev-a", "stock").unwrap();
+        let b = artifact_paths(&custom, "Blue", "rev-b", "custom").unwrap();
+        assert_eq!(a.latest, default.join("firmware/Green/rev-a/stock/latest"));
+        assert_eq!(b.latest, custom.join("firmware/Blue/rev-b/custom/latest"));
+        assert_ne!(a.latest, b.latest);
+    }
+
+    #[test]
+    fn missing_root_validates_without_creation_and_create_is_explicit() {
+        let root = temp("create");
+        assert!(!root.exists());
+        assert!(validate_artifact_root(&root, None).is_ok());
+        assert!(!root.exists());
+        create_artifact_root(&root, None).unwrap();
+        assert!(root.is_dir());
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

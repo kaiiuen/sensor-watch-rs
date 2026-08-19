@@ -203,6 +203,10 @@ pub struct AppSettings {
     /// Defaults to a writable user folder when running as a standalone exe.
     #[serde(default = "default_output_dir")]
     pub output_dir: String,
+    /// The single authoritative root for configured-build artifacts.
+    /// `output_dir` remains as a compatibility alias for older exports.
+    #[serde(default = "default_output_dir")]
+    pub artifact_root: String,
     /// Whether the first-run welcome overlay has been dismissed.
     #[serde(default = "default_first_run")]
     pub first_run: bool,
@@ -306,7 +310,8 @@ impl AppSettings {
             preset_height,
             modules: modules.clone(),
             data_folder: default_data_folder(),
-            output_dir,
+            output_dir: output_dir.clone(),
+            artifact_root: output_dir,
             first_run,
             tour_claims,
             persist_user_changes,
@@ -370,8 +375,8 @@ impl AppSettings {
                 return Err(format!("{field} contains invalid or excessive text"));
             }
         }
-        if self.output_dir.trim().is_empty() {
-            return Err("output directory must not be empty".into());
+        if self.output_dir.trim().is_empty() || self.artifact_root.trim().is_empty() {
+            return Err("output and artifact directories must not be empty".into());
         }
         if self.ntp_servers.len() > MAX_NTP_SERVERS {
             return Err("too many custom NTP servers".into());
@@ -404,8 +409,13 @@ impl AppSettings {
         if self.output_dir.trim().is_empty() || self.output_dir.len() > 4096 {
             return Err("output directory must be non-empty and at most 4096 bytes".into());
         }
-        if self.output_dir.chars().any(|c| c.is_control()) {
-            return Err("output directory cannot contain control characters".into());
+        if self.artifact_root.len() > 4096 {
+            return Err("artifact root must be at most 4096 bytes".into());
+        }
+        if self.output_dir.chars().any(|c| c.is_control())
+            || self.artifact_root.chars().any(|c| c.is_control())
+        {
+            return Err("output and artifact directories cannot contain control characters".into());
         }
         if self.ntp_server >= sensor_watch_studio_ntp_server_count(&self.ntp_servers) {
             return Err("selected NTP server is out of range".into());
@@ -469,6 +479,10 @@ impl AppSettings {
             settings.developer_mode = settings.legacy_advanced_mode;
         }
         migrate_component_profiles(&mut settings, &value);
+        // Older settings called the configured-build root `output_dir`.
+        if value.get("artifact_root").is_none() {
+            settings.artifact_root = settings.output_dir.clone();
+        }
         // Compatibility migration for settings written before face identity
         // became case-insensitive. It is order-preserving and idempotent.
         settings.presets.migrate_face_duplicates();
@@ -497,6 +511,7 @@ impl Default for AppSettings {
             modules: ModuleManager::default(),
             data_folder: default_data_folder(),
             output_dir: default_output_dir(),
+            artifact_root: default_output_dir(),
             first_run: true,
             tour_claims: Vec::new(),
             persist_user_changes: true,

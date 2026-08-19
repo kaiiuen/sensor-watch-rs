@@ -262,6 +262,9 @@ struct StudioApp {
     modules: modules::ModuleManager,
     /// The output directory for built artifacts (e.g. the .uf2).
     output_dir: String,
+    /// Pending configured-build artifact root; applied only after validation.
+    pending_artifact_root: String,
+    artifact_root_status: String,
     /// Pending user-entered data root; changes apply on next launch only.
     pending_data_folder: String,
     /// Inline validation/status for the pending data root.
@@ -1083,7 +1086,15 @@ impl Default for StudioApp {
             pending_checksum: None,
             watch_config: watch_config::WatchConfig::default(),
             modules: modules::ModuleManager::default(),
-            output_dir: settings::default_output_dir(),
+            output_dir: storage::default_artifact_root(&distribution::active().user_data_root)
+                .display()
+                .to_string(),
+            pending_artifact_root: storage::default_artifact_root(
+                &distribution::active().user_data_root,
+            )
+            .display()
+            .to_string(),
+            artifact_root_status: String::new(),
             pending_data_folder: bootstrap_preferences.data_folder.clone(),
             data_folder_status: String::new(),
             module_name: String::new(),
@@ -3252,8 +3263,18 @@ impl StudioApp {
             return;
         }
         let build_fingerprint = plan.request_identity.clone();
-        let out = match storage::artifact_paths(
-            &self.package_status.user_data_root,
+        if let Err(reason) = storage::validate_artifact_root(
+            std::path::Path::new(&self.output_dir),
+            self.package_status.root.as_deref(),
+        ) {
+            self.build_message = format!("Build artifact root rejected: {reason}");
+            self.status = self.build_message.clone();
+            self.build_estimator_state = BuildEstimatorState::Failed(reason.clone());
+            self.push_terminal(self.build_message.clone());
+            return;
+        }
+        let output = match storage::artifact_paths(
+            std::path::Path::new(&self.output_dir),
             plan.request.board.label(),
             &plan.request.revision,
             &plan.request.profile.name,
@@ -3276,7 +3297,7 @@ impl StudioApp {
         }
         let request = plan.request;
         self.pending_build = Some(std::thread::spawn(move || {
-            build::build_firmware(request, &out)
+            build::build_firmware(request, &output)
         }));
     }
 
@@ -8154,15 +8175,51 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
-        ui.heading("Output Directory");
-        ui.label("Where built .uf2 files are written. Defaults to your Documents folder so it works even when running from a read-only location.");
+        // Configured-build artifact root. The pending value is inert until Apply.
+        ui.heading("Configured-build artifact root");
+        ui.label("Artifacts use firmware/<board>/<revision>/<profile>/latest under this root. Package/version directories are never writable.");
         ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.output_dir);
-            if ui.button("Reset to default").clicked() {
-                self.output_dir = settings::default_output_dir();
+            ui.text_edit_singleline(&mut self.pending_artifact_root);
+            if ui.button("Validate").clicked() {
+                self.artifact_root_status = match self.validate_artifact_root_ui() {
+                    Ok(path) if path.is_dir() => {
+                        format!("Valid existing folder: {}", path.display())
+                    }
+                    Ok(path) => format!("Valid, not yet created: {}", path.display()),
+                    Err(error) => format!("Invalid artifact root: {error}"),
+                };
+            }
+            if ui.button("Create folder").clicked() {
+                self.create_artifact_root_ui();
+            }
+            if ui.button("Use default").clicked() {
+                self.pending_artifact_root =
+                    self.package_status.user_data_root.display().to_string();
+                self.artifact_root_status = "Default selected; click Apply/save to use it".into();
+            }
+            if ui.button("Apply/save").clicked() {
+                self.apply_artifact_root();
             }
         });
-        ui.weak("The output dir is created automatically if it doesn't exist.");
+        if !self.artifact_root_status.is_empty() {
+            ui.colored_label(egui::Color32::YELLOW, &self.artifact_root_status);
+        }
+        let root = std::path::Path::new(&self.output_dir);
+        let plan = self.current_build_plan();
+        if let Ok(paths) = storage::artifact_paths(
+            root,
+            plan.request.board.label(),
+            &plan.request.revision,
+            &plan.request.profile.name,
+        ) {
+            ui.monospace(format!("Resolved output: {}", paths.latest.display()));
+            ui.monospace(format!(
+                "Files: {}, {}, {}",
+                paths.uf2.display(),
+                paths.manifest.display(),
+                paths.sidecar.display()
+            ));
+        }
 
         ui.add_space(8.0);
         egui::CollapsingHeader::new("Storage & output details")
@@ -8170,13 +8227,17 @@ impl StudioApp {
             .show(ui, |ui| {
                 ui.weak("Measured values are read from existing files only; no build or target directories are scanned.");
                 let output_path = std::path::Path::new(&self.output_dir);
-                ui.label(format!("Output directory: {}", output_path.display()));
+                ui.label(format!("Artifact root: {}", output_path.display()));
                 match measure_directory(output_path) {
                     Some((files, bytes)) => {
                         ui.monospace(format!("Measured output files: {files} files, {}", fmt_bytes(bytes)));
                     }
                     None => {
-                        ui.weak("Measured output files: unavailable (directory does not exist or could not be read).");
+                        if storage::validate_artifact_root(output_path, self.package_status.root.as_deref()).is_ok() && !output_path.exists() {
+                            ui.weak("Measured output files: not yet created (the validated root does not exist yet).");
+                        } else {
+                            ui.weak("Measured output files: unavailable (directory is invalid or could not be read).");
+                        }
                     }
                 }
                 match self
@@ -8960,6 +9021,37 @@ impl StudioApp {
         }
     }
 
+    fn validate_artifact_root_ui(&mut self) -> Result<std::path::PathBuf, String> {
+        let candidate = std::path::PathBuf::from(self.pending_artifact_root.trim());
+        storage::validate_artifact_root(&candidate, self.package_status.root.as_deref())?;
+        Ok(candidate)
+    }
+
+    fn apply_artifact_root(&mut self) {
+        match self.validate_artifact_root_ui() {
+            Ok(candidate) => {
+                self.output_dir = candidate.display().to_string();
+                self.artifact_root_status = format!("Applied: {}", candidate.display());
+                self.save_settings_unconditionally();
+            }
+            Err(error) => self.artifact_root_status = format!("Invalid artifact root: {error}"),
+        }
+    }
+
+    fn create_artifact_root_ui(&mut self) {
+        match storage::create_artifact_root(
+            std::path::Path::new(self.pending_artifact_root.trim()),
+            self.package_status.root.as_deref(),
+        ) {
+            Ok(()) => {
+                self.artifact_root_status = "Folder created; click Apply/save to use it".into()
+            }
+            Err(error) => {
+                self.artifact_root_status = format!("Cannot create artifact root: {error}")
+            }
+        }
+    }
+
     fn apply_data_folder(&mut self) {
         let candidate = std::path::PathBuf::from(self.pending_data_folder.trim());
         let executable = std::env::current_exe().unwrap_or_default();
@@ -9063,11 +9155,12 @@ impl StudioApp {
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
         self.rtc_calibration = s.rtc_calibration;
-        self.output_dir = if s.output_dir.is_empty() {
-            settings::default_output_dir()
+        self.output_dir = if s.artifact_root.is_empty() {
+            self.package_status.user_data_root.display().to_string()
         } else {
-            s.output_dir
+            s.artifact_root
         };
+        self.pending_artifact_root = self.output_dir.clone();
         self.board = match s.board.as_str() {
             "Red / Lite" | "Red" | "Lite" => Board::RedLite,
             "Blue" => Board::Blue,
@@ -9589,7 +9682,7 @@ fn fmt_bytes(bytes: u64) -> String {
 
 fn print_cli_help() {
     println!(
-        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Build the unconfigured stock firmware (stock path)\n  configured-build --board <BOARD> --revision <REVISION> --profile <PROFILE> --lcd original --preset <NAME> --faces <FACE[,FACE...]> --output <DIR>\n      Build a validated Studio configuration through the isolated ARM pipeline\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
+        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Build the unconfigured stock firmware (stock path)\n  configured-build --board <BOARD> --revision <REVISION> --profile <PROFILE> --lcd original --preset <NAME> --faces <FACE[,FACE...]> --output <DIR>\n      Build under DIR/firmware/<board>/<revision>/<profile>/latest; --output is honored\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
     );
 }
 
@@ -9721,8 +9814,9 @@ fn parse_configured_build(
 }
 
 fn run_configured_build(cli: ConfiguredBuildCli) -> Result<(), String> {
+    storage::validate_artifact_root(&cli.output, distribution::active().root.as_deref())?;
     let output = storage::artifact_paths(
-        &distribution::active().user_data_root,
+        &cli.output,
         cli.request.board.label(),
         &cli.request.revision,
         &cli.request.profile.name,
@@ -9793,6 +9887,24 @@ mod configured_cli_tests {
         args[profile] = "Pro".into();
         let error = parse_configured_build(&mut args.into_iter()).unwrap_err();
         assert!(error.contains("does not match stock board"));
+    }
+
+    #[test]
+    fn configured_output_is_retained_as_the_artifact_root_override() {
+        let parsed = parse_configured_build(&mut valid_args().into_iter()).unwrap();
+        let paths = storage::artifact_paths(
+            &parsed.output,
+            parsed.request.board.label(),
+            &parsed.request.revision,
+            &parsed.request.profile.name,
+        )
+        .unwrap();
+        assert_eq!(
+            paths.latest,
+            std::path::PathBuf::from(
+                "target/test-configured/firmware/Green/OSO-SWAT-A1-05/Green/latest"
+            )
+        );
     }
 
     #[test]
