@@ -163,6 +163,10 @@ struct StudioApp {
     artifact_path_input: String,
     /// A verified artifact awaiting explicit approval.
     pending_artifact: Option<build::ArtifactInspection>,
+    /// The beginner-facing result derived from the most recent inspection.
+    inspection_result: Option<InspectionResultDisplay>,
+    /// The result panel requests one scroll after an inspection worker completes.
+    inspection_scroll_requested: bool,
     /// Configuration fingerprint captured when the pending artifact was verified.
     pending_artifact_fingerprint: Option<String>,
     /// Configuration fingerprint captured when the build was started.
@@ -1021,6 +1025,8 @@ impl Default for StudioApp {
             approved_artifact: initial_flashable_uf2(),
             artifact_path_input: String::new(),
             pending_artifact: None,
+            inspection_result: None,
+            inspection_scroll_requested: false,
             pending_artifact_fingerprint: None,
             pending_build_fingerprint: None,
             // Default to English and Dark.
@@ -4713,10 +4719,23 @@ impl StudioApp {
                 if artifact_actions_blocked {
                     ui.weak("Artifact inspection and approval are disabled while a build is in progress.");
                 }
-                if let Some(inspection) = self.pending_artifact.clone() {
+                if let Some(result) = self.inspection_result.clone() {
+                    let result_response = ui.group(|ui| {
+                        ui.push_id("inspect-result-panel", |ui| {
+                            render_inspection_result(
+                                ui,
+                                &result,
+                                self.pending_artifact.is_some(),
+                                self.approved_artifact.is_some(),
+                            );
+                        });
+                    });
+                    if consume_inspection_scroll_request(&mut self.inspection_scroll_requested) {
+                        result_response.response.scroll_to_me(Some(egui::Align::TOP));
+                    }
+                }
+                if self.pending_artifact.is_some() {
                     ui.group(|ui| {
-                        ui.label("Verification succeeded (local consistency only):");
-                        ui.monospace(artifact_metadata(&inspection));
                         let approve_response = ui.add_enabled(
                             !artifact_actions_blocked,
                             egui::Button::new("Approve for this session"),
@@ -4758,7 +4777,7 @@ impl StudioApp {
                     });
                 }
                 if self.pending_artifact.is_some() {
-                    ui.weak("Artifact inspected; UF2, sidecars, and hashes verified. Approval is still required.");
+                    ui.weak("Artifact inspected. UF2, sidecars, and hashes verified. Approval is still required.");
                 }
                 if self.approved_artifact.is_some() {
                     ui.weak("Artifact approved for this session.");
@@ -9071,6 +9090,9 @@ impl StudioApp {
                 &mut self.pending_artifact,
                 error,
             );
+            self.inspection_result =
+                Some(InspectionResultDisplay::failure(None, &self.build_message));
+            self.inspection_scroll_requested = true;
             self.pending_artifact_fingerprint = None;
             self.build_estimator_state = BuildEstimatorState::Failed(self.build_message.clone());
             self.log_error(&self.build_message.clone());
@@ -9098,6 +9120,8 @@ impl StudioApp {
         self.build_message = self.status.clone();
         self.pending_artifact = None;
         self.pending_artifact_fingerprint = None;
+        self.inspection_result = None;
+        self.inspection_scroll_requested = false;
         self.pending_inspection = Some(std::thread::spawn(move || build::inspect_artifact(&path)));
     }
 
@@ -9200,6 +9224,7 @@ impl StudioApp {
             Ok(Ok(inspection)) => {
                 let path = inspection.path.display().to_string();
                 let metadata = artifact_metadata(&inspection);
+                self.inspection_result = Some(InspectionResultDisplay::success(&inspection));
                 set_verified_artifact_state(
                     &mut self.status,
                     &mut self.build_message,
@@ -9209,6 +9234,7 @@ impl StudioApp {
                     false,
                 );
                 self.pending_artifact_fingerprint = Some(self.build_configuration_fingerprint());
+                self.inspection_scroll_requested = true;
                 self.build_estimator_state = BuildEstimatorState::Verified;
                 self.log
                     .log(format!("UF2 inspection succeeded: {path}\n{metadata}"));
@@ -9217,6 +9243,7 @@ impl StudioApp {
                 self.push_terminal(format!("UF2 inspection succeeded: {path}"));
             }
             Ok(Err(error)) => {
+                let error_for_display = error.clone();
                 set_failed_artifact_state(
                     &mut self.status,
                     &mut self.build_message,
@@ -9224,6 +9251,11 @@ impl StudioApp {
                     &mut self.pending_artifact,
                     error,
                 );
+                self.inspection_result = Some(InspectionResultDisplay::failure(
+                    Some(self.artifact_path_input.trim()),
+                    &error_for_display,
+                ));
+                self.inspection_scroll_requested = true;
                 self.pending_artifact_fingerprint = None;
                 self.build_estimator_state =
                     BuildEstimatorState::Failed(self.build_message.clone());
@@ -9240,6 +9272,11 @@ impl StudioApp {
                     &mut self.pending_artifact,
                     error.to_string(),
                 );
+                self.inspection_result = Some(InspectionResultDisplay::failure(
+                    Some(self.artifact_path_input.trim()),
+                    error,
+                ));
+                self.inspection_scroll_requested = true;
                 self.pending_artifact_fingerprint = None;
                 self.build_estimator_state =
                     BuildEstimatorState::Failed(self.build_message.clone());
@@ -10639,6 +10676,234 @@ fn set_failed_artifact_state(
     *pending_artifact = None;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InspectionResultSection {
+    title: &'static str,
+    rows: Vec<(String, String)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InspectionResultDisplay {
+    success: bool,
+    sections: Vec<InspectionResultSection>,
+}
+
+impl InspectionResultDisplay {
+    fn success(inspection: &build::ArtifactInspection) -> Self {
+        let provenance = if inspection.generated_input_digest.is_empty() {
+            "Not present. Approval remains blocked".to_string()
+        } else {
+            format!("Present: {}", inspection.generated_input_digest)
+        };
+        Self {
+            success: true,
+            sections: vec![
+                InspectionResultSection {
+                    title: "Inspection summary",
+                    rows: vec![
+                        ("Result".into(), "Local inspection passed".into()),
+                        (
+                            "Scope".into(),
+                            "UF2 structure and required sidecars were checked".into(),
+                        ),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "Path and sidecars",
+                    rows: vec![
+                        ("UF2 path".into(), inspection.path.display().to_string()),
+                        (
+                            "Manifest sidecar".into(),
+                            format!(
+                                "{} exists",
+                                inspection.path.with_extension("uf2.json").display()
+                            ),
+                        ),
+                        (
+                            "Digest sidecar".into(),
+                            format!(
+                                "{} exists",
+                                inspection.path.with_extension("json.sig").display()
+                            ),
+                        ),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "UF2 structure",
+                    rows: vec![
+                        (
+                            "File size".into(),
+                            format!("{} bytes", inspection.uf2_bytes),
+                        ),
+                        ("Blocks".into(), inspection.uf2_blocks.clone()),
+                        (
+                            "Payload".into(),
+                            format!("{} bytes", inspection.payload_bytes),
+                        ),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "Family and board",
+                    rows: vec![
+                        ("UF2 family ID".into(), inspection.family_id.clone()),
+                        (
+                            "Board identity".into(),
+                            "Not established by local inspection".into(),
+                        ),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "Hashes",
+                    rows: vec![
+                        ("UF2 SHA-256".into(), inspection.sha256.clone()),
+                        ("Payload SHA-256".into(), inspection.payload_sha256.clone()),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "Manifest and sidecars",
+                    rows: vec![
+                        ("Generation".into(), inspection.generation.clone()),
+                        ("Manifest digest".into(), inspection.manifest_digest.clone()),
+                        (
+                            "Sidecar check".into(),
+                            "Manifest digest sidecar matches".into(),
+                        ),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "Generated-input provenance",
+                    rows: vec![("Generated-input digest".into(), provenance)],
+                },
+                InspectionResultSection {
+                    title: "Local integrity versus authenticity",
+                    rows: vec![
+                        (
+                            "Local integrity".into(),
+                            "Established for the checked UF2 and sidecars".into(),
+                        ),
+                        (
+                            "Authenticity".into(),
+                            "Not established. No trusted publisher signature was verified".into(),
+                        ),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "Approval state",
+                    rows: vec![(
+                        "State".into(),
+                        "Verified locally. Explicit approval is required".into(),
+                    )],
+                },
+                InspectionResultSection {
+                    title: "Next action",
+                    rows: vec![(
+                        "Action".into(),
+                        "Review this exact artifact, then approve it for this session".into(),
+                    )],
+                },
+            ],
+        }
+    }
+
+    fn failure(path: Option<&str>, error: &str) -> Self {
+        let path = path
+            .filter(|path| !path.is_empty())
+            .unwrap_or("Not available");
+        Self {
+            success: false,
+            sections: vec![
+                InspectionResultSection {
+                    title: "Inspection summary",
+                    rows: vec![("Result".into(), format!("Inspection failed: {error}"))],
+                },
+                InspectionResultSection {
+                    title: "Path and sidecars",
+                    rows: vec![
+                        ("UF2 path".into(), path.into()),
+                        (
+                            "Required files".into(),
+                            "UF2, .uf2.json, and .json.sig were not all verified".into(),
+                        ),
+                    ],
+                },
+                InspectionResultSection {
+                    title: "Local integrity versus authenticity",
+                    rows: vec![(
+                        "Meaning".into(),
+                        "Local integrity was not established. Authenticity was not established"
+                            .into(),
+                    )],
+                },
+                InspectionResultSection {
+                    title: "Approval state",
+                    rows: vec![(
+                        "State".into(),
+                        "Not approved. Flashing remains blocked".into(),
+                    )],
+                },
+                InspectionResultSection {
+                    title: "Next action",
+                    rows: vec![(
+                        "Action".into(),
+                        "Fix the reported path or sidecar issue, then inspect again".into(),
+                    )],
+                },
+            ],
+        }
+    }
+}
+
+fn inspection_approval_label(pending: bool, approved: bool) -> &'static str {
+    if approved {
+        "Approved for this session"
+    } else if pending {
+        "Verified locally. Approval is required"
+    } else {
+        "No approval is active"
+    }
+}
+
+fn consume_inspection_scroll_request(requested: &mut bool) -> bool {
+    if *requested {
+        *requested = false;
+        true
+    } else {
+        false
+    }
+}
+
+fn render_inspection_result(
+    ui: &mut egui::Ui,
+    result: &InspectionResultDisplay,
+    pending: bool,
+    approved: bool,
+) {
+    ui.push_id("inspection-result-content", |ui| {
+        ui.heading(if result.success {
+            "Inspection result"
+        } else {
+            "Inspection could not be completed"
+        });
+        for section in &result.sections {
+            ui.push_id(section.title, |ui| {
+                ui.strong(section.title);
+                for (label, value) in &section.rows {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(format!("{label}:"));
+                        ui.monospace(value);
+                    });
+                }
+                ui.add_space(3.0);
+            });
+        }
+        if result.success {
+            let approval = inspection_approval_label(pending, approved);
+            ui.label(format!("Approval state: {approval}"));
+            ui.label("Authenticity is not established by local inspection");
+        }
+    });
+}
+
 fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
     format!(
         "Path: {}\nGeneration: {}\nFamily: {}\nUF2: {} bytes / {} blocks\nPayload: {} bytes\nUF2 SHA-256: {}\nPayload SHA-256: {}\nManifest digest: {}\nGenerated-input digest: {}",
@@ -10679,11 +10944,12 @@ mod tests {
     use super::Board;
     use super::{
         approve_artifact_state, clamp_sim_weekday, configuration_fingerprint,
-        contextual_help_allowed, credit_matches, flashable_uf2_after_build, initial_flashable_uf2,
-        invalidate_stale_artifact_state, preset_name, set_failed_artifact_state,
-        set_verified_artifact_state, sim_weekday_name, verified_artifact_after_build,
-        verify_artifact_manifest, ApprovedArtifact, CreditEntry, WatchDriveSelection,
-        ARTIFACT_APPROVED_STATUS, ARTIFACT_BUSY_STATUS, ARTIFACT_VERIFICATION_FAILED_STATUS,
+        consume_inspection_scroll_request, contextual_help_allowed, credit_matches,
+        flashable_uf2_after_build, initial_flashable_uf2, invalidate_stale_artifact_state,
+        preset_name, set_failed_artifact_state, set_verified_artifact_state, sim_weekday_name,
+        verified_artifact_after_build, verify_artifact_manifest, ApprovedArtifact, CreditEntry,
+        InspectionResultDisplay, WatchDriveSelection, ARTIFACT_APPROVED_STATUS,
+        ARTIFACT_BUSY_STATUS, ARTIFACT_VERIFICATION_FAILED_STATUS,
         ARTIFACT_VERIFIED_PENDING_STATUS, CREDIT_GROUPS, FIRST_RUN_STEPS, HELP_CARD_LAYER_ORDER,
         HELP_DIM_LAYER_ORDER,
     };
@@ -11746,6 +12012,89 @@ mod tests {
         };
 
         assert_eq!(flashable_uf2_after_build(&result), None);
+    }
+
+    #[test]
+    fn inspection_result_derivation_has_beginner_sections_and_labeled_values() {
+        let inspection = test_inspection("firmware.uf2");
+        let result = InspectionResultDisplay::success(&inspection);
+        assert!(result.success);
+        for title in [
+            "Inspection summary",
+            "Path and sidecars",
+            "UF2 structure",
+            "Family and board",
+            "Hashes",
+            "Manifest and sidecars",
+            "Generated-input provenance",
+            "Local integrity versus authenticity",
+            "Approval state",
+            "Next action",
+        ] {
+            assert!(result.sections.iter().any(|section| section.title == title));
+        }
+        assert!(result
+            .sections
+            .iter()
+            .flat_map(|section| section.rows.iter())
+            .any(|(label, value)| label == "UF2 path" && value == "firmware.uf2"));
+    }
+
+    #[test]
+    fn inspection_result_derivation_covers_failure_missing_sidecars_and_provenance() {
+        let failure =
+            InspectionResultDisplay::failure(Some("missing.uf2"), "cannot read manifest sidecar");
+        assert!(!failure.success);
+        assert!(failure
+            .sections
+            .iter()
+            .flat_map(|section| section.rows.iter())
+            .any(|(_, value)| value.contains("cannot read manifest sidecar")));
+
+        let mut inspection = test_inspection("no-provenance.uf2");
+        inspection.generated_input_digest.clear();
+        let result = InspectionResultDisplay::success(&inspection);
+        assert!(result
+            .sections
+            .iter()
+            .flat_map(|section| section.rows.iter())
+            .any(|(label, value)| label == "Generated-input digest"
+                && value.contains("Approval remains blocked")));
+    }
+
+    #[test]
+    fn inspection_result_authenticity_wording_does_not_overclaim() {
+        let result = InspectionResultDisplay::success(&test_inspection("firmware.uf2"));
+        let text = format!("{result:?}");
+        assert!(text.contains("Authenticity"));
+        assert!(text.contains("Not established"));
+        assert!(text.contains("Local integrity"));
+    }
+
+    #[test]
+    fn inspection_result_approval_transitions_are_distinct() {
+        let result = InspectionResultDisplay::success(&test_inspection("firmware.uf2"));
+        let mut pending = String::new();
+        let mut approved = String::new();
+        let mut none = String::new();
+        for (value, pending_state, approved_state) in [
+            (&mut pending, true, false),
+            (&mut approved, false, true),
+            (&mut none, false, false),
+        ] {
+            *value = super::inspection_approval_label(pending_state, approved_state).into();
+        }
+        assert!(result.success);
+        assert_ne!(pending, approved);
+        assert_ne!(approved, none);
+    }
+
+    #[test]
+    fn inspection_scroll_request_is_consumed_once() {
+        let mut requested = true;
+        assert!(consume_inspection_scroll_request(&mut requested));
+        assert!(!requested);
+        assert!(!consume_inspection_scroll_request(&mut requested));
     }
 
     fn test_inspection(path: &str) -> super::build::ArtifactInspection {
