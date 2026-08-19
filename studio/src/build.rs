@@ -305,6 +305,29 @@ pub fn missing_configuration_inputs() -> &'static [&'static str] {
     CONFIGURATION_INPUT_CONTRACT
 }
 
+fn artifact_paths_for_output(
+    output_dir: &Path,
+    board: &str,
+    revision: &str,
+    profile: &str,
+) -> Result<crate::storage::ArtifactPaths, String> {
+    // Studio passes the resolved `.../firmware/<board>/<revision>/<profile>/latest`
+    // directory to the build worker. Walk back over that fixed layout rather than
+    // consulting distribution state, which may describe a different root.
+    let mut artifact_root = output_dir.to_path_buf();
+    for _ in 0..5 {
+        artifact_root = artifact_root
+            .parent()
+            .ok_or("output directory does not have the configured artifact layout")?
+            .to_path_buf();
+    }
+    let paths = crate::storage::artifact_paths(&artifact_root, board, revision, profile)?;
+    if paths.latest != output_dir {
+        return Err("output directory does not match the configured artifact layout".into());
+    }
+    Ok(paths)
+}
+
 /// Runs the full firmware build: cargo build, extract the raw binary, and
 /// convert it to a `.uf2` file in the given output directory.
 pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> BuildResult {
@@ -487,15 +510,49 @@ pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> Build
         };
     }
     match publish_uf2_with_input_digest(output_dir, &uf2, &uf2_data, &generated.digest) {
-        Ok(()) => BuildResult {
-            success: true,
-            message: format!(
-                "Built {} bytes of firmware -> {} bytes of UF2",
-                image.len(),
-                uf2_data.len()
-            ),
-            uf2_path: Some(uf2),
-        },
+        Ok(()) => {
+            let paths = match artifact_paths_for_output(
+                output_dir,
+                request.board.label(),
+                &request.revision,
+                &request.profile.name,
+            ) {
+                Ok(paths) => paths,
+                Err(error) => {
+                    return BuildResult {
+                        success: false,
+                        message: error,
+                        uf2_path: None,
+                    }
+                }
+            };
+            if let Err(error) = crate::storage::write_latest_atomic(
+                &paths,
+                &crate::storage::LatestMetadata {
+                    format: "sensor-watch-latest-v1".into(),
+                    board: request.board.label().into(),
+                    revision: request.revision.clone(),
+                    profile: request.profile.name.clone(),
+                    generated_input_digest: generated.digest.clone(),
+                    artifact: uf2.display().to_string(),
+                },
+            ) {
+                return BuildResult {
+                    success: false,
+                    message: error,
+                    uf2_path: None,
+                };
+            }
+            BuildResult {
+                success: true,
+                message: format!(
+                    "Built {} bytes of firmware -> {} bytes of UF2",
+                    image.len(),
+                    uf2_data.len()
+                ),
+                uf2_path: Some(uf2),
+            }
+        }
         Err(message) => BuildResult {
             success: false,
             message,
@@ -657,7 +714,18 @@ where
     }
 
     if had_old {
-        let recovery_dir = output_dir.join("recovery").join("generations");
+        let recovery_dir =
+            if output_dir.file_name().and_then(|name| name.to_str()) == Some("latest") {
+                // Keep recovery beside the configured root, not beside the package
+                // and not in the default root when a custom root is selected.
+                let mut root = output_dir.to_path_buf();
+                for _ in 0..5 {
+                    root.pop();
+                }
+                root.join("recovery").join("generations")
+            } else {
+                output_dir.join("recovery").join("generations")
+            };
         if let Err(e) = std::fs::create_dir_all(&recovery_dir) {
             rollback(&mut retained_generation);
             return Err(format!(
@@ -1179,6 +1247,47 @@ mod tests {
         assert!(result.message.contains("unsupported"));
         assert!(result.uf2_path.is_none());
         assert!(!output.exists());
+    }
+
+    #[test]
+    fn custom_artifact_root_receives_uf2_and_latest_pointer() {
+        let custom_root = temp_root("custom-artifact-root");
+        let default_root = temp_root("default-artifact-root");
+        let custom =
+            super::super::storage::artifact_paths(&custom_root, "Green", "rev-a", "stock").unwrap();
+        let default =
+            super::super::storage::artifact_paths(&default_root, "Green", "rev-a", "stock")
+                .unwrap();
+        std::fs::create_dir_all(&custom.latest).unwrap();
+        let uf2_data = sensor_watch_core::uf2::convert_to_uf2(&[42; 1024]);
+
+        publish_uf2_with_input_digest(
+            &custom.latest,
+            &custom.uf2,
+            &uf2_data,
+            "custom-input-digest",
+        )
+        .unwrap();
+        let paths = artifact_paths_for_output(&custom.latest, "Green", "rev-a", "stock").unwrap();
+        super::super::storage::write_latest_atomic(
+            &paths,
+            &super::super::storage::LatestMetadata {
+                format: "sensor-watch-latest-v1".into(),
+                board: "Green".into(),
+                revision: "rev-a".into(),
+                profile: "stock".into(),
+                generated_input_digest: "custom-input-digest".into(),
+                artifact: "sensor-watch.uf2".into(),
+            },
+        )
+        .unwrap();
+
+        assert!(custom.uf2.is_file());
+        assert!(custom.latest_json.is_file());
+        assert!(!default.uf2.exists());
+        assert!(!default.latest_json.exists());
+        let _ = std::fs::remove_dir_all(custom_root);
+        let _ = std::fs::remove_dir_all(default_root);
     }
 
     #[test]
