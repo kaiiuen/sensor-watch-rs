@@ -29,6 +29,7 @@ mod integrity;
 mod master_clock;
 mod modules;
 mod ntp;
+mod ntp_catalog;
 mod optical;
 mod panic_map;
 mod persist;
@@ -241,6 +242,8 @@ struct StudioApp {
     ntp_edit_host: String,
     /// The custom NTP server currently being edited, if any.
     ntp_edit_index: Option<usize>,
+    /// Counts from the most recent offline NTP catalog import.
+    ntp_import_summary: Option<String>,
     /// The NTP-derived UTC time (seconds since epoch), if fetched.
     ntp_time: Option<u64>,
     /// The NTP ping latency in ms.
@@ -1077,6 +1080,7 @@ impl Default for StudioApp {
             ntp_edit_name: String::new(),
             ntp_edit_host: String::new(),
             ntp_edit_index: None,
+            ntp_import_summary: None,
             ntp_time: None,
             ntp_ping: 0.0,
             ntp_offset: 0.0,
@@ -2900,6 +2904,12 @@ impl StudioApp {
                 ui.add_space(4.0);
                 ui.collapsing("Manage custom servers", |ui| {
                     ui.horizontal(|ui| {
+                        if ui.button("Import Master Clock server list").clicked() {
+                            self.import_master_clock_ntp_catalog();
+                        }
+                        ui.label("Offline JSON only; does not launch Master Clock or fetch NTP.");
+                    });
+                    ui.horizontal(|ui| {
                         ui.label("Name:");
                         ui.text_edit_singleline(&mut self.ntp_edit_name);
                         ui.label("Host:");
@@ -2972,6 +2982,10 @@ impl StudioApp {
                         }
                     }
                 });
+
+                if let Some(summary) = &self.ntp_import_summary {
+                    ui.small(summary);
+                }
 
                 // Show the fetched time.
                 if let Some(ts) = self.ntp_time {
@@ -3342,6 +3356,53 @@ impl StudioApp {
             self.build_message = self.status.clone();
             self.build_estimator_state = BuildEstimatorState::Failed(self.status.clone());
         }
+    }
+
+    /// Imports a user-selected neutral catalog without launching Master Clock or
+    /// performing DNS/NTP work. The old list is restored if persistence fails.
+    fn import_master_clock_ntp_catalog(&mut self) {
+        let fallback = self.package_status.user_data_root.clone();
+        let Some(path) = pickers::pick_file(
+            pickers::FilePickerKind::MasterClockNtpCatalog,
+            "",
+            &fallback,
+        ) else {
+            return;
+        };
+        let bytes = match std::fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                self.status = format!("NTP catalog could not be read: {error}");
+                return;
+            }
+        };
+        let (entries, report) = match ntp_catalog::parse(&bytes, &self.ntp_servers) {
+            Ok(result) => result,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        let previous = self.ntp_servers.clone();
+        self.ntp_servers.extend(
+            entries
+                .into_iter()
+                .map(|entry| (entry.name, entry.hostname)),
+        );
+        if !self.save_settings_internal() {
+            self.ntp_servers = previous;
+            self.status =
+                "NTP catalog import rolled back because settings could not be saved".into();
+            return;
+        }
+        let summary = format!(
+            "Master Clock NTP import: {} imported, {} skipped, {} rejected",
+            report.imported, report.skipped, report.rejected
+        );
+        self.ntp_import_summary = Some(summary.clone());
+        self.status = summary;
+        self.log
+            .log(format!("Imported NTP catalog from {}", path.display()));
     }
 
     /// Fetches the current time from the selected NTP server on a background thread.
@@ -8920,15 +8981,15 @@ impl StudioApp {
     }
 
     /// Persists the current settings to the active profile.
-    fn save_settings_internal(&mut self) {
+    fn save_settings_internal(&mut self) -> bool {
         if !self.persist_user_changes {
-            return;
+            return true;
         }
-        self.save_settings_unconditionally();
+        self.save_settings_unconditionally()
     }
 
     /// Performs an explicit settings save, including when automatic persistence is off.
-    fn save_settings_unconditionally(&mut self) {
+    fn save_settings_unconditionally(&mut self) -> bool {
         let settings = settings::AppSettings::capture(
             self.language,
             self.theme,
@@ -8960,15 +9021,17 @@ impl StudioApp {
         .with_developer_mode(self.advanced_mode)
         .with_panel_ux_overrides(self.panel_ux_overrides.clone())
         .with_data_folder(self.pending_data_folder.clone());
-        match persist::save(&settings) {
-            Ok(_) => {}
+        let saved = match persist::save(&settings) {
+            Ok(_) => true,
             Err(e) => {
                 self.status = format!("Failed to persist settings: {e}");
                 self.log_error(&format!("Failed to persist settings: {e}"));
                 self.push_terminal(format!("Settings persistence failed: {e}"));
+                false
             }
-        }
+        };
         self.save_bootstrap_preferences();
+        saved
     }
 
     fn export_settings(&mut self) {

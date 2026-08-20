@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 pub enum FilePickerKind {
     Uf2,
     MasterClock,
+    MasterClockNtpCatalog,
 }
 
 impl FilePickerKind {
@@ -13,6 +14,7 @@ impl FilePickerKind {
         match self {
             Self::Uf2 => ("UF2 firmware", &["uf2"]),
             Self::MasterClock => ("Master Clock executable", &["exe"]),
+            Self::MasterClockNtpCatalog => ("Master Clock NTP catalog", &["json"]),
         }
     }
 
@@ -24,6 +26,10 @@ impl FilePickerKind {
                 .and_then(|ext| ext.to_str())
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("uf2")),
             Self::MasterClock => name == Some("master-clock.exe"),
+            Self::MasterClockNtpCatalog => path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("json")),
         }
     }
 }
@@ -100,6 +106,7 @@ mod tests {
     fn filters_match_picker_kind() {
         assert_eq!(FilePickerKind::Uf2.filter().1, &["uf2"]);
         assert_eq!(FilePickerKind::MasterClock.filter().1, &["exe"]);
+        assert_eq!(FilePickerKind::MasterClockNtpCatalog.filter().1, &["json"]);
     }
 
     #[test]
