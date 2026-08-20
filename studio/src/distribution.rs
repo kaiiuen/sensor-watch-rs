@@ -86,6 +86,10 @@ pub struct PackageStatus {
 
 static ACTIVE: OnceLock<PackageStatus> = OnceLock::new();
 
+pub fn package_root_for_executable(executable: &Path) -> Option<PathBuf> {
+    discover_package(executable).map(|(root, _)| root)
+}
+
 pub fn developer_mode_requested() -> bool {
     std::env::var(DEVELOPER_MODE_ENV)
         .map(|value| matches!(value.as_str(), "1" | "true" | "yes"))
@@ -150,10 +154,13 @@ pub fn resolve_with_user_data(
     portable: bool,
     explicit_user_data: Option<PathBuf>,
 ) -> PackageStatus {
-    let user_data_root = explicit_user_data.unwrap_or_else(crate::data_dir::default_path);
     if let Some((root, manifest)) = discover_package(executable) {
+        // A package owns its mutable state. The platform default is never a
+        // packaged fallback; only an explicitly selected custom root may differ.
+        let user_data_root = explicit_user_data.unwrap_or_else(|| root.join("user-data"));
         return package_status(root, manifest, user_data_root, portable);
     }
+    let user_data_root = explicit_user_data.unwrap_or_else(crate::data_dir::default_path);
     if developer_mode {
         let project = developer_workspace.filter(|path| path.is_dir());
         let mut warnings = Vec::new();
@@ -222,13 +229,19 @@ fn package_status(
     installed_root: PathBuf,
     explicit_portable: bool,
 ) -> PackageStatus {
-    let storage = crate::storage::roots(
+    // `installed_root` already contains the resolved package-local default or
+    // an explicit custom override. Do not let the portable flag replace that
+    // choice with a second implicit root.
+    let mut storage = crate::storage::roots(
         &root.join(&manifest.launcher_executable),
         Some(&root),
         crate::storage::StorageMode::Installed,
-        explicit_portable,
+        false,
         installed_root,
     );
+    if explicit_portable {
+        storage.mode = crate::storage::StorageMode::Portable;
+    }
     let user_data_root = storage.user_data_root;
     let path = |value: &str| root.join(value);
     let launcher = path(&manifest.launcher_executable);
@@ -418,8 +431,15 @@ fn discover_package(executable: &Path) -> Option<(PathBuf, PackageManifest)> {
             if manifest.schema_version != MANIFEST_SCHEMA || !safe_manifest(&manifest) {
                 return None;
             }
+            let executable_real = executable.canonicalize().ok()?;
             let launcher = directory.join(&manifest.launcher_executable);
-            if launcher.canonicalize().ok()? == executable.canonicalize().ok()? {
+            let launcher_match = launcher.canonicalize().ok() == Some(executable_real.clone());
+            let versioned_match = directory
+                .join(&manifest.app_directory)
+                .canonicalize()
+                .ok()
+                .is_some_and(|app| executable_real.parent() == Some(app.as_path()));
+            if launcher_match || versioned_match {
                 return Some((directory, manifest));
             }
         }
@@ -587,15 +607,67 @@ mod tests {
     }
 
     #[test]
-    fn separates_user_data_from_package_root() {
+    fn packaged_default_user_data_is_exactly_package_root_user_data() {
         let root = temp("data");
         let exe = root.join("app/sensor-watch-studio.exe");
         std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
         std::fs::write(&exe, b"x").unwrap();
         std::fs::write(root.join(MANIFEST_FILE), manifest()).unwrap();
         let status = resolve(&exe, false, None);
-        assert_ne!(status.user_data_root, root);
+        assert_eq!(status.user_data_root, root.join("user-data"));
+        assert!(!status
+            .user_data_root
+            .to_string_lossy()
+            .contains("FirmwareStudio"));
         std::fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn direct_versioned_launch_uses_the_same_package_root() {
+        let root = temp("versioned");
+        let exe = root.join("versions/2.4.0/studio.exe");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::create_dir_all(root.join("launcher")).unwrap();
+        std::fs::write(
+            root.join("launcher/sensor-watch-studio-launcher.exe"),
+            b"launcher",
+        )
+        .unwrap();
+        let version_manifest = manifest().replace(
+            "\"app_directory\":\"app\"",
+            "\"app_directory\":\"versions/2.4.0\"",
+        );
+        std::fs::write(root.join(MANIFEST_FILE), version_manifest).unwrap();
+        let status = resolve(&exe, false, None);
+        assert_eq!(status.mode, DistributionMode::Packaged);
+        assert_eq!(status.root, Some(root.clone()));
+        assert_eq!(status.user_data_root, root.join("user-data"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+    #[test]
+    fn packaged_unwritable_user_data_does_not_fallback_to_platform_defaults() {
+        let root = temp("unwritable-package");
+        let exe = root.join("app/sensor-watch-studio.exe");
+        let user_data = root.join("not-a-directory");
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"x").unwrap();
+        std::fs::create_dir_all(root.join("launcher")).unwrap();
+        std::fs::write(
+            root.join("launcher/sensor-watch-studio-launcher.exe"),
+            b"launcher",
+        )
+        .unwrap();
+        std::fs::write(&user_data, b"blocked").unwrap();
+        std::fs::write(root.join(MANIFEST_FILE), manifest()).unwrap();
+        let status = resolve_with_user_data(&exe, false, None, false, Some(user_data.clone()));
+        assert_eq!(status.mode, DistributionMode::Packaged);
+        assert_eq!(status.user_data_root, user_data);
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("mutable project unavailable")));
+        assert!(!status.user_data_root.ends_with("FirmwareStudio"));
+        let _ = std::fs::remove_dir_all(root);
     }
     #[test]
     fn developer_fallback_requires_explicit_mode() {

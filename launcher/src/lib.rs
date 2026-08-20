@@ -20,6 +20,10 @@ pub const STATE_FILE: &str = "launcher-state.json";
 pub const STARTUP_MARKER: &str = "startup-success.marker";
 pub const STARTUP_MARKER_ENV: &str = "SENSOR_WATCH_STARTUP_MARKER";
 pub const STARTUP_MARKER_ARG: &str = "--sensor-watch-startup-marker";
+pub const PACKAGE_ROOT_ARG: &str = "--sensor-watch-package-root";
+pub const USER_DATA_ARG: &str = "--sensor-watch-user-data";
+pub const VERSION_ARG: &str = "--sensor-watch-version";
+pub const ATTEMPT_ARG: &str = "--sensor-watch-startup-attempt";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Pointers {
@@ -223,14 +227,34 @@ impl Launcher {
                 return Err(error);
             }
         };
-        let marker = self.user_data.join(format!("{}.marker", unique_token()));
+        let marker = self
+            .user_data
+            .join("update-state")
+            .join(format!("{}.marker", unique_token()));
+        fs::create_dir_all(marker.parent().expect("marker has a parent"))?;
         let _ = fs::remove_file(&marker);
         let mut command = Command::new(&executable);
         command
             .arg(format!("{STARTUP_MARKER_ARG}={}", marker.display()))
+            .arg(format!("{PACKAGE_ROOT_ARG}={}", self.root.display()))
+            .arg(format!("{USER_DATA_ARG}={}", self.user_data.display()))
+            .arg(format!(
+                "{VERSION_ARG}={}",
+                current_version(&self.read_pointers()?)
+            ))
+            .arg(format!(
+                "{ATTEMPT_ARG}={}",
+                marker
+                    .file_stem()
+                    .and_then(|v| v.to_str())
+                    .unwrap_or("startup")
+            ))
+            .arg("--portable=1")
             .env(STARTUP_MARKER_ENV, &marker)
+            .env("SENSOR_WATCH_PACKAGE_ROOT", &self.root)
             .env("SENSOR_WATCH_USER_DATA", &self.user_data)
-            .current_dir(self.user_data.parent().unwrap_or(&self.user_data));
+            .env("SENSOR_WATCH_PORTABLE", "1")
+            .current_dir(&self.root);
         let mut child = match command.spawn() {
             Ok(child) => child,
             Err(error) => {
@@ -344,6 +368,10 @@ fn atomic_replace(from: &Path, to: &Path) -> Result<(), LauncherError> {
 #[cfg(not(windows))]
 fn atomic_replace(from: &Path, to: &Path) -> Result<(), LauncherError> {
     fs::rename(from, to).map_err(LauncherError::Io)
+}
+
+fn current_version(pointers: &Pointers) -> &str {
+    pointers.current.as_deref().unwrap_or("unknown")
 }
 
 fn unique_token() -> String {

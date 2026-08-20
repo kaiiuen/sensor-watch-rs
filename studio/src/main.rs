@@ -10080,8 +10080,19 @@ fn main() -> eframe::Result<()> {
     // They identify one version/attempt and must never be treated as commands.
     let (mut startup, studio_args) = update::parse_startup_context(std::env::args().skip(1));
     let executable = std::env::current_exe().unwrap_or_default();
-    let portable_requested = startup.portable || storage::has_valid_portable_flag(&executable);
-    let user_data = if portable_requested {
+    let packaged_root = startup
+        .package_root
+        .clone()
+        .or_else(|| distribution::package_root_for_executable(&executable));
+    let portable_requested = packaged_root.is_some()
+        || startup.portable
+        || storage::has_valid_portable_flag(&executable);
+    let user_data = if let Some(root) = packaged_root.as_ref() {
+        startup
+            .user_data
+            .clone()
+            .unwrap_or_else(|| root.join("user-data"))
+    } else if portable_requested {
         executable
             .parent()
             .and_then(std::path::Path::parent)
@@ -10100,9 +10111,10 @@ fn main() -> eframe::Result<()> {
 
     // Recover an interrupted local package activation before any distribution,
     // resource, or project initialization can select the new version.
-    let package_root = executable
-        .parent()
-        .map(|path| path.join("versions"))
+    let package_root = packaged_root
+        .as_ref()
+        .map(|root| root.join("versions"))
+        .or_else(|| executable.parent().map(|path| path.join("versions")))
         .unwrap_or_else(|| std::path::PathBuf::from("versions"));
     let recovery_manager = update::UpdateManager::new(&package_root, &user_data);
     if let Err(error) = recovery_manager.recover_failed_startup() {
@@ -10152,7 +10164,7 @@ fn main() -> eframe::Result<()> {
     ];
     let (root, root_warning) = if data_dir::validate(&requested_root, &protected).is_ok() {
         (requested_root, None)
-    } else if data_dir::validate(&fallback_root, &protected).is_ok() {
+    } else if packaged_root.is_none() && data_dir::validate(&fallback_root, &protected).is_ok() {
         (
             fallback_root,
             Some("Configured Studio data folder was rejected; using the default folder"),
@@ -10161,10 +10173,16 @@ fn main() -> eframe::Result<()> {
         // This is deliberately a visible degraded mode. Never enable writes
         // against a root that overlaps firmware, output, recovery, or the exe.
         (
-            fallback_root,
-            Some(
-                "Studio data-folder validation failed; running without changing the selected root",
-            ),
+            if packaged_root.is_some() {
+                requested_root
+            } else {
+                fallback_root
+            },
+            Some(if packaged_root.is_some() {
+                "Packaged user-data is unavailable or not writable; choose a writable package root or explicitly select a custom data folder"
+            } else {
+                "Studio data-folder validation failed; running without changing the selected root"
+            }),
         )
     };
     if let Some(warning) = root_warning {

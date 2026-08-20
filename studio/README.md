@@ -166,6 +166,23 @@ are `time`, `settime YYMMDDHHMMSS`, `drift N`, `optical`, `panic`, `events`,
 - **Error counter** - jumps to the Bugs tab
 - **Status** - last status message
 
+## Packaged storage contract
+
+A packaged launch is identified by `sensor-watch-package.json`, whether Studio is
+started by the launcher or directly from `versions/<version>`. Its mutable root
+is exactly `<package root>/user-data`: settings, runtime preferences, restore
+points, the mutable project, logs/exports, update state, startup markers, launcher
+state, UF2 artifacts and latest pointers, and recovery generations all stay below
+that directory. Immutable version directories and bundled templates are never
+used for mutable writes.
+
+The launcher forwards the package root, user-data root, version, attempt, and
+portable context explicitly. A package-root write failure is reported as an
+actionable error; Studio does not silently fall back to Windows AppData,
+Documents, or legacy settings. Developer checkouts may continue to use the
+normal user-scoped defaults. A custom data root is used only when explicitly
+selected by the user, and path/reparse-point validation still applies.
+
 ## Building and all-in-one CLI
 
 Build the GUI with:

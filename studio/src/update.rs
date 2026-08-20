@@ -29,6 +29,7 @@ pub struct StartupContext {
     pub version: Option<String>,
     pub attempt: Option<String>,
     pub user_data: Option<PathBuf>,
+    pub package_root: Option<PathBuf>,
     /// Explicit launcher context; portable mode is never inferred from the exe.
     pub portable: bool,
 }
@@ -61,6 +62,7 @@ where
                     | "--sensor-watch-version"
                     | "--sensor-watch-startup-attempt"
                     | "--sensor-watch-user-data"
+                    | "--sensor-watch-package-root"
             )
             .then(|| args.next())
             .flatten()
@@ -70,6 +72,7 @@ where
             "--sensor-watch-version" => context.version = value,
             "--sensor-watch-startup-attempt" => context.attempt = value,
             "--sensor-watch-user-data" => context.user_data = value.map(PathBuf::from),
+            "--sensor-watch-package-root" => context.package_root = value.map(PathBuf::from),
             "--portable" => {
                 context.portable = value.as_deref().map_or(true, |v| v == "1" || v == "true");
             }
@@ -81,6 +84,14 @@ where
     }
     if context.user_data.is_none() {
         context.user_data = std::env::var_os("SENSOR_WATCH_USER_DATA").map(PathBuf::from);
+    }
+    if context.package_root.is_none() {
+        context.package_root = std::env::var_os("SENSOR_WATCH_PACKAGE_ROOT").map(PathBuf::from);
+    }
+    if !context.portable {
+        context.portable = std::env::var("SENSOR_WATCH_PORTABLE")
+            .map(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
     }
     (context, remaining)
 }
@@ -789,6 +800,7 @@ mod tests {
             version: Some("99.0.0".into()),
             attempt: Some("attempt-1".into()),
             user_data: Some(user_data.clone()),
+            package_root: None,
             portable: false,
         };
         let marker = user_data
