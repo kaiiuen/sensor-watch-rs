@@ -167,8 +167,9 @@ impl LcdVariant {
 mod tests {
     use super::{
         capabilities, capability_chart_cells, capability_chart_rows, default_profiles,
-        effective_config, resolve_conflict, validate_compatibility, BoardKind, BuildProfile,
-        CapabilityStatus, CompatibilitySeverity, ComponentsConfig, ConflictResolution, LcdVariant,
+        effective_config, is_unedited_stock_selection, resolve_conflict, stock_profile_config,
+        stock_profile_index, validate_compatibility, BoardKind, BuildProfile, CapabilityStatus,
+        CompatibilitySeverity, ComponentsConfig, ConflictResolution, LcdVariant,
         CAPABILITY_BOARD_WIDTH, CAPABILITY_CHART, CAPABILITY_CHART_MIN_WIDTH,
         CAPABILITY_NAME_WIDTH, CAPABILITY_VALUE_WIDTH,
     };
@@ -197,6 +198,41 @@ mod tests {
         let mut profile = default_profiles()[3].clone();
         profile.config.buzzer = false;
         assert!(!super::is_legacy_default_profile(3, &profile));
+    }
+
+    #[test]
+    fn every_board_selects_its_matching_stock_profile() {
+        let profiles = default_profiles();
+        for board in BoardKind::ALL {
+            let index = stock_profile_index(board);
+            assert_eq!(index, board as usize);
+            assert_eq!(stock_profile_config(board), profiles[index].config);
+            assert!(is_unedited_stock_selection(
+                board,
+                index,
+                &profiles[index],
+                &profiles[index].config,
+            ));
+        }
+    }
+
+    #[test]
+    fn edited_and_custom_profiles_are_not_auto_selected() {
+        let profiles = default_profiles();
+        let mut edited = profiles[0].clone();
+        edited.config.buzzer = false;
+        assert!(!is_unedited_stock_selection(
+            BoardKind::Green,
+            0,
+            &edited,
+            &edited.config,
+        ));
+        assert!(!is_unedited_stock_selection(
+            BoardKind::Green,
+            4,
+            &profiles[4],
+            &profiles[4].config,
+        ));
     }
 
     #[test]
@@ -607,14 +643,14 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         led: "RGB (red/green/blue)",
         light_sensor: "Onboard IR light sensor",
         thermistor: "Unknown: board/revision-dependent",
-        accelerometer: "Accessory/optional: not built in",
+        accelerometer: "Optional accessory: not onboard",
         buzzer: "Piezo",
         buses: "I2C/SPI available: pin mapping revision-dependent",
         uart: "Multiplexed: not dedicated",
         confidence: "High for RGB/IR: medium for buses",
         source: "Official maintained pin evidence: community IR evidence",
         revision_notes: "Do not generalize across commercial revisions",
-        verification: "Core LED/LCD evidence maintained. Fitted sensors remain revision-sensitive",
+        verification: "Firmware verification: not established here. Hardware validation: fitted sensors remain revision-sensitive",
         programming: "USB Micro-B; UF2 bootloader",
         connector: "Unknown: board/revision-dependent",
     },
@@ -639,16 +675,16 @@ pub const CAPABILITY_CHART: [CapabilityChartRow; 4] = [
         board: "Blue",
         lcd: "Classic LCD",
         led: "Red + blue",
-        light_sensor: "Unknown / revision-dependent",
+        light_sensor: "Unknown: board/revision-dependent",
         thermistor: "Unknown: board/revision-dependent",
-        accelerometer: "Accessory/optional: not built in",
+        accelerometer: "Optional accessory: not onboard",
         buzzer: "Piezo",
         buses: "I2C/SPI available: pin mapping revision-dependent",
         uart: "Multiplexed: not dedicated",
         confidence: "High for red/blue: low for fitted sensors",
         source: "Official maintained pin evidence: community LED evidence",
         revision_notes: "Thermistor and accessory population may vary",
-        verification: "LED colors corrected. Sensor fit remains unknown",
+        verification: "Firmware verification: not established here. Hardware validation: sensor fit remains unknown",
         programming: "Unknown: board/revision-dependent",
         connector: "Unknown: board/revision-dependent",
     },
@@ -1029,6 +1065,29 @@ pub fn default_profiles() -> Vec<BuildProfile> {
 /// Returns whether a persisted profile is byte-for-byte equivalent to a stock
 /// profile from settings schema 1. This deliberately excludes edited profiles
 /// from the stock-default migration.
+pub fn stock_profile_index(board: BoardKind) -> usize {
+    board as usize
+}
+
+pub fn stock_profile_config(board: BoardKind) -> ComponentsConfig {
+    default_profiles()[stock_profile_index(board)]
+        .config
+        .clone()
+}
+
+/// Returns whether the selected profile and requested draft are both the
+/// untouched stock profile for the currently selected board.
+pub fn is_unedited_stock_selection(
+    board: BoardKind,
+    index: usize,
+    profile: &BuildProfile,
+    draft: &ComponentsConfig,
+) -> bool {
+    index == stock_profile_index(board)
+        && *profile == default_profiles()[index]
+        && draft == &profile.config
+}
+
 pub fn is_legacy_default_profile(index: usize, profile: &BuildProfile) -> bool {
     let legacy = match index {
         0 => BuildProfile::new(

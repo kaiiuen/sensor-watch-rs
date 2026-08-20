@@ -2216,6 +2216,30 @@ impl StudioApp {
     ) {
         let previous_board = self.board;
         let previous_effective = self.component_effective.clone();
+        let current_profile = self
+            .component_profiles
+            .get(self.component_profile)
+            .cloned()
+            .unwrap_or_else(|| {
+                components::BuildProfile::new("draft", self.component_draft.clone())
+            });
+        let (profile, draft) = if board != self.board
+            && profile == self.component_profile
+            && components::is_unedited_stock_selection(
+                self.board,
+                self.component_profile,
+                &current_profile,
+                &self.component_draft,
+            ) {
+            let stock_profile = components::stock_profile_index(board);
+            if self.component_profiles.get(stock_profile).is_some() {
+                (stock_profile, components::stock_profile_config(board))
+            } else {
+                (profile, draft)
+            }
+        } else {
+            (profile, draft)
+        };
         let profile_data = self
             .component_profiles
             .get(profile)
@@ -11481,6 +11505,129 @@ mod tests {
     use crate::presets::PresetManager;
     use crate::progress::{self, Phase, ProgressEvent};
     use crate::watch_config;
+
+    #[test]
+    fn target_board_transitions_select_matching_stock_profiles() {
+        let mut app = StudioApp::default();
+        app.board = Board::Green;
+        app.component_profiles = components::default_profiles();
+        app.component_profile = 0;
+        app.component_draft = components::stock_profile_config(Board::Green);
+        app.component_effective = app.component_draft.clone();
+        for board in Board::ALL.into_iter().skip(1) {
+            app.request_component_change(
+                board,
+                app.component_profile,
+                app.component_draft.clone(),
+                format!("Switch to {}", board.label()),
+            );
+            assert_eq!(app.board, board);
+            assert_eq!(app.component_profile, board as usize);
+            assert_eq!(app.component_draft, components::stock_profile_config(board));
+            assert_eq!(app.component_effective, app.component_draft);
+        }
+    }
+
+    #[test]
+    fn edited_stock_and_custom_profiles_preserve_requested_state_for_review() {
+        for profile_index in [0, 4] {
+            let mut app = StudioApp::default();
+            app.board = Board::Green;
+            app.component_profiles = components::default_profiles();
+            app.component_profile = profile_index;
+            app.component_draft = app.component_profiles[profile_index].config.clone();
+            app.component_draft.light_sensor = true;
+            app.component_profiles[profile_index].config = app.component_draft.clone();
+            let requested = app.component_draft.clone();
+
+            app.request_component_change(
+                Board::RedLite,
+                profile_index,
+                requested.clone(),
+                "Switch board".to_string(),
+            );
+
+            assert_eq!(app.board, Board::Green);
+            assert_eq!(app.component_profile, profile_index);
+            assert_eq!(app.component_draft, requested);
+            assert!(app.pending_component_conflict.is_some());
+        }
+    }
+
+    #[test]
+    fn board_change_conflict_request_is_transactional_until_resolved() {
+        let mut app = StudioApp::default();
+        app.board = Board::Green;
+        app.component_profiles = components::default_profiles();
+        app.component_profile = 0;
+        app.component_draft = components::stock_profile_config(Board::Green);
+        app.component_draft.light_sensor = true;
+        app.component_profiles[0].config = app.component_draft.clone();
+        app.component_effective = app.component_draft.clone();
+        let before = (
+            app.board,
+            app.component_profile,
+            app.component_draft.clone(),
+            app.component_effective.clone(),
+        );
+        let requested = app.component_draft.clone();
+        app.request_component_change(
+            Board::RedLite,
+            app.component_profile,
+            requested,
+            "Switch board".to_string(),
+        );
+
+        assert_eq!(app.board, before.0);
+        assert_eq!(app.component_profile, before.1);
+        assert_eq!(app.component_draft, before.2);
+        assert_eq!(app.component_effective, before.3);
+        assert!(app.pending_component_conflict.is_some());
+    }
+
+    #[test]
+    fn persisted_board_and_profile_reconstruct_effective_configuration() {
+        let mut settings = crate::settings::AppSettings::default();
+        settings.board = "Pro".to_string();
+        settings.component_profiles = components::default_profiles();
+        settings.active_component_profile = 3;
+        let mut app = StudioApp::default();
+        app.apply_settings(settings);
+
+        assert_eq!(app.board, Board::Pro);
+        assert_eq!(app.component_profile, 3);
+        assert_eq!(
+            app.component_draft,
+            components::stock_profile_config(Board::Pro)
+        );
+        assert_eq!(app.component_effective, app.component_draft);
+    }
+
+    #[test]
+    fn board_transition_invalidates_estimator_identity() {
+        let mut app = StudioApp {
+            build_estimator_state: BuildEstimatorState::Verified,
+            ..StudioApp::default()
+        };
+        app.board = Board::Green;
+        app.component_profiles = components::default_profiles();
+        app.component_profile = 0;
+        app.component_draft = components::stock_profile_config(Board::Green);
+        app.component_effective = app.component_draft.clone();
+        let before = app.build_configuration_fingerprint();
+        app.request_component_change(
+            Board::RedLite,
+            app.component_profile,
+            app.component_draft.clone(),
+            "Switch board".to_string(),
+        );
+
+        assert_eq!(
+            app.build_estimator_state,
+            BuildEstimatorState::NeedsValidation
+        );
+        assert_ne!(before, app.build_configuration_fingerprint());
+    }
 
     #[test]
     fn effective_component_change_requires_estimator_validation() {
