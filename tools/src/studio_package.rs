@@ -479,6 +479,11 @@ fn add_firmware_tree(
             &["target", ".git"],
         )?;
     }
+    let cargo_config = root.join(".cargo");
+    require_directory(&cargo_config, "firmware Cargo configuration directory")?;
+    let cargo_config = cargo_config.join("config.toml");
+    regular_file(&cargo_config, "required firmware Cargo configuration")?;
+    files.push((format!("{prefix}/.cargo/config.toml"), cargo_config));
     for name in [
         "Cargo.toml",
         "Cargo.lock",
@@ -579,6 +584,7 @@ mod tests {
             "studio/src",
             "src",
             "core",
+            ".cargo",
             "target",
             ".git",
         ] {
@@ -593,6 +599,11 @@ mod tests {
         fs::write(root.join("studio/src/template.rs"), b"template").unwrap();
         fs::write(root.join("src/main.rs"), b"firmware").unwrap();
         fs::write(root.join("core/lib.rs"), b"core").unwrap();
+        fs::write(
+            root.join(".cargo/config.toml"),
+            b"[target.thumbv6m-none-eabi]\nrustflags = [\"-C\", \"linker=flip-link\"]\n",
+        )
+        .unwrap();
         fs::write(root.join("target/secret.txt"), b"secret").unwrap();
         fs::write(root.join(".git/config"), b"secret").unwrap();
         for file in [
@@ -829,6 +840,7 @@ mod tests {
         for required in [
             "/sensor-watch-studio-launcher.exe",
             "/versions/9.8.7/studio.exe",
+            "/firmware/.cargo/config.toml",
             "/versions/current.json",
             "/versions/previous.json",
             "/firmware/src/main.rs",
