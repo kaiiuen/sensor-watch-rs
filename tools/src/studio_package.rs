@@ -505,12 +505,17 @@ fn digest(data: &[u8]) -> String {
         .map(|b| format!("{b:02x}"))
         .collect()
 }
+fn deterministic_zip_datetime() -> zip::DateTime {
+    zip::DateTime::from_date_and_time(1980, 1, 1, 0, 0, 0)
+        .expect("canonical ZIP timestamp must be valid")
+}
+
 fn write_zip(path: &Path, files: &[(String, PathBuf)]) -> ToolResult<()> {
     let file = fs::File::create(path).map_err(|e| format!("cannot create temporary ZIP: {e}"))?;
     let mut zip = ZipWriter::new(file);
     let options = SimpleFileOptions::default()
         .compression_method(CompressionMethod::Deflated)
-        .last_modified_time(zip::DateTime::default());
+        .last_modified_time(deterministic_zip_datetime());
     for (name, source) in files {
         zip.start_file(name, options)
             .map_err(|e| format!("cannot add {name}: {e}"))?;
@@ -723,6 +728,14 @@ mod tests {
             || name.contains(".git/")
             || name.contains("secret")));
         assert!(names.windows(2).all(|pair| pair[0] <= pair[1]));
+        let file = fs::File::open(&first).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        for index in 0..archive.len() {
+            assert_eq!(
+                archive.by_index(index).unwrap().last_modified(),
+                Some(deterministic_zip_datetime())
+            );
+        }
         let _ = fs::remove_dir_all(root);
     }
     #[test]
