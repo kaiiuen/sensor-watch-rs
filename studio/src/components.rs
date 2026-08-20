@@ -4,6 +4,8 @@
 //! deliberately do not alter firmware build flags or pin mappings.
 
 use egui::Ui;
+
+use crate::theme::semantic;
 use serde::{Deserialize, Serialize};
 
 /// Studio's supported board identities. This is a model identity only; it does
@@ -1124,10 +1126,11 @@ pub fn show_configurator(
 ) -> (bool, Option<ProfileSelection>) {
     let mut changed = false;
     let mut profile_selection = None;
+    let colors = semantic(ui);
     ui.strong("Components / Build Profile");
     ui.label("Describe a custom Sensor Watch board or OSO accessory LCD/sensor board.");
     ui.colored_label(
-        egui::Color32::from_rgb(220, 160, 80),
+        colors.warning,
         "UF2 build disabled: this profile is planning data only. It is not a firmware build input.",
     );
     ui.collapsing("Missing Studio-to-firmware input contract", |ui| {
@@ -1169,7 +1172,7 @@ pub fn show_configurator(
             if let Some(profile) = profiles.get_mut(*selected) {
                 let candidate = BuildProfile::new(profile.name.clone(), draft.clone());
                 if let Err(error) = candidate.validate() {
-                    ui.colored_label(egui::Color32::RED, format!("Error: {error}"));
+                    ui.colored_label(colors.error, format!("Error: {error}"));
                 } else {
                     profile.config = draft.clone();
                 }
@@ -1227,10 +1230,16 @@ pub fn show_configurator(
                 })
                 .map(|finding| finding.reason.as_str());
             let response = if let Some(reason) = reason {
-                ui.add_enabled(
-                    false,
-                    egui::Checkbox::new(value, format!("{label}: unavailable: {reason}")),
-                )
+                ui.horizontal(|ui| {
+                    ui.scope(|ui| {
+                        let mut style = ui.style().as_ref().clone();
+                        style.visuals.widgets.noninteractive.fg_stroke.color = colors.disabled_text;
+                        ui.set_style(style);
+                        ui.add_enabled(false, egui::Checkbox::new(value, label));
+                    });
+                    ui.colored_label(colors.disabled_text, format!("Unavailable: {reason}"));
+                });
+                ui.allocate_response(egui::Vec2::ZERO, egui::Sense::hover())
             } else {
                 ui.checkbox(value, label)
             };
@@ -1245,12 +1254,12 @@ pub fn show_configurator(
     let (flash, ram) = estimate(&effective);
     let draft_profile = BuildProfile::new("draft", draft.clone());
     if let Err(error) = draft_profile.validate() {
-        ui.colored_label(egui::Color32::RED, format!("Error: {error}"));
+        ui.colored_label(colors.error, format!("Error: {error}"));
     }
     for finding in validate_compatibility(board, &draft_profile, draft) {
         let color = match finding.severity {
-            CompatibilitySeverity::Error => egui::Color32::RED,
-            CompatibilitySeverity::Warning => egui::Color32::from_rgb(230, 170, 70),
+            CompatibilitySeverity::Error => colors.error,
+            CompatibilitySeverity::Warning => colors.warning,
         };
         ui.colored_label(
             color,
@@ -1275,11 +1284,8 @@ pub fn show_configurator(
         warnings.push("Thermistor is commonly analog. Enabling I2C does not provide an automatic analog pin mapping.");
     }
     for warning in warnings {
-        ui.colored_label(
-            egui::Color32::from_rgb(230, 170, 70),
-            format!("Warning: {warning}"),
-        );
+        ui.colored_label(colors.warning, format!("Warning: {warning}"));
     }
-    ui.weak("Profile edits remain available for planning and review. Studio does not infer pins, buses, addresses, power sequencing, or firmware modules from these choices. The build preflight therefore refuses to generate a configured UF2.");
+    ui.colored_label(colors.secondary_text, "Profile edits remain available for planning and review. Studio does not infer pins, buses, addresses, power sequencing, or firmware modules from these choices. The build preflight therefore refuses to generate a configured UF2.");
     (changed, profile_selection)
 }

@@ -64,7 +64,7 @@ const HELP_CARD_LAYER_ORDER: egui::Order = egui::Order::Foreground;
 
 use flash::{FlashRequest, FlashResult, FlashStatus, WatchDriveSelection};
 use progress::{ProgressEvent, ProgressReceiver};
-use theme::Theme;
+use theme::{semantic, Theme};
 use watch_sim::CasioF91W;
 
 /// The main application state.
@@ -5399,12 +5399,13 @@ impl StudioApp {
     /// Diagnostics deliberately remain simulated; physical diagnostics require
     /// an explicit UART command and are never inferred from this report.
     fn diagnostics(&mut self, ui: &mut egui::Ui) {
+        let colors = semantic(ui);
         ui.heading("Diagnostics");
         if !self
             .panel_ux(Panel::Diagnostics)
             .simulated_diagnostics_visibility
         {
-            ui.weak("Simulated diagnostics are hidden by this panel override. Physical checks remain separate and guarded.");
+            ui.colored_label(colors.info, "Simulated diagnostics are hidden by this panel override. Physical checks remain separate and guarded.");
             return;
         }
 
@@ -5420,11 +5421,14 @@ impl StudioApp {
                 egui::Color32::from_rgb(220, 180, 80)
             };
             ui.colored_label(mode_color, self.transport_mode.label());
-            ui.weak(if self.uart.is_some() {
-                "UART connected (diagnostics remain simulated)"
-            } else {
-                "UART jig not connected"
-            });
+            ui.colored_label(
+                colors.secondary_text,
+                if self.uart.is_some() {
+                    "UART connected (diagnostics remain simulated)"
+                } else {
+                    "UART jig not connected"
+                },
+            );
             let run = ui.add_enabled(
                 !self.diagnostics.running,
                 egui::Button::new("Run full diagnostic"),
@@ -5456,7 +5460,7 @@ impl StudioApp {
             }
         });
         ui.colored_label(
-            egui::Color32::from_rgb(220, 180, 80),
+            colors.warning,
             "SIMULATED CHECKS ONLY - this report never queries physical hardware. Use Shell Access for explicit UART commands.",
         );
         ui.separator();
@@ -5471,9 +5475,9 @@ impl StudioApp {
                 for row in &self.diagnostics.rows {
                     ui.label(row.name);
                     let color = match row.status {
-                        diagnostics::Status::Pass => egui::Color32::from_rgb(120, 210, 150),
-                        diagnostics::Status::Blocked => egui::Color32::from_rgb(220, 180, 80),
-                        diagnostics::Status::Pending => ui.visuals().weak_text_color(),
+                        diagnostics::Status::Pass => colors.success,
+                        diagnostics::Status::Blocked => colors.warning,
+                        diagnostics::Status::Pending => colors.pending,
                     };
                     ui.colored_label(color, row.status.label());
                     ui.label(&row.detail);
@@ -5485,10 +5489,10 @@ impl StudioApp {
             ui.strong("Live log");
             ui.label("Ticks:");
             self.tick_filter_ui(ui, "diagnostics_tick_filter");
-            ui.weak(format!(
-                "{} / 200 lines - auto-scroll",
-                self.diagnostics.log.len()
-            ));
+            ui.colored_label(
+                colors.secondary_text,
+                format!("{} / 200 lines - auto-scroll", self.diagnostics.log.len()),
+            );
             if ui.small_button("Clear").clicked() {
                 self.diagnostics.log.clear();
             }
@@ -5500,7 +5504,10 @@ impl StudioApp {
             .max_height(ui.available_height())
             .show(ui, |ui| {
                 if self.diagnostics.log.is_empty() {
-                    ui.weak("(run a diagnostic to populate the simulated activity log)");
+                    ui.colored_label(
+                        colors.secondary_text,
+                        "(run a diagnostic to populate the simulated activity log)",
+                    );
                 }
                 for line in &self.diagnostics.log {
                     if self.show_main_event(line) {
