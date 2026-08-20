@@ -13311,7 +13311,13 @@ mod tests {
         app.held_button = Some(super::ButtonId::L);
         app.watch.light = true;
         let output_dir = app.output_dir.clone();
-        app.component_profiles[0].name = "Custom".into();
+        let mut invalid_effective = app.component_profiles[0].config.clone();
+        invalid_effective.buzzer = !invalid_effective.buzzer;
+        app.component_effective = invalid_effective;
+        assert!(matches!(
+            app.current_build_plan().preflight,
+            super::firmware_inputs::PreflightStatus::Invalid(_)
+        ));
 
         app.start_build();
 
