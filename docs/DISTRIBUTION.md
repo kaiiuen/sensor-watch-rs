@@ -15,7 +15,8 @@ before Studio enters packaged mode:
   "schema_version": 1,
   "current_version": {"version": "1.2.3", "installed_at": "2026-01-01T00:00:00Z"},
   "previous_version": {"version": "1.2.2"},
-  "launcher_executable": "launcher/sensor-watch-studio-launcher.exe",
+  "launcher_executable": "sensor-watch-studio-launcher.exe",
+  "distribution_mode": "release-signed",
   "app_directory": "versions/1.2.3",
   "resources_directory": "resources",
   "templates_directory": "templates",
@@ -32,10 +33,10 @@ All manifest paths are package-relative and may not be absolute or contain
 searches only the executable directory and its ancestors for this manifest.
 The package root, launcher, version metadata, and each capability are exposed
 through the typed `distribution` contract in `studio/src/distribution.rs`. The
-supported entry point is the packaged launcher at
-`launcher/sensor-watch-studio-launcher.exe`. It resolves the package root one
-level above its own directory and launches `versions/<version>/studio.exe`.
-Users should not launch the versioned Studio executable directly.
+supported entry point is the packaged launcher at the application root:
+`sensor-watch-studio-launcher.exe`. It resolves the package root from its own
+executable directory and launches `versions/<version>/studio.exe`. Users should
+not launch the versioned Studio executable directly.
 
 `resources`, `templates`, and `firmware_project` are reported independently.
 `tools` and `targets` are optional paths but are still reported as capabilities
@@ -55,7 +56,7 @@ optional tool/target bundle is absent.
   `SENSOR_WATCH_STUDIO_DEVELOPER_MODE=1` is explicitly set. It resolves the
   compiled developer workspace and is labeled separately in the GUI.
 - With no manifest and no explicit developer mode, project resources are
-  unavailable; Studio does not silently use a checkout.
+  unavailable. Studio does not silently use a checkout.
 - Settings, presets, logs, restore points, and generated user data stay in the
   platform user-data root and are not written into the package root.
 - Master Clock is never launched during startup. In Advanced mode it is an
@@ -81,7 +82,7 @@ atomic rename, so a partial marker cannot be accepted. A supplied version
 that does not match the running Studio is rejected and never acknowledged.
 
 The launcher remains responsible for its bounded startup timeout and final
-launcher-state pointer rollback. Studio never replaces the running executable;
+launcher-state pointer rollback. Studio never replaces the running executable.
 new packages remain immutable version directories, while settings and projects
 remain under user data.
 
@@ -91,7 +92,7 @@ Before selecting or starting a version, the launcher authenticates the signed
 `release/metadata.json` using its configured key ring, checks the requested
 version against that signed metadata, and verifies the selected executable's
 artifact digest. SHA-256 is a digest/hash used to detect corruption or an
-unexpected change; it is not a release key and does not establish who produced
+unexpected change. It is not a release key and does not establish who produced
 an artifact. Authenticity requires a release signer to use a private signing key
 and the launcher/distribution to verify the signature with the corresponding
 pinned public verification key (for example, an Ed25519 key).
@@ -104,12 +105,25 @@ placed in the repository. A mutable GitHub branch, or a checksum fetched from
 that branch alone, is not an authenticity root: an attacker who can change the
 artifact can change its checksum too. Missing authentication, an invalid
 signature, an untrusted version, a downgrade that is not allowed by policy, or
-a digest mismatch fails closed. The package builder emits a
-metadata/signature placeholder for local artifacts; it must be replaced with a
-real signed release and a separately provisioned public key before publishing.
+a digest mismatch fails closed. The package builder marks locally generated unsigned ZIPs explicitly with
+`distribution_mode: "local-development-unsigned"`; the launcher shows a
+prominent warning in that mode and validates the package layout/file manifest
+without treating the ZIP as an authenticated release. Production packages must
+use `distribution_mode: "release-signed"`, signed metadata, and the launcher's
+pinned public key. A metadata/signature placeholder must be replaced before
+publishing.
+
+The ZIP uses one decomposed layout: the package root contains only the
+launcher executable,
+`versions/<version>/studio.exe` contains the immutable Studio executable,
+`firmware/` contains firmware source, `generated-inputs/` contains schemas and
+examples, `resources/` and curated `templates/` contain read-only inputs,
+`tools/` and `targets/` contain capability declarations, and `updates/` and
+`release/` contain package/update metadata. `PACKAGE-MANIFEST.json` is generated
+last and covers every other file; its explicit self-entry rule is `excluded`.
 
 Installed Studio versions are immutable sibling directories under
-`versions/<version>`. The launcher keeps A/B-style `current` and `previous`
+`versions/<version>`.  The launcher keeps A/B-style `current` and `previous`
 pointers in `user-data/launcher-state.json`, updates that small state file
 atomically, and
 switches the pointers only after verification. A version that fails the startup
@@ -129,7 +143,7 @@ launcher build.
 This is an offline, folder-based distribution foundation. It does not download
 updates, discover releases, or replace the running executable in place. The
 package builder does not sign release metadata or bundle optional `tools` and
-`targets` by default; publishing still requires an external signing step and
+`targets` by default. Publishing still requires an external signing step and
 any required optional bundles must be supplied separately. The launcher owns
-selection, verification, startup timeout, and rollback; Studio does not perform
+selection, verification, startup timeout, and rollback. Studio does not perform
 those operations itself.

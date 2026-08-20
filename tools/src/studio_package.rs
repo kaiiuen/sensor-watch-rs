@@ -172,7 +172,7 @@ pub fn package_studio_artifacts_with_launcher(
         executable,
     ));
     files.push((
-        format!("{package_directory}/launcher/sensor-watch-studio-launcher{EXE_SUFFIX}"),
+        format!("{package_directory}/sensor-watch-studio-launcher{EXE_SUFFIX}"),
         launcher,
     ));
     add_tree(
@@ -206,7 +206,8 @@ pub fn package_studio_artifacts_with_launcher(
         "schema_version": PACKAGE_SCHEMA,
         "current_version": { "version": version },
         "previous_version": null,
-        "launcher_executable": format!("launcher/sensor-watch-studio-launcher{EXE_SUFFIX}"),
+        "launcher_executable": format!("sensor-watch-studio-launcher{EXE_SUFFIX}"),
+        "distribution_mode": "local-development-unsigned",
         "app_directory": app_directory,
         "resources_directory": "resources",
         "templates_directory": "templates",
@@ -230,7 +231,7 @@ pub fn package_studio_artifacts_with_launcher(
     let capabilities = serde_json::to_vec_pretty(&json!({
         "schema_version": PACKAGE_SCHEMA,
         "capabilities": {
-            "launcher": { "available": true, "path": format!("launcher/sensor-watch-studio-launcher{EXE_SUFFIX}") },
+            "launcher": { "available": true, "path": format!("sensor-watch-studio-launcher{EXE_SUFFIX}") },
             "versioned_app": { "available": true, "path": format!("{app_directory}/studio{EXE_SUFFIX}") },
             "resources": { "available": true, "path": "resources" },
             "master_clock": { "available": false, "path": "tools/master-clock.exe", "reason": "not bundled; provenance and licensing required" },
@@ -272,7 +273,7 @@ pub fn package_studio_artifacts_with_launcher(
     let tools_readme = b"Optional tool capabilities are not bundled by this package.\n";
     let targets_readme = b"Optional target capabilities are not bundled by this package.\n";
     let readme = format!(
-        "Sensor-Watch Studio {version}\n\nCanonical package layout:\n  launcher/sensor-watch-studio-launcher{EXE_SUFFIX}\n  versions/{version}/studio{EXE_SUFFIX}\n  versions/current.json and versions/previous.json\n  firmware/, generated-inputs/, resources/, templates/, tools/, targets/\n  updates/ and release/\n\nThe launcher is the only supported entry point. It owns startup markers,\nverification, and current/previous version selection. Mutable settings,\nprojects, logs, and update state stay outside this ZIP in platform user data.\n\nSigned-release metadata is a placeholder and must be replaced before publishing.\nPACKAGE-MANIFEST.json covers every other packaged file; its own entry is excluded\nby the explicit self_entry rule.\n"
+        "Sensor-Watch Studio {version}\n\nCanonical package layout:\n  sensor-watch-studio-launcher{EXE_SUFFIX}\n  versions/{version}/studio{EXE_SUFFIX}\n  versions/current.json and versions/previous.json\n  firmware/, generated-inputs/, resources/, templates/, tools/, targets/\n  updates/ and release/\n\nThe launcher is the only supported entry point. It owns startup markers,\nverification, and current/previous version selection. Mutable settings,\nprojects, logs, and update state stay outside this ZIP in platform user data.\n\nSigned-release metadata is a placeholder and must be replaced before publishing.\nPACKAGE-MANIFEST.json covers every other packaged file; its own entry is excluded\nby the explicit self_entry rule.\n"
     );
     files.push((
         format!("{package_directory}/generated-inputs/README.txt"),
@@ -711,7 +712,7 @@ mod tests {
         assert!(
             names
                 .iter()
-                .any(|name| name.ends_with("/launcher/sensor-watch-studio-launcher.exe"))
+                .any(|name| name.ends_with("/sensor-watch-studio-launcher.exe"))
         );
         assert!(
             names
@@ -767,8 +768,9 @@ mod tests {
         assert_eq!(value["schema_version"], 1);
         assert_eq!(
             value["launcher_executable"],
-            "launcher/sensor-watch-studio-launcher.exe"
+            "sensor-watch-studio-launcher.exe"
         );
+        assert_eq!(value["distribution_mode"], "local-development-unsigned");
         assert_eq!(value["app_directory"], "versions/9.8.7");
         assert_eq!(value["current_pointer"], "versions/current.json");
         assert!(
@@ -812,7 +814,7 @@ mod tests {
         package_studio_artifacts(&root, &executable, Some(&output)).unwrap();
         let names = zip_names(&output);
         for required in [
-            "/launcher/sensor-watch-studio-launcher.exe",
+            "/sensor-watch-studio-launcher.exe",
             "/versions/9.8.7/studio.exe",
             "/versions/current.json",
             "/versions/previous.json",

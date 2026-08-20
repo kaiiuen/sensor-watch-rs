@@ -9,6 +9,7 @@ use sensor_watch_desktop_update::{
     SelectionPolicy, Version,
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::{Component, Path, PathBuf};
@@ -24,6 +25,9 @@ pub const PACKAGE_ROOT_ARG: &str = "--sensor-watch-package-root";
 pub const USER_DATA_ARG: &str = "--sensor-watch-user-data";
 pub const VERSION_ARG: &str = "--sensor-watch-version";
 pub const ATTEMPT_ARG: &str = "--sensor-watch-startup-attempt";
+pub const PACKAGE_MANIFEST: &str = "sensor-watch-package.json";
+pub const PACKAGE_FILES_MANIFEST: &str = "PACKAGE-MANIFEST.json";
+pub const LOCAL_PACKAGE_MODE: &str = "local-development-unsigned";
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Pointers {
@@ -136,7 +140,143 @@ impl Launcher {
     fn metadata_path(&self) -> PathBuf {
         self.root.join("release").join("metadata.json")
     }
+
+    fn package_mode(&self) -> Result<Option<String>, LauncherError> {
+        let path = self.root.join(PACKAGE_MANIFEST);
+        if !path.is_file() {
+            return Ok(None);
+        }
+        let value: Value = serde_json::from_slice(&fs::read(path)?)?;
+        Ok(value
+            .get("distribution_mode")
+            .and_then(Value::as_str)
+            .map(str::to_owned))
+    }
+
+    fn validate_package_layout(&self) -> Result<String, LauncherError> {
+        let path = self.root.join(PACKAGE_MANIFEST);
+        let value: Value = serde_json::from_slice(&fs::read(&path)?)?;
+        if value["schema_version"] != 1 {
+            return Err(LauncherError::Unsupported(
+                "unsupported package manifest schema",
+            ));
+        }
+        let mode = value
+            .get("distribution_mode")
+            .and_then(Value::as_str)
+            .ok_or(LauncherError::Unsupported(
+                "package authentication mode is missing",
+            ))?;
+        if mode != LOCAL_PACKAGE_MODE && mode != "release-signed" {
+            return Err(LauncherError::Unsupported(
+                "unknown package authentication mode",
+            ));
+        }
+        let launcher = value["launcher_executable"]
+            .as_str()
+            .ok_or(LauncherError::Unsupported("launcher path is missing"))?;
+        if launcher != "sensor-watch-studio-launcher.exe" {
+            return Err(LauncherError::Unsupported(
+                "launcher must be packaged at the application root",
+            ));
+        }
+        let app = value["app_directory"]
+            .as_str()
+            .ok_or(LauncherError::Unsupported(
+                "application directory is missing",
+            ))?;
+        let version = app
+            .strip_prefix("versions/")
+            .filter(|v| safe_version(v))
+            .ok_or(LauncherError::Unsupported(
+                "application directory is not a safe version path",
+            ))?;
+        let current: Value =
+            serde_json::from_slice(&fs::read(self.root.join("versions/current.json"))?)?;
+        if current["version"].as_str() != Some(version) {
+            return Err(LauncherError::Untrusted(
+                "packaged current pointer does not match the manifest".into(),
+            ));
+        }
+        let executable = self
+            .version_root()
+            .join(version)
+            .join(&self.executable_name);
+        if !executable.is_file() {
+            return Err(LauncherError::MissingVersion(version.into()));
+        }
+        for path in [
+            "resources",
+            "templates",
+            "firmware",
+            "versions",
+            "release",
+            "updates",
+        ] {
+            if !self.root.join(path).is_dir() {
+                return Err(LauncherError::Unsupported(
+                    "required package directory is missing",
+                ));
+            }
+        }
+        let files_manifest = self.root.join(PACKAGE_FILES_MANIFEST);
+        let files: Value = serde_json::from_slice(&fs::read(files_manifest)?)?;
+        let entries = files["entries"]
+            .as_array()
+            .ok_or(LauncherError::Unsupported(
+                "package file manifest entries are missing",
+            ))?;
+        for entry in entries {
+            let relative = entry["path"].as_str().ok_or(LauncherError::Unsupported(
+                "package file manifest path is missing",
+            ))?;
+            if !safe_relative_path(relative) || relative == PACKAGE_FILES_MANIFEST {
+                return Err(LauncherError::Untrusted(
+                    "unsafe package file manifest path".into(),
+                ));
+            }
+            let file = self.root.join(relative);
+            let (file, normalized) = if file.is_file() {
+                (file, relative.to_owned())
+            } else {
+                let mut components = Path::new(relative).components();
+                components.next();
+                let stripped = components.as_path();
+                if !safe_relative_path(&stripped.to_string_lossy()) {
+                    return Err(LauncherError::Untrusted(
+                        "unsafe package file manifest path".into(),
+                    ));
+                }
+                (
+                    self.root.join(stripped),
+                    stripped.to_string_lossy().into_owned(),
+                )
+            };
+            let bytes = fs::read(&file).map_err(|_| {
+                LauncherError::Untrusted(format!("packaged file is missing: {normalized}"))
+            })?;
+            if entry["size"].as_u64() != Some(bytes.len() as u64)
+                || entry["sha256"].as_str() != Some(&sha256(&bytes))
+            {
+                return Err(LauncherError::Untrusted(format!(
+                    "packaged file failed manifest verification: {relative}"
+                )));
+            }
+        }
+        Ok(version.to_owned())
+    }
+
     fn verify_version(&self, version: &str, allow_downgrade: bool) -> Result<(), LauncherError> {
+        if self.package_mode()?.as_deref() == Some(LOCAL_PACKAGE_MODE) {
+            let path = self
+                .version_root()
+                .join(version)
+                .join(&self.executable_name);
+            if !path.is_file() {
+                return Err(LauncherError::MissingVersion(version.into()));
+            }
+            return Ok(());
+        }
         let metadata = fs::read(self.metadata_path())?;
         let (metadata, _) = authenticate(&metadata, &self.key_ring)?;
         let current = self
@@ -220,6 +360,13 @@ impl Launcher {
         self.version_executable(&current)
     }
     pub fn run(&self, timeout: Duration) -> Result<(), LauncherError> {
+        if !self.user_data.join(STATE_FILE).is_file() {
+            let version = self.validate_package_layout()?;
+            if self.package_mode()?.as_deref() == Some(LOCAL_PACKAGE_MODE) {
+                self.report_local_warning();
+            }
+            self.switch_current(&version)?;
+        }
         let executable = match self.selected_executable() {
             Ok(path) => path,
             Err(error) => {
@@ -287,12 +434,31 @@ impl Launcher {
         }
         Ok(path)
     }
+    pub fn report_failure(&self, error: &LauncherError) {
+        let message = format!("sensor-watch launcher: {error}");
+        self.append_log(&message);
+        show_failure_message(&message);
+    }
+
+    fn report_local_warning(&self) {
+        let message = "WARNING: this is an unsigned local/development package. It is not an authenticated production release.";
+        self.append_log(message);
+        show_failure_message(message);
+    }
+
+    fn append_log(&self, message: &str) {
+        let _ = fs::create_dir_all(&self.user_data);
+        let log = self.user_data.join("launcher.log");
+        let line = format!("{}\n", message);
+        let _ = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(log)
+            .and_then(|mut file| std::io::Write::write_all(&mut file, line.as_bytes()));
+    }
+
     fn validate_version(&self, version: &str) -> Result<(), LauncherError> {
-        let path = Path::new(version);
-        if version.is_empty()
-            || path.components().count() != 1
-            || !matches!(path.components().next(), Some(Component::Normal(_)))
-        {
+        if !safe_version(version) {
             return Err(LauncherError::InvalidPointer(version.into()));
         }
         if !self.version_root().join(version).is_dir() {
@@ -369,6 +535,52 @@ fn atomic_replace(from: &Path, to: &Path) -> Result<(), LauncherError> {
 fn atomic_replace(from: &Path, to: &Path) -> Result<(), LauncherError> {
     fs::rename(from, to).map_err(LauncherError::Io)
 }
+
+fn safe_version(version: &str) -> bool {
+    let path = Path::new(version);
+    !version.is_empty()
+        && path.components().count() == 1
+        && matches!(path.components().next(), Some(Component::Normal(_)))
+        && version.chars().all(|c| c.is_ascii_digit() || c == '.')
+}
+
+fn safe_relative_path(path: &str) -> bool {
+    let path = Path::new(path);
+    !path.is_absolute() && path.components().all(|c| matches!(c, Component::Normal(_)))
+}
+
+fn sha256(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[cfg(windows)]
+fn show_failure_message(message: &str) {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+    let text: Vec<u16> = std::ffi::OsStr::new(message)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let title: Vec<u16> = std::ffi::OsStr::new("Sensor-Watch Studio Launcher")
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    unsafe {
+        MessageBoxW(
+            std::ptr::null_mut(),
+            text.as_ptr(),
+            title.as_ptr(),
+            MB_OK | MB_ICONERROR,
+        );
+    }
+}
+
+#[cfg(not(windows))]
+fn show_failure_message(_message: &str) {}
 
 fn current_version(pointers: &Pointers) -> &str {
     pointers.current.as_deref().unwrap_or("unknown")

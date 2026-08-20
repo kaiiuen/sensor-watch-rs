@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 sensor-watch-desktop-update = { path = "../desktop-update" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+sha2 = "0.10"
 
 [dev-dependencies]
 base64 = "0.22"
@@ -16,7 +17,7 @@ ed25519-dalek = { version = "2", features = ["std"] }
 sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem"] }
+windows-sys = { version = "0.59", features = ["Win32_Storage_FileSystem", "Win32_UI_WindowsAndMessaging"] }
 
 [lib]
 path = "src/lib.rs"
