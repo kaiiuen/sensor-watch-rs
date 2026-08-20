@@ -48,7 +48,7 @@ impl Default for TabOverflowBehavior {
 const MAX_SETTINGS_JSON_BYTES: usize = 256 * 1024;
 const MAX_NTP_SERVERS: usize = 64;
 const MAX_SETTINGS_TEXT_BYTES: usize = 256;
-const SETTINGS_SCHEMA_VERSION: u32 = 2;
+const SETTINGS_SCHEMA_VERSION: u32 = 3;
 
 /// Versioned, persistence-safe Studio representation of RTC calibration.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -191,7 +191,8 @@ pub struct AppSettings {
     pub watch_config: WatchConfig,
     /// The UI text size (0=small, 1=normal, 2=big).
     pub text_size: u8,
-    /// Persisted Watch Faces panel widths.
+    /// Persisted Watch Faces panel ratios. Values above 1.0 are accepted as
+    /// legacy pixel dimensions and converted using the current viewport.
     pub catalog_width: f32,
     pub preset_height: f32,
     /// Custom hardware modules.
@@ -401,7 +402,7 @@ impl AppSettings {
             || !self.preset_height.is_finite()
             || !(0.0..=10_000.0).contains(&self.preset_height)
         {
-            return Err("panel dimensions must be finite and between 0 and 10000".into());
+            return Err("panel ratios must be finite and between 0 and 10000".into());
         }
         if self.text_size > 2 {
             return Err("text size must be 0, 1, or 2".into());
@@ -577,6 +578,19 @@ pub fn default_schema_version() -> u32 {
     1
 }
 
+/// Converts a persisted ratio or a legacy pixel dimension to a safe ratio.
+/// A zero value means that the caller should use its layout default.
+pub fn panel_ratio(value: f32, viewport: f32, default: f32) -> f32 {
+    let value = if value.is_finite() { value } else { 0.0 };
+    if value <= 0.0 {
+        default.clamp(0.0, 1.0)
+    } else if value > 1.0 {
+        (value / viewport.max(1.0)).clamp(0.0, 1.0)
+    } else {
+        value.clamp(0.0, 1.0)
+    }
+}
+
 /// Updates only schema-1 stock profiles whose thermistor value was untouched.
 /// Explicit profile edits, including an explicit `false`, survive.
 fn migrate_component_profiles(settings: &mut AppSettings, raw: &serde_json::Value) {
@@ -621,18 +635,27 @@ pub fn default_output_dir() -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppSettings, RtcCalibrationSettings};
+    use super::{panel_ratio, AppSettings, RtcCalibrationSettings};
     use crate::components::{default_profiles, BuildProfile, ComponentsConfig};
 
     #[test]
     fn fresh_settings_use_current_schema_and_stock_profiles() {
         let settings = AppSettings::default();
-        assert_eq!(settings.schema_version, 2);
+        assert_eq!(settings.schema_version, 3);
         let profiles = default_profiles();
         assert!(!profiles[0].config.thermistor);
         assert!(profiles[1].config.thermistor);
         assert!(!profiles[2].config.thermistor);
         assert!(profiles[3].config.thermistor);
+    }
+
+    #[test]
+    fn panel_ratio_converts_legacy_pixels_and_round_trips_ratios() {
+        assert!((panel_ratio(480.0, 1200.0, 0.45) - 0.4).abs() < f32::EPSILON);
+        assert!((panel_ratio(0.4, 800.0, 0.45) - 0.4).abs() < f32::EPSILON);
+        assert_eq!(panel_ratio(-1.0, 800.0, 0.45), 0.45);
+        assert_eq!(panel_ratio(f32::NAN, 800.0, 0.45), 0.45);
+        assert_eq!(panel_ratio(2.0, 0.0, 0.45), 1.0);
     }
 
     #[test]
@@ -649,7 +672,7 @@ mod tests {
             serde_json::from_str(&settings.to_json().unwrap()).unwrap();
         raw["schema_version"] = 1.into();
         let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
-        assert_eq!(loaded.schema_version, 2);
+        assert_eq!(loaded.schema_version, 3);
         assert!(!loaded.component_profiles[0].config.thermistor);
         assert!(loaded.component_profiles[1].config.thermistor);
         assert!(!loaded.component_profiles[2].config.thermistor);

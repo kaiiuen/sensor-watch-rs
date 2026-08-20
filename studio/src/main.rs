@@ -593,6 +593,24 @@ fn preset_name(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+const WATCH_FACES_MIN_CATALOG_WIDTH: f32 = 220.0;
+const WATCH_FACES_MIN_SETTINGS_WIDTH: f32 = 320.0;
+const WATCH_FACES_MIN_PANE_HEIGHT: f32 = 180.0;
+
+fn watch_faces_catalog_width(ratio: f32, total_width: f32) -> f32 {
+    let total_width = total_width.max(1.0);
+    let max_catalog = (total_width - WATCH_FACES_MIN_SETTINGS_WIDTH).max(1.0);
+    let min_catalog = WATCH_FACES_MIN_CATALOG_WIDTH.min(max_catalog);
+    (ratio.clamp(0.0, 1.0) * total_width).clamp(min_catalog, max_catalog)
+}
+
+fn watch_faces_catalog_height(ratio: f32, total_height: f32) -> f32 {
+    let total_height = total_height.max(1.0);
+    let max_catalog = (total_height - WATCH_FACES_MIN_PANE_HEIGHT).max(1.0);
+    let min_catalog = WATCH_FACES_MIN_PANE_HEIGHT.min(max_catalog);
+    (ratio.clamp(0.0, 1.0) * total_height).clamp(min_catalog, max_catalog)
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Panel {
     Dashboard,
@@ -1315,15 +1333,10 @@ impl eframe::App for StudioApp {
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
 
-        // Detect a window resize (or the very first frame) and reset the Watch
-        // Faces panel ratios so they re-derive proportionally to the new size
-        // instead of going stale.
-        let window_size = ctx.screen_rect().size();
-        if self.last_window_size != window_size {
-            self.last_window_size = window_size;
-            self.catalog_width = 0.0;
-            self.preset_height = 0.0;
-        }
+        // Keep the viewport for diagnostics and future layout calculations.
+        // Watch Faces derives dimensions from ratios during its own render, so
+        // resize and first-frame events never discard saved divider choices.
+        self.last_window_size = ctx.screen_rect().size();
 
         // Escape pauses help first, so normal shortcuts cannot consume it.
         if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && self.help_open.is_some() {
@@ -3597,31 +3610,28 @@ impl StudioApp {
         ui.separator();
 
         // Left column: catalog (top) and active preset (bottom), stacked.
-        let default_catalog = if self.catalog_width > 0.0 {
-            self.catalog_width
-        } else {
-            ui.available_width() * 0.45
-        };
+        let total_width = ui.available_width().max(1.0);
+        let catalog_ratio = settings::panel_ratio(self.catalog_width, total_width, 0.45);
+        let catalog_width = watch_faces_catalog_width(catalog_ratio, total_width);
         egui::SidePanel::left("catalog")
             .resizable(true)
-            .default_width(default_catalog)
-            .width_range(180.0..=f32::INFINITY)
+            .default_width(catalog_width)
+            .width_range(watch_faces_catalog_width(0.0, total_width)..=watch_faces_catalog_width(1.0, total_width))
             .show_inside(ui, |ui| {
-                self.catalog_width = ui.available_width();
+                self.catalog_width = (ui.available_width() / total_width).clamp(0.0, 1.0);
                 // Catalog on top.
-                let default_preset = if self.preset_height > 0.0 {
-                    self.preset_height
-                } else {
-                    ui.available_height() * 0.5
-                };
+                let total_height = ui.available_height().max(1.0);
+                let preset_ratio = settings::panel_ratio(self.preset_height, total_height, 0.5);
+                let default_preset = watch_faces_catalog_height(preset_ratio, total_height);
                 egui::TopBottomPanel::top("catalog_top")
                     .resizable(true)
                     .default_height(default_preset)
+                    .height_range(watch_faces_catalog_height(0.0, total_height)..=watch_faces_catalog_height(1.0, total_height))
                     .show_inside(ui, |ui| {
-                        self.preset_height = ui.available_height();
+                        self.preset_height = (ui.available_height() / total_height).clamp(0.0, 1.0);
                         ui.heading("Catalog");
                         // Search and category filter on one row to save space.
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.label("Search:");
                             let response = ui.text_edit_singleline(&mut self.catalog_search);
                             self.register_anchor(Panel::Faces, AnchorId::FacesSearch, &response);
@@ -3706,7 +3716,7 @@ impl StudioApp {
                             }
                         }
                         ui.separator();
-                        egui::ScrollArea::vertical()
+                        egui::ScrollArea::both()
                             .auto_shrink([false, false])
                             .show(ui, |ui| {
                                 // Spreadsheet-style grid: # | Face | Description | Add.
@@ -3865,7 +3875,7 @@ impl StudioApp {
                             self.log.log(format!("Added {name} to preset (drag)"));
                         }
                     }
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.heading("Active Preset");
                         ui.separator();
                         // Add selected catalog face to the preset.
@@ -3883,7 +3893,7 @@ impl StudioApp {
                     });
                     ui.separator();
                     // Spreadsheet-style grid: # | Face | Up | Dn | Del.
-                    egui::ScrollArea::vertical()
+                    egui::ScrollArea::both()
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             egui::Grid::new("preset_grid")
@@ -11256,6 +11266,40 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn watch_faces_layout_keeps_wide_viewport_bounds() {
+        let width = super::watch_faces_catalog_width(0.5, 1200.0);
+        assert_eq!(width, 600.0);
+        assert!(1200.0 - width >= super::WATCH_FACES_MIN_SETTINGS_WIDTH);
+        assert!(width >= super::WATCH_FACES_MIN_CATALOG_WIDTH);
+    }
+
+    #[test]
+    fn watch_faces_layout_keeps_narrow_viewport_settings_visible() {
+        let width = super::watch_faces_catalog_width(0.9, 500.0);
+        assert!(500.0 - width >= super::WATCH_FACES_MIN_SETTINGS_WIDTH);
+        assert!(width >= 1.0);
+    }
+
+    #[test]
+    fn watch_faces_layout_clamps_persisted_values_contextually() {
+        let wide = super::watch_faces_catalog_width(0.95, 1000.0);
+        let narrow = super::watch_faces_catalog_width(0.95, 600.0);
+        assert_eq!(wide, 680.0);
+        assert_eq!(narrow, 280.0);
+        assert_eq!(super::watch_faces_catalog_height(0.05, 700.0), 180.0);
+        assert_eq!(super::watch_faces_catalog_height(0.95, 700.0), 520.0);
+    }
+
+    #[test]
+    fn watch_faces_layout_ratio_round_trip_survives_resize() {
+        let ratio = 0.42;
+        let wide = super::watch_faces_catalog_width(ratio, 1400.0) / 1400.0;
+        let resized = super::watch_faces_catalog_width(wide, 900.0) / 900.0;
+        assert!((wide - ratio).abs() < f32::EPSILON);
+        assert!((resized - ratio).abs() < f32::EPSILON);
+    }
+
     fn valid_plan() -> crate::firmware_inputs::BuildPlan {
         let profiles = crate::components::default_profiles();
         let preset = crate::presets::PresetManager::new().presets[0].clone();
