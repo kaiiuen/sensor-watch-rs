@@ -279,23 +279,9 @@ pub fn validate_configuration_inputs() -> Result<(), &'static str> {
 /// Validates a concrete request without creating an output artifact or running
 /// the firmware toolchain. This is the UI preflight and remains fail closed.
 pub fn preflight_request(request: &FirmwareInputRequest) -> Result<(), String> {
-    let source_root = firmware_dir();
-    for face in &request.ordered_faces {
-        let source = source_root
-            .join("src/movement")
-            .join(format!("{}.rs", face.to_ascii_lowercase()));
-        let metadata = std::fs::symlink_metadata(&source)
-            .map_err(|_| format!("missing face source for {face}: {}", source.display()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(format!("unsafe or missing face source for {face}"));
-        }
-    }
-    let root = std::env::temp_dir().join(format!("sensor-watch-studio-preflight-{}", unix_nanos()));
-    let result = firmware_inputs::generate(request, &root)
+    firmware_inputs::validate_request_and_sources(request, &firmware_dir())
         .map(|_| ())
-        .map_err(|e| e.to_string());
-    let _ = std::fs::remove_dir_all(root);
-    result
+        .map_err(|e| e.to_string())
 }
 
 /// The exact inputs currently missing from the Studio-to-firmware build path.
@@ -874,17 +860,12 @@ fn generate_inputs(
     inputs_dir: &Path,
     workspace: &Path,
 ) -> Result<GeneratedFirmwareInputs, String> {
-    for face in &request.ordered_faces {
-        let source = source_root
-            .join("src/movement")
-            .join(format!("{}.rs", face.to_ascii_lowercase()));
-        let metadata = std::fs::symlink_metadata(&source)
-            .map_err(|_| format!("missing face source for {face}: {}", source.display()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() {
-            return Err(format!("unsafe or missing face source for {face}"));
-        }
-    }
-    let generated = firmware_inputs::generate(request, inputs_dir).map_err(|e| e.to_string())?;
+    // This is the final authority: preflight may have observed an earlier source
+    // state, so revalidate and retain the exact bytes used by this build.
+    let validated = firmware_inputs::validate_request_and_sources(request, source_root)
+        .map_err(|e| e.to_string())?;
+    let generated =
+        firmware_inputs::generate(request, &validated, inputs_dir).map_err(|e| e.to_string())?;
     let cargo_config = workspace.join(".cargo");
     std::fs::create_dir_all(&cargo_config)
         .map_err(|e| format!("cannot create generated Cargo overlay: {e}"))?;
@@ -913,17 +894,12 @@ fn generate_inputs(
     std::fs::write(&main_path, generated_main)
         .map_err(|e| format!("cannot install generated firmware module: {e}"))?;
 
-    // Copy the canonical, case-safe source names into the isolated workspace;
-    // the manifest and the compiler now refer to the same paths.
-    for face in &request.ordered_faces {
-        let source = source_root
-            .join("src/movement")
-            .join(format!("{}.rs", face.to_ascii_lowercase()));
-        let destination = workspace
-            .join("src/movement")
-            .join(format!("{}.rs", face.to_ascii_lowercase()));
-        std::fs::copy(source, destination)
-            .map_err(|e| format!("cannot overlay face source {face}: {e}"))?;
+    // Copy the exact bytes validated above; the manifest and compiler now refer
+    // to the same source contents.
+    for (source_name, contents) in validated.source_contents {
+        let destination = workspace.join("src/movement").join(source_name);
+        std::fs::write(&destination, contents)
+            .map_err(|e| format!("cannot overlay face source {}: {e}", destination.display()))?;
     }
     Ok(generated)
 }
@@ -1227,6 +1203,45 @@ mod tests {
             assert!(text.contains(phrase), "explanations omitted: {phrase}");
         }
         assert!(text.contains("unknown component"));
+    }
+
+    #[test]
+    fn preflight_request_does_not_create_generated_bundle() {
+        let profiles = super::super::components::default_profiles();
+        let request = FirmwareInputRequest {
+            board: super::super::components::BoardKind::Green,
+            revision: "OSO-SWAT-A1-05".into(),
+            profile: profiles[0].clone(),
+            components: profiles[0].config.clone(),
+            preset_name: "Stock Casio".into(),
+            ordered_faces: vec!["SIMPLE_CLOCK".into(), "ALARM".into()],
+            modules: vec![],
+        };
+        let temp = std::env::temp_dir();
+        let before: Vec<_> = std::fs::read_dir(&temp)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("sensor-watch-studio-preflight-")
+            })
+            .map(|entry| entry.file_name())
+            .collect();
+        preflight_request(&request).unwrap();
+        let after: Vec<_> = std::fs::read_dir(&temp)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("sensor-watch-studio-preflight-")
+            })
+            .map(|entry| entry.file_name())
+            .collect();
+        assert_eq!(before, after);
     }
 
     #[test]

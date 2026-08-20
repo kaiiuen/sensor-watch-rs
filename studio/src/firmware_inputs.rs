@@ -258,37 +258,59 @@ impl std::fmt::Display for FirmwareInputError {
 }
 impl std::error::Error for FirmwareInputError {}
 
-/// Validate the request and write an isolated, content-addressed input set.
-pub fn generate(
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ValidatedFirmwareInputs {
+    faces: Vec<FaceInput>,
+    pub(crate) source_contents: Vec<(String, Vec<u8>)>,
+}
+
+/// Validate the request and the source bytes without creating any output.
+pub(crate) fn validate_request_and_sources(
     request: &FirmwareInputRequest,
+    source_root: &Path,
+) -> Result<ValidatedFirmwareInputs, FirmwareInputError> {
+    let _board = validate_request_pure(request)?;
+    let mut faces = Vec::with_capacity(request.ordered_faces.len());
+    let mut source_contents = Vec::with_capacity(request.ordered_faces.len());
+    for name in &request.ordered_faces {
+        validate_safe_component(name, "face name")?;
+        let source_name = source_file_name(name);
+        let source = source_root.join("src/movement").join(&source_name);
+        let metadata = fs::symlink_metadata(&source).map_err(|_| {
+            FirmwareInputError::Io(format!(
+                "missing face source for {name}: {}",
+                source.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err(FirmwareInputError::Invalid(format!(
+                "unsafe or missing face source for {name}"
+            )));
+        }
+        let contents = fs::read(&source).map_err(|e| {
+            FirmwareInputError::Io(format!("cannot read face source {}: {e}", source.display()))
+        })?;
+        faces.push(FaceInput {
+            name: name.clone(),
+            source: format!("src/movement/{source_name}"),
+            sha256: hex_digest(&contents),
+        });
+        source_contents.push((source_name, contents));
+    }
+    Ok(ValidatedFirmwareInputs {
+        faces,
+        source_contents,
+    })
+}
+
+/// Write an isolated, content-addressed input set from a validated source snapshot.
+pub(crate) fn generate(
+    request: &FirmwareInputRequest,
+    validated: &ValidatedFirmwareInputs,
     output_dir: impl AsRef<Path>,
 ) -> Result<GeneratedFirmwareInputs, FirmwareInputError> {
-    let board = board_data(request.board, &request.revision)?;
-    validate_request(request, board)?;
-    let faces = request
-        .ordered_faces
-        .iter()
-        .map(|name| {
-            validate_safe_component(name, "face name")?;
-            let source_name = source_file_name(name);
-            let source = super::build::firmware_dir()
-                .join("src/movement")
-                .join(&source_name);
-            let contents = fs::read(&source).map_err(|e| {
-                FirmwareInputError::Io(format!("cannot read face source {}: {e}", source.display()))
-            })?;
-            Ok(FaceInput {
-                name: name.clone(),
-                source: format!("src/movement/{source_name}"),
-                sha256: hex_digest(&contents),
-            })
-        })
-        .collect::<Result<Vec<_>, FirmwareInputError>>()?;
-    if request.preset_name.trim().is_empty() || faces.is_empty() {
-        return Err(FirmwareInputError::Invalid(
-            "active preset must have a name and ordered faces".into(),
-        ));
-    }
+    let board = validate_request_pure(request)?;
+    let faces = &validated.faces;
 
     let manifest = FirmwareManifest {
         schema_version: FIRMWARE_INPUT_SCHEMA_VERSION,
@@ -309,7 +331,7 @@ pub fn generate(
         },
         preset: PresetInput {
             name: request.preset_name.clone(),
-            ordered_faces: faces,
+            ordered_faces: faces.clone(),
         },
         provenance: board.provenance(),
     };
@@ -348,6 +370,24 @@ pub fn generate(
         directory,
         files,
     })
+}
+
+fn validate_request_pure(
+    request: &FirmwareInputRequest,
+) -> Result<&'static BoardData, FirmwareInputError> {
+    let board = board_data(request.board, &request.revision)?;
+    validate_request(request, board)?;
+    validate_preset(request)?;
+    Ok(board)
+}
+
+fn validate_preset(request: &FirmwareInputRequest) -> Result<(), FirmwareInputError> {
+    if request.preset_name.trim().is_empty() || request.ordered_faces.is_empty() {
+        return Err(FirmwareInputError::Invalid(
+            "active preset must have a name and ordered faces".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_request(
@@ -734,53 +774,111 @@ mod tests {
     }
 
     #[test]
+    fn pure_validation_has_no_generated_output_side_effects() {
+        let request = request(BoardKind::Green);
+        let source_root = super::super::build::firmware_dir();
+        let output = output();
+        assert!(!output.exists());
+        validate_request_and_sources(&request, &source_root).unwrap();
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn source_changes_between_preflight_and_worker_validation_are_detected() {
+        let source_root = output();
+        let movement = source_root.join("src/movement");
+        std::fs::create_dir_all(&movement).unwrap();
+        std::fs::write(movement.join("simple_clock.rs"), "original").unwrap();
+        std::fs::write(movement.join("alarm.rs"), "alarm").unwrap();
+        let request = request(BoardKind::Green);
+        let preflight = validate_request_and_sources(&request, &source_root).unwrap();
+        std::fs::write(movement.join("simple_clock.rs"), "changed").unwrap();
+        let worker = validate_request_and_sources(&request, &source_root).unwrap();
+        assert_ne!(preflight.faces[0].sha256, worker.faces[0].sha256);
+        assert_ne!(preflight.faces[0].sha256, hex_digest(b"changed"));
+        assert_eq!(worker.faces[0].sha256, hex_digest(b"changed"));
+        std::fs::remove_dir_all(source_root).unwrap();
+    }
+
+    #[test]
     fn each_stock_board_generates() {
         for board in BoardKind::ALL {
-            let result = generate(&request(board), output()).unwrap();
+            let request = request(board);
+            let validated =
+                validate_request_and_sources(&request, &super::super::build::firmware_dir())
+                    .unwrap();
+            let result = generate(&request, &validated, output()).unwrap();
             assert_eq!(result.schema_version, 1);
             assert!(result.files["firmware_inputs.json"].contains("ordered_faces"));
         }
     }
     #[test]
     fn lite_and_pro_thermistors_are_distinct() {
-        assert!(generate(&request(BoardKind::RedLite), output()).is_ok());
-        assert!(generate(&request(BoardKind::Pro), output()).is_ok());
+        for board in [BoardKind::RedLite, BoardKind::Pro] {
+            let request = request(board);
+            let validated =
+                validate_request_and_sources(&request, &super::super::build::firmware_dir())
+                    .unwrap();
+            assert!(generate(&request, &validated, output()).is_ok());
+        }
     }
     #[test]
     fn unsupported_combinations_fail_closed() {
         let mut req = request(BoardKind::Green);
         req.profile.name = "Custom".into();
         assert!(matches!(
-            generate(&req, output()),
+            validate_request_and_sources(&req, &super::super::build::firmware_dir()),
             Err(FirmwareInputError::Unsupported(_))
         ));
         req = request(BoardKind::RedLite);
         req.components.i2c = true;
         req.profile.config.i2c = true;
-        assert!(generate(&req, output()).is_err());
+        assert!(validate_request_and_sources(&req, &super::super::build::firmware_dir()).is_err());
     }
+    #[test]
+    fn worker_generation_uses_the_validated_source_snapshot() {
+        let request = request(BoardKind::Green);
+        let source_root = super::super::build::firmware_dir();
+        let validated = validate_request_and_sources(&request, &source_root).unwrap();
+        let generated = generate(&request, &validated, output()).unwrap();
+        let manifest = &generated.files["firmware_inputs.json"];
+        assert!(manifest.contains(&validated.faces[0].sha256));
+    }
+
     #[test]
     fn output_is_deterministic_and_digest_sensitive() {
         let req = request(BoardKind::Green);
-        let left = generate(&req, output()).unwrap();
-        let right = generate(&req, output()).unwrap();
+        let source_root = super::super::build::firmware_dir();
+        let left_validated = validate_request_and_sources(&req, &source_root).unwrap();
+        let right_validated = validate_request_and_sources(&req, &source_root).unwrap();
+        let left = generate(&req, &left_validated, output()).unwrap();
+        let right = generate(&req, &right_validated, output()).unwrap();
         assert_eq!(left.digest, right.digest);
         let mut changed = req;
         changed.ordered_faces.reverse();
-        assert_ne!(left.digest, generate(&changed, output()).unwrap().digest);
+        let changed_validated = validate_request_and_sources(&changed, &source_root).unwrap();
+        assert_ne!(
+            left.digest,
+            generate(&changed, &changed_validated, output())
+                .unwrap()
+                .digest
+        );
     }
     #[test]
     fn unsafe_face_names_fail() {
         let mut req = request(BoardKind::Green);
         req.ordered_faces[0] = "../escape".into();
         assert!(matches!(
-            generate(&req, output()),
+            validate_request_and_sources(&req, &super::super::build::firmware_dir()),
             Err(FirmwareInputError::Invalid(_))
         ));
     }
     #[test]
     fn generated_provenance_is_complete() {
-        let result = generate(&request(BoardKind::Pro), output()).unwrap();
+        let request = request(BoardKind::Pro);
+        let validated =
+            validate_request_and_sources(&request, &super::super::build::firmware_dir()).unwrap();
+        let result = generate(&request, &validated, output()).unwrap();
         let provenance = &result.files["PROVENANCE.json"];
         assert!(provenance.contains("sensor-watch-reference"));
         assert!(provenance.contains("OSO-FEAL-A1-00"));
