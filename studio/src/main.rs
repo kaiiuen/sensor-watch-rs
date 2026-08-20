@@ -3317,27 +3317,25 @@ impl StudioApp {
             return;
         }
         let build_fingerprint = plan.request_identity.clone();
-        if let Err(reason) = validate_configured_artifact_root(
-            std::path::Path::new(&self.output_dir),
-            &self.package_status,
-        ) {
-            self.build_message = format!("Build artifact root rejected: {reason}");
-            self.status = self.build_message.clone();
-            self.build_estimator_state = BuildEstimatorState::Failed(reason.clone());
-            self.push_terminal(self.build_message.clone());
-            return;
-        }
-        let output = match storage::artifact_paths(
-            std::path::Path::new(&self.output_dir),
-            plan.request.board.label(),
-            &plan.request.revision,
-            &plan.request.profile.name,
+        let artifact_root = std::path::Path::new(&self.output_dir);
+        let (package_root, allowed_root) = (
+            self.package_status.root.as_deref(),
+            packaged_artifact_root(&self.package_status),
+        );
+        let output = match build::preflight_output_root(
+            artifact_root,
+            &plan.request,
+            package_root,
+            allowed_root,
         ) {
             Ok(paths) => paths.latest,
             Err(reason) => {
-                self.build_message = format!("Build output path rejected: {reason}");
+                self.build_message = format!("Build output preflight failed: {reason}");
                 self.status = self.build_message.clone();
-                self.build_estimator_state = BuildEstimatorState::Failed(reason.clone());
+                self.build_estimator_state =
+                    BuildEstimatorState::Failed(self.build_message.clone());
+                self.log.log(&self.build_message);
+                self.build_log.log(&self.build_message);
                 self.push_terminal(self.build_message.clone());
                 return;
             }

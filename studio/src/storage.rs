@@ -96,6 +96,90 @@ pub fn create_artifact_root_within(
     validate_artifact_root_within(root, package_root, allowed_root)
 }
 
+/// Creates a selected root only after validating every existing path component.
+/// The returned paths are the exact board/revision/profile layout that the
+/// caller may pass to the build worker.
+pub fn prepare_artifact_root(
+    root: &Path,
+    board: &str,
+    revision: &str,
+    profile: &str,
+    package_root: Option<&Path>,
+    allowed_root: Option<&Path>,
+) -> Result<ArtifactPaths, String> {
+    let attempted = root.display().to_string();
+    let paths = match artifact_paths(root, board, revision, profile) {
+        Ok(paths) => paths,
+        Err(error) => {
+            return Err(format_root_preflight_error(
+                &attempted,
+                "unavailable because the artifact layout is invalid",
+                nearest_existing_parent(root).as_ref(),
+                &error,
+            ));
+        }
+    };
+    let resolved = paths.latest.display().to_string();
+    let nearest = nearest_existing_parent(root);
+    let validate = || validate_artifact_root_within(root, package_root, allowed_root);
+    if let Err(error) = validate() {
+        return Err(format_root_preflight_error(
+            &attempted,
+            &resolved,
+            nearest.as_ref(),
+            &error,
+        ));
+    }
+    if !root.exists() {
+        if let Err(error) = std::fs::create_dir_all(root) {
+            return Err(format_root_preflight_error(
+                &attempted,
+                &resolved,
+                nearest.as_ref(),
+                &format!("cannot create selected artifact root: {error}"),
+            ));
+        }
+    }
+    if let Err(error) = validate() {
+        return Err(format_root_preflight_error(
+            &attempted,
+            &resolved,
+            nearest_existing_parent(root).as_ref(),
+            &format!("selected artifact root changed during setup: {error}"),
+        ));
+    }
+    Ok(paths)
+}
+
+fn format_root_preflight_error(
+    attempted: &str,
+    resolved: &str,
+    nearest: Option<&PathBuf>,
+    error: &str,
+) -> String {
+    format!(
+        "Artifact root preflight failed. Attempted root: {attempted}. Resolved board/revision/profile/latest: {resolved}. OS error: {error}. Nearest existing parent: {}. Choose Create folder for this root or Use default, then try again",
+        nearest
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "none".to_string())
+    )
+}
+
+fn nearest_existing_parent(path: &Path) -> Option<PathBuf> {
+    let mut current = Some(path);
+    while let Some(candidate) = current {
+        match std::fs::symlink_metadata(candidate) {
+            Ok(metadata) if metadata.is_dir() => return Some(candidate.to_path_buf()),
+            Ok(_) => return candidate.parent().and_then(nearest_existing_parent),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                current = candidate.parent();
+            }
+            Err(_) => return None,
+        }
+    }
+    None
+}
+
 fn canonical_for_overlap(path: &Path) -> Result<PathBuf, String> {
     if path.exists() {
         return path
@@ -420,6 +504,52 @@ mod tests {
         create_artifact_root(&root, None).unwrap();
         assert!(root.is_dir());
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preflight_creates_a_missing_creatable_root_and_resolves_latest() {
+        let root = temp("preflight-missing");
+        let paths = prepare_artifact_root(&root, "Green", "rev-a", "stock", None, None).unwrap();
+        assert!(root.is_dir());
+        assert_eq!(paths.latest, root.join("firmware/Green/rev-a/stock/latest"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn preflight_preserves_a_valid_custom_root() {
+        let root = temp("preflight-custom");
+        std::fs::create_dir_all(&root).unwrap();
+        let paths = prepare_artifact_root(&root, "Blue", "rev-b", "custom", None, None).unwrap();
+        assert_eq!(paths.root, root.join("firmware/Blue/rev-b/custom"));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preflight_reports_unavailable_drive_with_actionable_details() {
+        let root = PathBuf::from(r"Z:\\sensor-watch-unavailable-root");
+        let error =
+            prepare_artifact_root(&root, "Green", "rev-a", "stock", None, None).unwrap_err();
+        assert!(error.contains(&root.display().to_string()));
+        assert!(error.contains("Green"));
+        assert!(error.contains("rev-a"));
+        assert!(error.contains("stock"));
+        assert!(error.contains("latest"));
+        assert!(error.contains("OS error:"));
+        assert!(error.contains("Nearest existing parent:"));
+        assert!(error.contains("Create folder"));
+        assert!(error.contains("Use default"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn preflight_rejects_filesystem_root_without_starting_creation() {
+        let root = PathBuf::from(r"Z:\\");
+        let error =
+            prepare_artifact_root(&root, "Green", "rev-a", "stock", None, None).unwrap_err();
+        assert!(error.contains("Attempted root:"));
+        assert!(error.contains("Nearest existing parent:"));
+        assert!(!error.contains("cannot create selected artifact root"));
     }
 
     #[test]

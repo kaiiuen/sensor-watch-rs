@@ -275,6 +275,25 @@ pub fn preflight_request(request: &FirmwareInputRequest) -> Result<(), String> {
         .map_err(|e| e.to_string())
 }
 
+/// Validates and creates the selected root before a configured build worker is
+/// started. This keeps unavailable drives, shares, and ancestor paths out of
+/// the Cargo worker and gives the UI the exact attempted layout.
+pub fn preflight_output_root(
+    root: &Path,
+    request: &FirmwareInputRequest,
+    package_root: Option<&Path>,
+    allowed_root: Option<&Path>,
+) -> Result<crate::storage::ArtifactPaths, String> {
+    crate::storage::prepare_artifact_root(
+        root,
+        request.board.label(),
+        &request.revision,
+        &request.profile.name,
+        package_root,
+        allowed_root,
+    )
+}
+
 /// The exact inputs currently missing from the Studio-to-firmware build path.
 /// This is also used by the profile UI so the disabled state cannot drift from
 /// the build preflight.
@@ -1233,6 +1252,29 @@ mod tests {
             .map(|entry| entry.file_name())
             .collect();
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn output_root_preflight_fails_before_a_build_worker_can_start() {
+        let profiles = super::super::components::default_profiles();
+        let request = FirmwareInputRequest {
+            board: super::super::components::BoardKind::Green,
+            revision: "OSO-SWAT-A1-05".into(),
+            profile: profiles[0].clone(),
+            components: profiles[0].config.clone(),
+            preset_name: "Stock Casio".into(),
+            ordered_faces: vec!["SIMPLE_CLOCK".into()],
+            modules: vec![],
+        };
+        let root = if cfg!(windows) {
+            PathBuf::from(r"Z:\\sensor-watch-missing-share")
+        } else {
+            PathBuf::from("/proc/sensor-watch-missing-share")
+        };
+        let error = preflight_output_root(&root, &request, None, None).unwrap_err();
+        assert!(error.contains("Artifact root preflight failed"));
+        assert!(error.contains("Create folder"));
+        assert!(error.contains("Use default"));
     }
 
     #[test]
