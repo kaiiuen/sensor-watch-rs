@@ -18,6 +18,16 @@ pub fn default_artifact_root(user_data_root: &Path) -> PathBuf {
 /// Validates a configured-build root without creating it. Missing roots are a
 /// valid, not-yet-created state; Create folder performs the write separately.
 pub fn validate_artifact_root(root: &Path, package_root: Option<&Path>) -> Result<(), String> {
+    validate_artifact_root_within(root, package_root, None)
+}
+
+/// Validates an artifact root that is allowed inside one mutable package subtree.
+/// The package itself and all version/resource directories remain protected.
+pub fn validate_artifact_root_within(
+    root: &Path,
+    package_root: Option<&Path>,
+    allowed_root: Option<&Path>,
+) -> Result<(), String> {
     if root.as_os_str().is_empty() || !root.is_absolute() {
         return Err("artifact root must be a non-empty absolute path".into());
     }
@@ -29,9 +39,21 @@ pub fn validate_artifact_root(root: &Path, package_root: Option<&Path>) -> Resul
     }
     validate_path_chain(root)?;
     let resolved = canonical_for_overlap(root)?;
-    if let Some(package) = package_root {
-        let package = canonical_for_overlap(package)?;
-        if resolved == package || resolved.starts_with(&package) || package.starts_with(&resolved) {
+    let package = package_root.map(canonical_for_overlap).transpose()?;
+    if let Some(allowed) = allowed_root {
+        let allowed = canonical_for_overlap(allowed)?;
+        if let Some(package) = package.as_ref() {
+            if allowed == *package || !allowed.starts_with(package) {
+                return Err("artifact root allowed directory is not beneath the immutable package directory".into());
+            }
+        }
+        if resolved != allowed && !resolved.starts_with(&allowed) {
+            return Err(
+                "artifact root must be beneath the validated writable user-data directory".into(),
+            );
+        }
+    } else if let Some(package) = package.as_ref() {
+        if resolved == *package || resolved.starts_with(package) || package.starts_with(&resolved) {
             return Err("artifact root overlaps the immutable package directory".into());
         }
     }
@@ -47,6 +69,16 @@ pub fn create_artifact_root(root: &Path, package_root: Option<&Path>) -> Result<
     validate_artifact_root(root, package_root)?;
     std::fs::create_dir_all(root).map_err(|e| format!("cannot create artifact root: {e}"))?;
     validate_artifact_root(root, package_root)
+}
+
+pub fn create_artifact_root_within(
+    root: &Path,
+    package_root: Option<&Path>,
+    allowed_root: Option<&Path>,
+) -> Result<(), String> {
+    validate_artifact_root_within(root, package_root, allowed_root)?;
+    std::fs::create_dir_all(root).map_err(|e| format!("cannot create artifact root: {e}"))?;
+    validate_artifact_root_within(root, package_root, allowed_root)
 }
 
 fn canonical_for_overlap(path: &Path) -> Result<PathBuf, String> {
@@ -394,6 +426,22 @@ mod tests {
         assert_eq!(roots.mode, StorageMode::Portable);
         assert_eq!(roots.user_data_root, root.join("user-data"));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn packaged_default_root_is_allowed_only_under_user_data() {
+        let package = temp("package");
+        let user_data = package.join("user-data");
+        let default = user_data.join("firmware");
+        assert!(validate_artifact_root_within(&default, Some(&package), Some(&user_data)).is_ok());
+        assert!(validate_artifact_root_within(
+            &package.join("versions/2.4.0"),
+            Some(&package),
+            Some(&user_data),
+        )
+        .is_err());
+        assert!(validate_artifact_root(&package, Some(&package)).is_err());
+        let _ = std::fs::remove_dir_all(package);
     }
 
     #[test]

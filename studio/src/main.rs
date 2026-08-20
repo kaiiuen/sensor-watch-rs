@@ -3291,9 +3291,9 @@ impl StudioApp {
             return;
         }
         let build_fingerprint = plan.request_identity.clone();
-        if let Err(reason) = storage::validate_artifact_root(
+        if let Err(reason) = validate_configured_artifact_root(
             std::path::Path::new(&self.output_dir),
-            self.package_status.root.as_deref(),
+            &self.package_status,
         ) {
             self.build_message = format!("Build artifact root rejected: {reason}");
             self.status = self.build_message.clone();
@@ -8341,7 +8341,9 @@ impl StudioApp {
                         ui.monospace(format!("Measured output files: {files} files, {}", fmt_bytes(bytes)));
                     }
                     None => {
-                        if storage::validate_artifact_root(output_path, self.package_status.root.as_deref()).is_ok() && !output_path.exists() {
+                        if validate_configured_artifact_root(output_path, &self.package_status).is_ok()
+                            && !output_path.exists()
+                        {
                             ui.weak("Measured output files: not yet created (the validated root does not exist yet).");
                         } else {
                             ui.weak("Measured output files: unavailable (directory is invalid or could not be read).");
@@ -9133,7 +9135,7 @@ impl StudioApp {
 
     fn validate_artifact_root_ui(&mut self) -> Result<std::path::PathBuf, String> {
         let candidate = std::path::PathBuf::from(self.pending_artifact_root.trim());
-        storage::validate_artifact_root(&candidate, self.package_status.root.as_deref())?;
+        validate_configured_artifact_root(&candidate, &self.package_status)?;
         Ok(candidate)
     }
 
@@ -9149,9 +9151,9 @@ impl StudioApp {
     }
 
     fn create_artifact_root_ui(&mut self) {
-        match storage::create_artifact_root(
+        match create_configured_artifact_root(
             std::path::Path::new(self.pending_artifact_root.trim()),
-            self.package_status.root.as_deref(),
+            &self.package_status,
         ) {
             Ok(()) => {
                 self.artifact_root_status = "Folder created; click Apply/save to use it".into()
@@ -9923,8 +9925,47 @@ fn parse_configured_build(
     })
 }
 
+fn packaged_artifact_root(status: &distribution::PackageStatus) -> Option<&std::path::Path> {
+    (status.mode == distribution::DistributionMode::Packaged
+        || status.storage_mode == storage::StorageMode::Portable)
+        .then_some(status.user_data_root.as_path())
+}
+
+fn validate_configured_artifact_root(
+    root: &std::path::Path,
+    status: &distribution::PackageStatus,
+) -> Result<(), String> {
+    if let Some(allowed) = packaged_artifact_root(status) {
+        if storage::validate_artifact_root_within(root, status.root.as_deref(), Some(allowed))
+            .is_ok()
+        {
+            return Ok(());
+        }
+    }
+    storage::validate_artifact_root(root, status.root.as_deref())
+}
+
+fn create_configured_artifact_root(
+    root: &std::path::Path,
+    status: &distribution::PackageStatus,
+) -> Result<(), String> {
+    if let Some(allowed) = packaged_artifact_root(status) {
+        if storage::validate_artifact_root_within(root, status.root.as_deref(), Some(allowed))
+            .is_ok()
+        {
+            return storage::create_artifact_root_within(
+                root,
+                status.root.as_deref(),
+                Some(allowed),
+            );
+        }
+    }
+    storage::create_artifact_root(root, status.root.as_deref())
+}
+
 fn run_configured_build(cli: ConfiguredBuildCli) -> Result<(), String> {
-    storage::validate_artifact_root(&cli.output, distribution::active().root.as_deref())?;
+    let package_status = distribution::active();
+    validate_configured_artifact_root(&cli.output, &package_status)?;
     let output = storage::artifact_paths(
         &cli.output,
         cli.request.board.label(),
