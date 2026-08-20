@@ -21,6 +21,21 @@ pub fn validate_artifact_root(root: &Path, package_root: Option<&Path>) -> Resul
     validate_artifact_root_within(root, package_root, None)
 }
 
+/// Normalizes a saved artifact root for packaged or explicitly portable mode.
+/// Only the validated mutable user-data root and its descendants are accepted;
+/// invalid, stale, or package-overlapping values reset to the package default.
+pub fn normalize_packaged_artifact_root(
+    candidate: &Path,
+    package_root: &Path,
+    user_data_root: &Path,
+) -> (PathBuf, bool) {
+    if validate_artifact_root_within(candidate, Some(package_root), Some(user_data_root)).is_ok() {
+        (candidate.to_path_buf(), false)
+    } else {
+        (user_data_root.to_path_buf(), true)
+    }
+}
+
 /// Validates an artifact root that is allowed inside one mutable package subtree.
 /// The package itself and all version/resource directories remain protected.
 pub fn validate_artifact_root_within(
@@ -442,6 +457,47 @@ mod tests {
         .is_err());
         assert!(validate_artifact_root(&package, Some(&package)).is_err());
         let _ = std::fs::remove_dir_all(package);
+    }
+
+    #[test]
+    fn stale_package_root_resets_to_user_data() {
+        let package = temp("stale-package");
+        let user_data = package.join("user-data");
+        let (normalized, migrated) =
+            normalize_packaged_artifact_root(&package.join("versions/1.0.0"), &package, &user_data);
+        assert_eq!(normalized, user_data);
+        assert!(migrated);
+    }
+
+    #[test]
+    fn empty_packaged_root_resets_to_user_data() {
+        let package = temp("empty-package");
+        let user_data = package.join("user-data");
+        let (normalized, migrated) =
+            normalize_packaged_artifact_root(Path::new(""), &package, &user_data);
+        assert_eq!(normalized, user_data);
+        assert!(migrated);
+    }
+
+    #[test]
+    fn valid_packaged_user_data_root_is_preserved() {
+        let package = temp("valid-package");
+        let user_data = package.join("user-data");
+        let (normalized, migrated) =
+            normalize_packaged_artifact_root(&user_data, &package, &user_data);
+        assert_eq!(normalized, user_data);
+        assert!(!migrated);
+    }
+
+    #[test]
+    fn safe_custom_descendant_is_preserved() {
+        let package = temp("custom-package");
+        let user_data = package.join("user-data");
+        let custom = user_data.join("custom-artifacts");
+        let (normalized, migrated) =
+            normalize_packaged_artifact_root(&custom, &package, &user_data);
+        assert_eq!(normalized, custom);
+        assert!(!migrated);
     }
 
     #[test]

@@ -1258,7 +1258,9 @@ impl Default for StudioApp {
         app.fetch_ntp();
         // Check for updates on launch.
         app.check_for_updates();
-        app.status = tr(app.language, Key::Ready).to_string();
+        if app.artifact_root_status.is_empty() {
+            app.status = tr(app.language, Key::Ready).to_string();
+        }
         if let Some(startup_status) = update::startup_status() {
             app.status = startup_status.to_owned();
             app.package_status.warnings.push(startup_status.to_owned());
@@ -9267,12 +9269,24 @@ impl StudioApp {
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
         self.rtc_calibration = s.rtc_calibration;
-        self.output_dir = if s.artifact_root.is_empty() {
-            self.package_status.user_data_root.display().to_string()
-        } else {
-            s.artifact_root
-        };
+        let saved_artifact_root = std::path::PathBuf::from(s.artifact_root.trim());
+        let (artifact_root, migrated) = normalize_loaded_artifact_root(
+            &saved_artifact_root,
+            &self.package_status,
+            std::path::Path::new(&self.output_dir),
+        );
+        self.output_dir = artifact_root.display().to_string();
         self.pending_artifact_root = self.output_dir.clone();
+        if migrated {
+            self.artifact_root_status = format!(
+                "Saved artifact root was reset to the validated package user-data root: {}",
+                artifact_root.display()
+            );
+            self.status = self.artifact_root_status.clone();
+            self.package_status
+                .warnings
+                .push(self.artifact_root_status.clone());
+        }
         self.board = match s.board.as_str() {
             "Red / Lite" | "Red" | "Lite" => Board::RedLite,
             "Blue" => Board::Blue,
@@ -9925,6 +9939,23 @@ fn parse_configured_build(
     })
 }
 
+fn normalize_loaded_artifact_root(
+    candidate: &std::path::Path,
+    status: &distribution::PackageStatus,
+    installed_value: &std::path::Path,
+) -> (std::path::PathBuf, bool) {
+    if let (Some(package_root), Some(allowed)) =
+        (status.root.as_deref(), packaged_artifact_root(status))
+    {
+        return storage::normalize_packaged_artifact_root(candidate, package_root, allowed);
+    }
+    if candidate.as_os_str().is_empty() {
+        (installed_value.to_path_buf(), false)
+    } else {
+        (candidate.to_path_buf(), false)
+    }
+}
+
 fn packaged_artifact_root(status: &distribution::PackageStatus) -> Option<&std::path::Path> {
     (status.mode == distribution::DistributionMode::Packaged
         || status.storage_mode == storage::StorageMode::Portable)
@@ -10056,6 +10087,69 @@ mod configured_cli_tests {
                 "target/test-configured/firmware/Green/OSO-SWAT-A1-05/Green/latest"
             )
         );
+    }
+
+    #[test]
+    fn startup_estimator_and_build_preflight_use_normalized_root() {
+        let package = std::env::temp_dir().join("studio-startup-package-root");
+        let user_data = package.join("user-data");
+        let status = distribution::PackageStatus {
+            mode: distribution::DistributionMode::Packaged,
+            root: Some(package.clone()),
+            launcher: None,
+            app_directory: None,
+            resources: None,
+            templates: None,
+            firmware_project: None,
+            active_project: None,
+            tools: None,
+            targets: None,
+            master_clock: None,
+            user_data_root: user_data.clone(),
+            storage_mode: storage::StorageMode::Installed,
+            current_version: None,
+            previous_version: None,
+            capabilities: distribution::CapabilityStatus {
+                resources: false,
+                templates: false,
+                firmware_project: false,
+                tools: false,
+                targets: false,
+                master_clock: false,
+            },
+            warnings: Vec::new(),
+        };
+        let (normalized, migrated) = normalize_loaded_artifact_root(
+            &package.join("versions/old"),
+            &status,
+            std::path::Path::new("C:/unused-installed-root"),
+        );
+        assert!(migrated);
+        assert_eq!(normalized, user_data);
+
+        let paths =
+            storage::artifact_paths(&normalized, "Green", "OSO-SWAT-A1-05", "Green").unwrap();
+        assert!(paths.latest.starts_with(&user_data));
+        let profiles = components::default_profiles();
+        let selected = profiles[0].config.clone();
+        let plan = firmware_inputs::resolve_build_plan(
+            Board::Green,
+            "OSO-SWAT-A1-05",
+            &profiles,
+            0,
+            &selected,
+            &selected,
+            "Stock Casio",
+            vec!["SIMPLE_CLOCK".into()],
+            Vec::new(),
+            &watch_config::WatchConfig::default(),
+            &normalized.display().to_string(),
+        );
+        assert!(matches!(
+            plan.preflight,
+            firmware_inputs::PreflightStatus::Valid
+        ));
+        assert!(plan.estimate.is_some());
     }
 
     #[test]

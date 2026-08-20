@@ -376,9 +376,7 @@ impl AppSettings {
                 return Err(format!("{field} contains invalid or excessive text"));
             }
         }
-        if self.output_dir.trim().is_empty() || self.artifact_root.trim().is_empty() {
-            return Err("output and artifact directories must not be empty".into());
-        }
+
         if self.ntp_servers.len() > MAX_NTP_SERVERS {
             return Err("too many custom NTP servers".into());
         }
@@ -407,8 +405,8 @@ impl AppSettings {
         if self.text_size > 2 {
             return Err("text size must be 0, 1, or 2".into());
         }
-        if self.output_dir.trim().is_empty() || self.output_dir.len() > 4096 {
-            return Err("output directory must be non-empty and at most 4096 bytes".into());
+        if self.output_dir.len() > 4096 {
+            return Err("output directory must be at most 4096 bytes".into());
         }
         if self.artifact_root.len() > 4096 {
             return Err("artifact root must be at most 4096 bytes".into());
@@ -656,6 +654,26 @@ mod tests {
         assert_eq!(panel_ratio(-1.0, 800.0, 0.45), 0.45);
         assert_eq!(panel_ratio(f32::NAN, 800.0, 0.45), 0.45);
         assert_eq!(panel_ratio(2.0, 0.0, 0.45), 1.0);
+    }
+
+    #[test]
+    fn legacy_output_dir_migrates_to_artifact_root() {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&AppSettings::default().to_json().unwrap()).unwrap();
+        raw.as_object_mut().unwrap().remove("artifact_root");
+        raw["output_dir"] = "C:/old-package/versions/1.0.0".into();
+        let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
+        assert_eq!(loaded.artifact_root, "C:/old-package/versions/1.0.0");
+    }
+
+    #[test]
+    fn empty_saved_artifact_root_can_be_normalized_at_startup() {
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&AppSettings::default().to_json().unwrap()).unwrap();
+        raw["artifact_root"] = "".into();
+        raw["output_dir"] = "".into();
+        let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
+        assert!(loaded.artifact_root.is_empty());
     }
 
     #[test]
