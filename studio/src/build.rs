@@ -267,15 +267,6 @@ pub const CONFIGURATION_INPUT_EXPLANATIONS: &[(&str, &str)] = &[
     ),
 ];
 
-/// Retained for callers that need a generic preflight label. Detailed validation is
-/// request-specific and happens before any output or toolchain side effect.
-pub const CONFIGURATION_BUILD_BLOCKED: &str =
-    "firmware build refused: configuration inputs must be validated before building";
-
-pub fn validate_configuration_inputs() -> Result<(), &'static str> {
-    Ok(())
-}
-
 /// Validates a concrete request without creating an output artifact or running
 /// the firmware toolchain. This is the UI preflight and remains fail closed.
 pub fn preflight_request(request: &FirmwareInputRequest) -> Result<(), String> {
@@ -1175,9 +1166,9 @@ mod tests {
     }
 
     #[test]
-    fn blocked_build_message_lists_every_required_preflight_input() {
-        assert!(validate_configuration_inputs().is_ok());
+    fn configuration_contract_remains_separate_from_request_preflight() {
         assert_eq!(missing_configuration_inputs(), CONFIGURATION_INPUT_CONTRACT);
+        assert!(!CONFIGURATION_INPUT_CONTRACT.is_empty());
     }
 
     #[test]

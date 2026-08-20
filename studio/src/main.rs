@@ -9780,10 +9780,10 @@ fn fmt_bytes(bytes: u64) -> String {
     }
 }
 
+const CLI_HELP: &str = "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Build stock firmware through the stock artifact path; Studio configuration is not consulted or validated\n  configured-build --board <BOARD> --revision <REVISION> --profile <PROFILE> --lcd original --preset <NAME> --faces <FACE[,FACE...]> --output <DIR>\n      Generate a request-specific configured build under DIR/firmware/<board>/<revision>/<profile>/latest; generated-input validation is required\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI.";
+
 fn print_cli_help() {
-    println!(
-        "Usage: sensor-watch-studio <COMMAND> [ARGS]\n\nCommands:\n  build\n      Build the unconfigured stock firmware (stock path)\n  configured-build --board <BOARD> --revision <REVISION> --profile <PROFILE> --lcd original --preset <NAME> --faces <FACE[,FACE...]> --output <DIR>\n      Build under DIR/firmware/<board>/<revision>/<profile>/latest; --output is honored\n  uf2 <INPUT> <OUTPUT>\n      Convert a binary image to UF2\n  verify <PATH> [--manifest <PATH>] [--trusted-sha256 <SHA256>]\n      Verify a UF2 artifact and its optional manifest\n  backup <SRC> <DST>\n      Preserve a known-good UF2 and write its manifest\n  rollback <SRC> <DST> <TRUSTED_SHA256>\n      Verify and stage a trusted rollback UF2\n  report <PATH> <TRUSTED_SHA256>\n      Print a recovery report for a trusted UF2\n  flash [ELF]\n      Flash firmware with probe-rs\n  help\n      Show this help\n\nWith no command, Firmware Studio starts its normal GUI."
-    );
+    println!("{CLI_HELP}");
 }
 
 fn required_cli_arg(args: &mut impl Iterator<Item = String>) -> Result<String, String> {
@@ -9932,7 +9932,7 @@ fn run_configured_build(cli: ConfiguredBuildCli) -> Result<(), String> {
     let inspection = build::inspect_artifact(&path)?;
     build::validate_generated_input_digest(&inspection)?;
     println!(
-        "configured build succeeded\nartifact {}\ngenerated-input-digest {}",
+        "configured build request succeeded\nartifact {}\ngenerated-input-digest {}",
         path.display(),
         inspection.generated_input_digest
     );
@@ -10008,6 +10008,14 @@ mod configured_cli_tests {
     }
 
     #[test]
+    fn cli_help_distinguishes_stock_build_from_configured_request_generation() {
+        assert!(CLI_HELP.contains("stock artifact path"));
+        assert!(CLI_HELP.contains("Studio configuration is not consulted or validated"));
+        assert!(CLI_HELP.contains("request-specific configured build"));
+        assert!(CLI_HELP.contains("generated-input validation is required"));
+    }
+
+    #[test]
     fn rejects_non_original_lcd_and_missing_ordered_faces() {
         let mut args = valid_args();
         let lcd = args.iter().position(|arg| arg == "original").unwrap();
@@ -10045,9 +10053,8 @@ fn run_cli(mut args: impl Iterator<Item = String>) -> Result<(), String> {
         }
         "build" => {
             ensure_cli_no_extra(&mut args)?;
-            build::validate_configuration_inputs().map_err(str::to_string)?;
             let result = sensor_watch_tools::build_firmware()?;
-            println!("built stock artifact {}", result.uf2_path.display());
+            println!("built stock artifact path {}", result.uf2_path.display());
             Ok(())
         }
         "configured-build" => run_configured_build(parse_configured_build(&mut args)?),
@@ -12842,8 +12849,6 @@ mod tests {
 
     #[test]
     fn build_contract_is_fail_closed_and_ui_does_not_promise_artifacts() {
-        assert!(super::build::validate_configuration_inputs().is_ok());
-        assert!(super::build::CONFIGURATION_BUILD_BLOCKED.contains("validated"));
         assert!(super::build::missing_configuration_inputs().len() >= 5);
     }
 
