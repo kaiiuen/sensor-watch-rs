@@ -2,7 +2,7 @@
 //!
 //! The launcher executable is installed once and is never replaced while it is
 //! running. Studio versions are immutable sibling directories under `versions`;
-//! mutable state lives under `user-data`.
+//! mutable state lives under `data`.
 
 use sensor_watch_desktop_update::{
     authenticate, select, verify_artifact, Error as UpdateError, KeyRing, ReleaseMetadata,
@@ -688,15 +688,15 @@ mod tests {
     }
     fn setup(name: &str) -> (Launcher, PathBuf, PathBuf) {
         let root = temp(name);
-        let user = root.join("user-data");
+        let user_data = root.join("data");
         let key = SigningKey::from_bytes(&[7; 32]);
-        let l = Launcher::new(&root, &user, "studio.exe");
+        let l = Launcher::new(&root, &user_data, "studio.exe");
         fs::create_dir_all(l.version_root().join("1.0.0")).unwrap();
         fs::create_dir_all(l.version_root().join("2.0.0")).unwrap();
         fs::write(l.version_root().join("1.0.0/studio.exe"), b"x").unwrap();
         fs::write(l.version_root().join("2.0.0/studio.exe"), b"x").unwrap();
         metadata(&root, &key, &[("1.0.0", b"x"), ("2.0.0", b"x")]);
-        (configured(l, &key), root, user)
+        (configured(l, &key), root, user_data)
     }
     fn clean(root: &Path) {
         let _ = fs::remove_dir_all(root);

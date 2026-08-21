@@ -1266,6 +1266,8 @@ impl Default for StudioApp {
         if let Some(startup_status) = update::startup_status() {
             app.status = startup_status.to_owned();
             app.package_status.warnings.push(startup_status.to_owned());
+        } else if let Some(warning) = app.package_status.warnings.first() {
+            app.status = warning.clone();
         }
         app
     }
@@ -9236,6 +9238,10 @@ impl StudioApp {
     }
 
     fn apply_data_folder(&mut self) {
+        if self.package_status.mode == distribution::DistributionMode::Packaged {
+            self.data_folder_status = "Packaged Studio data is fixed at <package root>/data. Move or extract the application to a writable folder instead".into();
+            return;
+        }
         let candidate = std::path::PathBuf::from(self.pending_data_folder.trim());
         let executable = std::env::current_exe().unwrap_or_default();
         let firmware = build::firmware_dir();
@@ -10497,15 +10503,12 @@ fn main() -> eframe::Result<()> {
         || startup.portable
         || storage::has_valid_portable_flag(&executable);
     let user_data = if let Some(root) = packaged_root.as_ref() {
-        startup
-            .user_data
-            .clone()
-            .unwrap_or_else(|| root.join("user-data"))
+        root.join("data")
     } else if portable_requested {
         executable
             .parent()
             .and_then(std::path::Path::parent)
-            .map(|root| root.join("user-data"))
+            .map(|root| root.join("data"))
             .unwrap_or_else(data_dir::default_path)
     } else {
         startup
@@ -10517,6 +10520,9 @@ fn main() -> eframe::Result<()> {
     if startup.user_data.is_none() {
         startup.user_data = Some(user_data.clone());
     }
+    if packaged_root.is_some() {
+        persist::set_bootstrap_root(user_data.clone());
+    }
 
     // Recover an interrupted local package activation before any distribution,
     // resource, or project initialization can select the new version.
@@ -10525,14 +10531,20 @@ fn main() -> eframe::Result<()> {
         .map(|root| root.join("versions"))
         .or_else(|| executable.parent().map(|path| path.join("versions")))
         .unwrap_or_else(|| std::path::PathBuf::from("versions"));
+    let packaged_data_valid = packaged_root
+        .as_deref()
+        .is_none_or(|root| data_dir::validate_packaged_root(&root.join("data"), root).is_ok());
     let recovery_manager = update::UpdateManager::new(&package_root, &user_data);
-    if let Err(error) = recovery_manager.recover_failed_startup() {
-        let message = format!("Studio update recovery failed: {error}");
-        eprintln!("{message}");
-        update::record_startup_status(message);
+    if packaged_data_valid {
+        if let Err(error) = recovery_manager.recover_failed_startup() {
+            let message = format!("Studio update recovery failed: {error}");
+            eprintln!("{message}");
+            update::record_startup_status(message);
+        }
     }
 
-    // Bootstrap preferences are deliberately unscoped: they must be read
+    // Bootstrap preferences use the package data root in packaged mode. They
+    // never read or write the platform configuration directory there.
     // before selecting an executable-hash profile. Distribution discovery is
     // initialized only after failed-startup recovery.
     let developer_mode = distribution::developer_mode_requested();
@@ -10547,7 +10559,10 @@ fn main() -> eframe::Result<()> {
             eprintln!("Studio distribution: {warning}");
         }
     }
-    let bootstrap = persist::load_runtime_preferences();
+    let mut bootstrap = persist::load_runtime_preferences();
+    if packaged_root.is_some() {
+        bootstrap.data_folder = user_data.display().to_string();
+    }
     let fresh = bootstrap.fresh_test_executable_profile;
     let requested_root = if portable_requested {
         package_status.user_data_root.clone()
@@ -10560,7 +10575,18 @@ fn main() -> eframe::Result<()> {
     let fallback_root = data_dir::default_path();
     let firmware = build::firmware_dir();
     let protected = [firmware.as_path(), executable.as_path()];
-    let (root, root_warning) = if data_dir::validate(&requested_root, &protected).is_ok() {
+    let (root, root_warning) = if packaged_root.is_some() {
+        if data_dir::validate_packaged_root(&requested_root, packaged_root.as_deref().unwrap())
+            .is_ok()
+        {
+            (requested_root, None)
+        } else {
+            (
+                requested_root,
+                Some("Packaged data is unavailable or not writable. Move or extract the application to a writable folder and restart Studio"),
+            )
+        }
+    } else if data_dir::validate(&requested_root, &protected).is_ok() {
         (requested_root, None)
     } else if packaged_root.is_none() && data_dir::validate(&fallback_root, &protected).is_ok() {
         (
@@ -10577,7 +10603,7 @@ fn main() -> eframe::Result<()> {
                 fallback_root
             },
             Some(if packaged_root.is_some() {
-                "Packaged user-data is unavailable or not writable; choose a writable package root or explicitly select a custom data folder"
+                "Packaged data is unavailable or not writable. Move or extract the application to a writable folder and restart Studio"
             } else {
                 "Studio data-folder validation failed; running without changing the selected root"
             }),

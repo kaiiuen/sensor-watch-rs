@@ -170,19 +170,16 @@ are `time`, `settime YYMMDDHHMMSS`, `drift N`, `optical`, `panic`, `events`,
 
 A packaged launch is identified by `sensor-watch-package.json`, whether Studio is
 started by the launcher or directly from `versions/<version>`. Its mutable root
-is exactly `<package root>/user-data`: settings, runtime preferences, restore
+is exactly `<package root>/data`: settings, runtime preferences, restore
 points, the mutable project, logs and exports, update state, startup markers, and
 launcher state stay below that directory. Firmware build output is separate at
-`<package root>/user-data/sensor-watch-studio-artifacts/<board>/<revision>/<profile>/latest`.
-Recovery generations are under that artifact root. Immutable version directories and bundled templates are never used for mutable writes. Immutable version directories and bundled templates are never
-used for mutable writes.
+`<package root>/data/sensor-watch-studio-artifacts/<board>/<revision>/<profile>/latest`.
+Recovery generations are under that artifact root. Immutable version directories and bundled templates are never used for mutable writes.
 
-The launcher forwards the package root, user-data root, version, attempt, and
-portable context explicitly. A package-root write failure is reported as an
+The launcher forwards the package root, the same app-local data root, version, attempt, and portable context explicitly. A package-root write failure is reported as an
 actionable error; Studio does not silently fall back to Windows AppData,
 Documents, or legacy settings. Developer checkouts may continue to use the
-normal user-scoped defaults. A custom data root is used only when explicitly
-selected by the user, and path/reparse-point validation still applies.
+normal user-scoped defaults. Packaged mode never accepts a custom data root. If the package root or its data directory is protected or unwritable, move or extract the application to a writable folder.
 
 ## Building and all-in-one CLI
 
@@ -236,8 +233,7 @@ tools are reported as unavailable. The Master Clock action is Advanced-only,
 on-demand, package-local, hash-validated, and never launched at startup. It
 warns that NTP/geolocation are external network activity and does not change
 Windows time. The package builder does not bundle the unlicensed/untracked
-Master Clock source. Mutable settings and user data remain under the platform
-user-data directory, separate from the package.
+Master Clock source. All mutable settings and data remain under `<package root>/data`.
 
 A binary copied from a developer checkout does not silently use that checkout.
 To opt into checkout paths for local development, set

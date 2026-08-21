@@ -13,10 +13,17 @@ use serde::{Deserialize, Serialize};
 
 use super::settings::AppSettings;
 use super::test_runtime;
+use std::sync::OnceLock;
 
 const MAX_SETTINGS_BYTES: u64 = 512 * 1024;
 const SETTINGS_FILE: &str = "studio-settings.json";
 const RUNTIME_FILE: &str = "studio-runtime.json";
+
+static BOOTSTRAP_ROOT: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_bootstrap_root(root: PathBuf) {
+    let _ = BOOTSTRAP_ROOT.set(root);
+}
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -38,11 +45,20 @@ impl Default for RuntimePreferences {
 }
 
 fn default_data_folder() -> String {
-    super::data_dir::default_path().display().to_string()
+    BOOTSTRAP_ROOT
+        .get()
+        .cloned()
+        .unwrap_or_else(super::data_dir::default_path)
+        .display()
+        .to_string()
 }
 
 pub fn runtime_path() -> PathBuf {
-    test_runtime::normal_config_dir().join(RUNTIME_FILE)
+    BOOTSTRAP_ROOT
+        .get()
+        .cloned()
+        .unwrap_or_else(test_runtime::normal_config_dir)
+        .join(RUNTIME_FILE)
 }
 
 /// Loads launch preferences before the executable-scoped profile is selected.
@@ -55,7 +71,11 @@ pub fn load_runtime_preferences() -> RuntimePreferences {
             return preferences;
         }
     }
-    let migrated = load_at(&test_runtime::normal_config_dir().join(SETTINGS_FILE))
+    let migrated = BOOTSTRAP_ROOT
+        .get()
+        .is_none()
+        .then(|| load_at(&test_runtime::normal_config_dir().join(SETTINGS_FILE)))
+        .flatten()
         .map(|settings| RuntimePreferences {
             fresh_test_executable_profile: settings.fresh_test_executable_profile,
             persist_user_changes: settings.persist_user_changes,

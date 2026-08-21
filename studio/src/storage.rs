@@ -51,7 +51,7 @@ pub fn validate_artifact_root_within(
         }
         if resolved != allowed && !resolved.starts_with(&allowed) {
             return Err(
-                "artifact root must be beneath the validated writable user-data directory".into(),
+                "artifact root must be beneath the validated writable data directory".into(),
             );
         }
     } else if let Some(package) = package.as_ref() {
@@ -262,7 +262,7 @@ pub fn roots(
             return StorageRoots {
                 mode: StorageMode::Portable,
                 package_root: Some(root.to_path_buf()),
-                user_data_root: root.join("user-data"),
+                user_data_root: root.join("data"),
             };
         }
     }
@@ -556,14 +556,14 @@ mod tests {
             temp("installed"),
         );
         assert_eq!(roots.mode, StorageMode::Portable);
-        assert_eq!(roots.user_data_root, root.join("user-data"));
+        assert_eq!(roots.user_data_root, root.join("data"));
         let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
-    fn packaged_default_root_is_allowed_only_under_user_data() {
+    fn packaged_default_root_is_allowed_only_under_data() {
         let package = temp("package");
-        let user_data = package.join("user-data");
+        let user_data = package.join("data");
         let default = user_data.join("firmware");
         assert!(validate_artifact_root_within(&default, Some(&package), Some(&user_data)).is_ok());
         assert!(validate_artifact_root_within(

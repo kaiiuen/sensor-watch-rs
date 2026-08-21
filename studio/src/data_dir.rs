@@ -10,6 +10,19 @@ pub fn default_path() -> PathBuf {
     super::test_runtime::normal_config_dir()
 }
 
+pub fn validate_packaged_root(path: &Path, package_root: &Path) -> Result<(), String> {
+    let expected = package_root.join("data");
+    let candidate = canonical_for_overlap(path)?;
+    let expected = canonical_for_overlap(&expected)?;
+    if candidate != expected {
+        return Err(format!(
+            "packaged data root must be exactly {}",
+            expected.display()
+        ));
+    }
+    validate(path, &[])
+}
+
 pub fn validate(path: &Path, protected: &[&Path]) -> Result<(), String> {
     if path.as_os_str().is_empty() {
         return Err("Studio data folder cannot be empty".into());
@@ -182,6 +195,16 @@ mod tests {
             default_path(),
             super::super::test_runtime::normal_config_dir()
         );
+    }
+
+    #[test]
+    fn packaged_root_is_exact_and_rejects_protected_overlap() {
+        let package = temp("packaged");
+        let data = package.join("data");
+        assert!(validate_packaged_root(&data, &package).is_ok());
+        assert!(validate_packaged_root(&package, &package).is_err());
+        assert!(validate_packaged_root(&package.join("versions/2.4.0"), &package).is_err());
+        let _ = std::fs::remove_dir_all(package);
     }
     #[test]
     fn rejects_relative_empty_and_file() {

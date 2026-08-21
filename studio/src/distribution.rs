@@ -156,8 +156,8 @@ pub fn resolve_with_user_data(
 ) -> PackageStatus {
     if let Some((root, manifest)) = discover_package(executable) {
         // A package owns its mutable state. The platform default is never a
-        // packaged fallback; only an explicitly selected custom root may differ.
-        let user_data_root = explicit_user_data.unwrap_or_else(|| root.join("user-data"));
+        // packaged fallback. The package data directory is canonical.
+        let user_data_root = root.join("data");
         return package_status(root, manifest, user_data_root, portable);
     }
     let user_data_root = explicit_user_data.unwrap_or_else(crate::data_dir::default_path);
@@ -226,18 +226,17 @@ pub fn resolve_with_user_data(
 fn package_status(
     root: PathBuf,
     manifest: PackageManifest,
-    installed_root: PathBuf,
+    _installed_root: PathBuf,
     explicit_portable: bool,
 ) -> PackageStatus {
-    // `installed_root` already contains the resolved package-local default or
-    // an explicit custom override. Do not let the portable flag replace that
-    // choice with a second implicit root.
+    // Packaged mode has one mutable root. Portable context changes the label
+    // only and never creates a second directory.
     let mut storage = crate::storage::roots(
         &root.join(&manifest.launcher_executable),
         Some(&root),
         crate::storage::StorageMode::Installed,
         false,
-        installed_root,
+        root.join("data"),
     );
     if explicit_portable {
         storage.mode = crate::storage::StorageMode::Portable;
@@ -252,6 +251,11 @@ fn package_status(
     let tools = manifest.tools_directory.as_deref().map(path);
     let targets = manifest.targets_directory.as_deref().map(path);
     let mut warnings = Vec::new();
+    if let Err(error) = crate::data_dir::validate_packaged_root(&root.join("data"), &root) {
+        warnings.push(format!(
+            "Packaged data is unavailable or not writable: {error}. Move or extract the application to a writable folder and restart Studio"
+        ));
+    }
     let validated_master_clock = manifest.master_clock.as_ref().and_then(|capability| {
         match master_clock::validate_package_tool(
             &root,
@@ -331,12 +335,12 @@ fn prepare_packaged_project(user_data_root: &Path, template: &Path) -> Result<Pa
     crate::data_dir::validate(&project, &[])?;
     let user_root = user_data_root
         .canonicalize()
-        .map_err(|e| format!("cannot resolve user-data root: {e}"))?;
+        .map_err(|e| format!("cannot resolve data root: {e}"))?;
     let project_root = project
         .canonicalize()
         .map_err(|e| format!("cannot resolve mutable project: {e}"))?;
     if !project_root.starts_with(&user_root) || project_root == user_root {
-        return Err("mutable project is not beneath the validated user-data root".into());
+        return Err("mutable project is not beneath the validated data root".into());
     }
     if project_root.join("src").is_dir() {
         return Ok(project_root);
@@ -593,7 +597,7 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
-    fn launcher_user_data_is_propagated_to_packaged_project() {
+    fn packaged_custom_data_context_is_ignored() {
         let root = temp("explicit-data");
         let exe = root.join("app/sensor-watch-studio.exe");
         let user_data = temp("launcher-data");
@@ -601,7 +605,7 @@ mod tests {
         std::fs::write(&exe, b"x").unwrap();
         std::fs::write(root.join(MANIFEST_FILE), manifest()).unwrap();
         let status = resolve_with_user_data(&exe, false, None, false, Some(user_data.clone()));
-        assert_eq!(status.user_data_root, user_data);
+        assert_eq!(status.user_data_root, root.join("data"));
         let _ = std::fs::remove_dir_all(root);
         let _ = std::fs::remove_dir_all(user_data);
     }
@@ -614,7 +618,7 @@ mod tests {
         std::fs::write(&exe, b"x").unwrap();
         std::fs::write(root.join(MANIFEST_FILE), manifest()).unwrap();
         let status = resolve(&exe, false, None);
-        assert_eq!(status.user_data_root, root.join("user-data"));
+        assert_eq!(status.user_data_root, root.join("data"));
         let artifacts = crate::storage::artifact_paths(
             &crate::storage::default_artifact_root(&status.user_data_root),
             "Green",
@@ -624,11 +628,11 @@ mod tests {
         .unwrap();
         assert_eq!(
             artifacts.profile_root,
-            root.join("user-data/sensor-watch-studio-artifacts/Green/rev-a/stock")
+            root.join("data/sensor-watch-studio-artifacts/Green/rev-a/stock")
         );
         assert_eq!(
             crate::storage::default_artifact_root(&status.user_data_root),
-            root.join("user-data/sensor-watch-studio-artifacts")
+            root.join("data/sensor-watch-studio-artifacts")
         );
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -652,7 +656,7 @@ mod tests {
         let status = resolve(&exe, false, None);
         assert_eq!(status.mode, DistributionMode::Packaged);
         assert_eq!(status.root, Some(root.clone()));
-        assert_eq!(status.user_data_root, root.join("user-data"));
+        assert_eq!(status.user_data_root, root.join("data"));
         let _ = std::fs::remove_dir_all(root);
     }
     #[test]
@@ -672,7 +676,7 @@ mod tests {
         std::fs::write(root.join(MANIFEST_FILE), manifest()).unwrap();
         let status = resolve_with_user_data(&exe, false, None, false, Some(user_data.clone()));
         assert_eq!(status.mode, DistributionMode::Packaged);
-        assert_eq!(status.user_data_root, user_data);
+        assert_eq!(status.user_data_root, root.join("data"));
         assert!(status
             .warnings
             .iter()

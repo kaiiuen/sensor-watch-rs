@@ -13,9 +13,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    let user_data = std::env::var_os("SENSOR_WATCH_USER_DATA")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| base.join("user-data"));
+    let user_data = base.join("data");
     let launcher = Launcher::new(base, user_data, "studio.exe");
     let timeout_ms = std::env::var("SENSOR_WATCH_STARTUP_TIMEOUT_MS")
         .ok()
