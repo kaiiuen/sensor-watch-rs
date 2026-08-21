@@ -9989,11 +9989,13 @@ fn validate_configured_artifact_root(
     status: &distribution::PackageStatus,
 ) -> Result<(), String> {
     if let Some(allowed) = packaged_artifact_root(status) {
-        if storage::validate_artifact_root_within(root, status.root.as_deref(), Some(allowed))
-            .is_ok()
-        {
-            return Ok(());
-        }
+        return storage::validate_artifact_root_within(root, status.root.as_deref(), Some(allowed))
+            .map_err(|error| {
+                format!(
+                    "{error}; allowed root: {} (or a safe descendant)",
+                    allowed.display()
+                )
+            });
     }
     storage::validate_artifact_root(root, status.root.as_deref())
 }
@@ -10109,6 +10111,88 @@ mod configured_cli_tests {
                 "target/test-configured/firmware/Green/OSO-SWAT-A1-05/Green/latest"
             )
         );
+    }
+
+    fn packaged_status(package: &std::path::Path) -> distribution::PackageStatus {
+        distribution::PackageStatus {
+            mode: distribution::DistributionMode::Packaged,
+            root: Some(package.to_path_buf()),
+            launcher: None,
+            app_directory: None,
+            resources: None,
+            templates: None,
+            firmware_project: None,
+            active_project: None,
+            tools: None,
+            targets: None,
+            master_clock: None,
+            user_data_root: package.join("user-data"),
+            storage_mode: storage::StorageMode::Installed,
+            current_version: None,
+            previous_version: None,
+            capabilities: distribution::CapabilityStatus {
+                resources: false,
+                templates: false,
+                firmware_project: false,
+                tools: false,
+                targets: false,
+                master_clock: false,
+            },
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn packaged_validation_rejects_package_root_and_immutable_descendants() {
+        let package = std::env::temp_dir().join("studio-artifact-root-validation");
+        std::fs::create_dir_all(package.join("user-data")).unwrap();
+        let status = packaged_status(&package);
+
+        for relative in ["", "versions/2.4.0", "resources", "firmware"] {
+            let candidate = package.join(relative);
+            let error = validate_configured_artifact_root(&candidate, &status).unwrap_err();
+            assert!(error.contains("allowed root"), "{error}");
+            assert!(
+                error.contains(&status.user_data_root.display().to_string()),
+                "{error}"
+            );
+        }
+    }
+
+    #[test]
+    fn packaged_validation_rejects_outside_path_and_accepts_user_data_descendant() {
+        let package = std::env::temp_dir().join("studio-artifact-root-validation-boundary");
+        std::fs::create_dir_all(package.join("user-data")).unwrap();
+        let status = packaged_status(&package);
+
+        let outside = package.parent().unwrap().join("outside-artifacts");
+        let error = validate_configured_artifact_root(&outside, &status).unwrap_err();
+        assert!(error.contains("allowed root"), "{error}");
+        assert!(
+            error.contains(&status.user_data_root.display().to_string()),
+            "{error}"
+        );
+
+        let descendant = status.user_data_root.join("custom").join("artifacts");
+        assert!(validate_configured_artifact_root(&descendant, &status).is_ok());
+    }
+
+    #[test]
+    fn configured_cli_output_override_is_validated_inside_user_data() {
+        let package = std::env::temp_dir().join("studio-cli-artifact-root-validation");
+        std::fs::create_dir_all(package.join("user-data")).unwrap();
+        let status = packaged_status(&package);
+        let output = status.user_data_root.join("cli-override");
+        let mut args = valid_args();
+        let output_arg = args
+            .iter()
+            .position(|arg| arg == "target/test-configured")
+            .unwrap();
+        args[output_arg] = output.display().to_string();
+
+        let parsed = parse_configured_build(&mut args.into_iter()).unwrap();
+        assert_eq!(parsed.output, output);
+        assert!(validate_configured_artifact_root(&parsed.output, &status).is_ok());
     }
 
     #[test]
