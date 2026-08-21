@@ -203,12 +203,7 @@ pub struct AppSettings {
     /// General exports are kept separate from firmware build output.
     #[serde(skip)]
     pub output_dir: String,
-    /// The only persisted root for configured-build artifacts.
-    #[serde(default = "default_output_dir")]
-    pub build_output_root: String,
-    /// Legacy configured-build alias accepted only during deserialization.
-    #[serde(default, skip_serializing)]
-    artifact_root: String,
+
     /// Whether the first-run welcome overlay has been dismissed.
     #[serde(default = "default_first_run")]
     pub first_run: bool,
@@ -283,7 +278,6 @@ impl AppSettings {
         catalog_width: f32,
         preset_height: f32,
         modules: &ModuleManager,
-        output_dir: String,
         first_run: bool,
         tour_claims: Vec<String>,
         drift_ppm: f64,
@@ -313,8 +307,6 @@ impl AppSettings {
             modules: modules.clone(),
             data_folder: default_data_folder(),
             output_dir: default_export_dir(),
-            build_output_root: output_dir,
-            artifact_root: String::new(),
             first_run,
             tour_claims,
             persist_user_changes,
@@ -371,7 +363,6 @@ impl AppSettings {
         for (field, value) in [
             ("language", &self.language),
             ("theme", &self.theme),
-            ("build output root", &self.build_output_root),
             ("board", &self.board),
         ] {
             if value.len() > MAX_SETTINGS_TEXT_BYTES || value.chars().any(|c| c.is_control()) {
@@ -407,12 +398,7 @@ impl AppSettings {
         if self.text_size > 2 {
             return Err("text size must be 0, 1, or 2".into());
         }
-        if self.build_output_root.len() > 4096 {
-            return Err("build output root must be at most 4096 bytes".into());
-        }
-        if self.build_output_root.chars().any(|c| c.is_control()) {
-            return Err("build output root cannot contain control characters".into());
-        }
+
         if self.ntp_server >= sensor_watch_studio_ntp_server_count(&self.ntp_servers) {
             return Err("selected NTP server is out of range".into());
         }
@@ -475,16 +461,7 @@ impl AppSettings {
             settings.developer_mode = settings.legacy_advanced_mode;
         }
         migrate_component_profiles(&mut settings, &value);
-        // Migrate once with explicit precedence. The canonical field wins,
-        // then the former artifact_root, then the oldest output_dir alias.
-        if value.get("build_output_root").is_none() {
-            settings.build_output_root = value
-                .get("artifact_root")
-                .or_else(|| value.get("output_dir"))
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or_default()
-                .to_string();
-        }
+
         // Compatibility migration for settings written before face identity
         // became case-insensitive. It is order-preserving and idempotent.
         settings.presets.migrate_face_duplicates();
@@ -513,8 +490,6 @@ impl Default for AppSettings {
             modules: ModuleManager::default(),
             data_folder: default_data_folder(),
             output_dir: default_export_dir(),
-            build_output_root: default_output_dir(),
-            artifact_root: String::new(),
             first_run: true,
             tour_claims: Vec::new(),
             persist_user_changes: true,
@@ -617,9 +592,6 @@ fn migrate_component_profiles(settings: &mut AppSettings, raw: &serde_json::Valu
     settings.schema_version = SETTINGS_SCHEMA_VERSION;
 }
 
-/// The default output directory for built artifacts: `<User Documents>/FirmwareStudio`.
-/// This is writable even when the app runs as a standalone exe from a read-only
-/// location.
 pub fn default_board() -> String {
     "Green".to_string()
 }
@@ -630,13 +602,6 @@ pub fn default_data_folder() -> String {
 
 pub fn default_export_dir() -> String {
     default_data_folder()
-}
-
-pub fn default_output_dir() -> String {
-    std::env::var("USERPROFILE")
-        .or_else(|_| std::env::var("HOME"))
-        .map(|home| format!("{home}/Documents/FirmwareStudio"))
-        .unwrap_or_else(|_| "FirmwareStudio".to_string())
 }
 
 #[cfg(test)]
@@ -662,28 +627,6 @@ mod tests {
         assert_eq!(panel_ratio(-1.0, 800.0, 0.45), 0.45);
         assert_eq!(panel_ratio(f32::NAN, 800.0, 0.45), 0.45);
         assert_eq!(panel_ratio(2.0, 0.0, 0.45), 1.0);
-    }
-
-    #[test]
-    fn legacy_output_dir_migrates_to_build_output_root() {
-        let mut raw: serde_json::Value =
-            serde_json::from_str(&AppSettings::default().to_json().unwrap()).unwrap();
-        raw.as_object_mut().unwrap().remove("build_output_root");
-        raw.as_object_mut().unwrap().remove("artifact_root");
-        raw["output_dir"] = "C:/old-package/versions/1.0.0".into();
-        let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
-        assert_eq!(loaded.build_output_root, "C:/old-package/versions/1.0.0");
-    }
-
-    #[test]
-    fn empty_saved_build_output_root_can_be_normalized_at_startup() {
-        let mut raw: serde_json::Value =
-            serde_json::from_str(&AppSettings::default().to_json().unwrap()).unwrap();
-        raw["build_output_root"] = "".into();
-        raw["artifact_root"] = "".into();
-        raw["output_dir"] = "".into();
-        let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
-        assert!(loaded.build_output_root.is_empty());
     }
 
     #[test]
@@ -823,7 +766,6 @@ mod tests {
             0.0,
             0.0,
             &super::ModuleManager::default(),
-            super::default_output_dir(),
             false,
             Vec::new(),
             0.0,

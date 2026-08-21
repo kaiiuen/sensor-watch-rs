@@ -3276,7 +3276,7 @@ impl StudioApp {
             ordered_faces,
             enabled_modules,
             &self.watch_config,
-            &self.build_output_root,
+            &self.selected_build_output_root,
         )
     }
 
@@ -3319,7 +3319,7 @@ impl StudioApp {
             return;
         }
         let build_fingerprint = plan.request_identity.clone();
-        let artifact_root = std::path::Path::new(&self.build_output_root);
+        let artifact_root = std::path::Path::new(&self.selected_build_output_root);
         let (package_root, allowed_root) = (
             self.package_status.root.as_deref(),
             packaged_artifact_root(&self.package_status),
@@ -7941,6 +7941,7 @@ impl StudioApp {
 
     /// The scrollable body of the settings panel.
     fn settings_body(&mut self, ui: &mut egui::Ui) {
+        let colors = semantic(ui);
         ui.label(tr(self.language, Key::ConfigureApp));
         ui.add_space(8.0);
 
@@ -8309,13 +8310,29 @@ impl StudioApp {
 
         ui.add_space(16.0);
         ui.separator();
-        // Configured-build artifact root. The pending value is inert until Apply.
-        ui.heading("Configured-build artifact root");
-        ui.label("Artifacts use firmware/<board>/<revision>/<profile>/latest under this root. Package/version directories are never writable.");
+        // Configured-build output is session-local and is never saved.
+        ui.heading("Configured-build output root");
+        ui.label("Artifacts use <root>/<board>/<revision>/<profile>/latest. Package/version directories are never writable.");
+        ui.monospace(format!(
+            "Active build output root: {}",
+            self.selected_build_output_root
+        ));
+        ui.colored_label(
+            colors.info,
+            "Not saved between sessions. Choose Browse or Use default for this session.",
+        );
         ui.horizontal(|ui| {
-            ui.text_edit_singleline(&mut self.pending_artifact_root);
+            ui.text_edit_singleline(&mut self.selected_build_output_root);
+            if ui.button("Browse").clicked() {
+                let fallback = self.package_status.user_data_root.clone();
+                if let Some(path) =
+                    pickers::pick_folder(&self.selected_build_output_root, &fallback)
+                {
+                    self.select_build_output_root(path);
+                }
+            }
             if ui.button("Validate").clicked() {
-                self.artifact_root_status = match self.validate_artifact_root_ui() {
+                self.artifact_root_status = match self.validate_selected_build_output_root() {
                     Ok(path) if path.is_dir() => {
                         format!("Valid existing folder: {}", path.display())
                     }
@@ -8324,34 +8341,60 @@ impl StudioApp {
                 };
             }
             if ui.button("Create folder").clicked() {
-                self.create_artifact_root_ui();
+                self.create_selected_build_output_root();
             }
             if ui.button("Use default").clicked() {
-                self.pending_artifact_root =
-                    self.package_status.user_data_root.display().to_string();
-                self.artifact_root_status = "Default selected; click Apply/save to use it".into();
+                self.select_build_output_root(default_selected_build_output_path(
+                    &self.package_status,
+                ));
+                self.artifact_root_status = "Validated default selected for this session".into();
             }
             if ui.button("Apply/save").clicked() {
-                self.apply_artifact_root();
+                self.apply_selected_build_output_root();
             }
         });
         if !self.artifact_root_status.is_empty() {
             ui.colored_label(egui::Color32::YELLOW, &self.artifact_root_status);
         }
-        let root = std::path::Path::new(&self.output_dir);
+        let root = std::path::Path::new(&self.selected_build_output_root);
         let plan = self.current_build_plan();
-        if let Ok(paths) = storage::artifact_paths(
+        if let Ok(paths) = storage::build_output_paths(
             root,
             plan.request.board.label(),
             &plan.request.revision,
             &plan.request.profile.name,
         ) {
-            ui.monospace(format!("Resolved output: {}", paths.latest.display()));
             ui.monospace(format!(
-                "Files: {}, {}, {}",
+                "Mode: {}",
+                self.package_status.storage_mode.label()
+            ));
+            ui.monospace(format!(
+                "Selected build output root: {}",
+                paths.build_output_root.display()
+            ));
+            ui.monospace(format!(
+                "Resolved board/revision/profile: {}/{}/{}",
+                paths.board, paths.revision, paths.profile
+            ));
+            ui.monospace(format!("Resolved latest: {}", paths.latest.display()));
+            ui.monospace(format!(
+                "Files: {}, {}, {}, {}",
                 paths.uf2.display(),
                 paths.manifest.display(),
-                paths.sidecar.display()
+                paths.sidecar.display(),
+                paths.inputs.display()
+            ));
+            let recovery_count = std::fs::read_dir(&paths.recovery_generations)
+                .map(|entries| entries.filter_map(Result::ok).count())
+                .unwrap_or(0);
+            ui.monospace(format!("Recovery generations: {recovery_count}"));
+            ui.monospace(format!(
+                "Last artifact: {}",
+                if paths.uf2.is_file() {
+                    paths.uf2.display().to_string()
+                } else {
+                    "none".into()
+                }
             ));
         }
 
@@ -8360,7 +8403,7 @@ impl StudioApp {
             .default_open(false)
             .show(ui, |ui| {
                 ui.weak("Measured values are read from existing files only; no build or target directories are scanned.");
-                let output_path = std::path::Path::new(&self.output_dir);
+                let output_path = std::path::Path::new(&self.selected_build_output_root);
                 ui.label(format!("Artifact root: {}", output_path.display()));
                 match measure_directory(output_path) {
                     Some((files, bytes)) => {
@@ -8848,7 +8891,6 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -8903,7 +8945,6 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -8981,7 +9022,6 @@ impl StudioApp {
             fresh_test_executable_profile: self.fresh_test_executable_profile,
             persist_user_changes: self.persist_user_changes,
             data_folder: self.pending_data_folder.clone(),
-            output_dir: self.build_output_root.clone(),
         };
         let mut defaults = settings::AppSettings::default();
         defaults.language = "English".into();
@@ -9047,7 +9087,6 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -9094,7 +9133,6 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -9159,26 +9197,33 @@ impl StudioApp {
         }
     }
 
-    fn validate_artifact_root_ui(&mut self) -> Result<std::path::PathBuf, String> {
-        let candidate = std::path::PathBuf::from(self.pending_artifact_root.trim());
+    fn validate_selected_build_output_root(&self) -> Result<std::path::PathBuf, String> {
+        let candidate = std::path::PathBuf::from(self.selected_build_output_root.trim());
         validate_configured_artifact_root(&candidate, &self.package_status)?;
         Ok(candidate)
     }
 
-    fn apply_artifact_root(&mut self) {
-        match self.validate_artifact_root_ui() {
-            Ok(candidate) => {
-                self.build_output_root = candidate.display().to_string();
-                self.artifact_root_status = format!("Applied: {}", candidate.display());
-                self.save_settings_unconditionally();
+    fn select_build_output_root(&mut self, candidate: std::path::PathBuf) {
+        match validate_configured_artifact_root(&candidate, &self.package_status) {
+            Ok(()) => {
+                self.selected_build_output_root = candidate.display().to_string();
+                self.artifact_root_status =
+                    format!("Selected for this session: {}", candidate.display());
             }
             Err(error) => self.artifact_root_status = format!("Invalid artifact root: {error}"),
         }
     }
 
-    fn create_artifact_root_ui(&mut self) {
+    fn apply_selected_build_output_root(&mut self) {
+        match self.validate_selected_build_output_root() {
+            Ok(candidate) => self.select_build_output_root(candidate),
+            Err(error) => self.artifact_root_status = format!("Invalid artifact root: {error}"),
+        }
+    }
+
+    fn create_selected_build_output_root(&mut self) {
         match create_configured_artifact_root(
-            std::path::Path::new(self.pending_artifact_root.trim()),
+            std::path::Path::new(self.selected_build_output_root.trim()),
             &self.package_status,
         ) {
             Ok(()) => {
@@ -9194,14 +9239,7 @@ impl StudioApp {
         let candidate = std::path::PathBuf::from(self.pending_data_folder.trim());
         let executable = std::env::current_exe().unwrap_or_default();
         let firmware = build::firmware_dir();
-        let output = std::path::PathBuf::from(&self.build_output_root);
-        let recovery = output.join("recovery");
-        let protected = [
-            firmware.as_path(),
-            output.as_path(),
-            recovery.as_path(),
-            executable.as_path(),
-        ];
+        let protected = [firmware.as_path(), executable.as_path()];
         if let Err(error) = data_dir::validate(&candidate, &protected) {
             self.data_folder_status = format!("Invalid Studio data folder: {error}");
             return;
@@ -9215,7 +9253,6 @@ impl StudioApp {
             fresh_test_executable_profile: self.fresh_test_executable_profile,
             persist_user_changes: self.persist_user_changes,
             data_folder: candidate.display().to_string(),
-            output_dir: self.build_output_root.clone(),
         };
         if let Err(error) = persist::save_runtime_preferences(&preferences) {
             self.data_folder_status = format!("Data folder was not changed: {error}");
@@ -9237,7 +9274,6 @@ impl StudioApp {
             self.fresh_test_executable_profile,
             self.persist_user_changes,
             self.pending_data_folder.clone(),
-            self.build_output_root.clone(),
         ) {
             self.log_error(&format!("Failed to save runtime preferences: {error}"));
         }
@@ -9293,24 +9329,7 @@ impl StudioApp {
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
         self.rtc_calibration = s.rtc_calibration;
-        let saved_artifact_root = std::path::PathBuf::from(s.build_output_root.trim());
-        let (artifact_root, migrated) = normalize_loaded_artifact_root(
-            &saved_artifact_root,
-            &self.package_status,
-            std::path::Path::new(&self.build_output_root),
-        );
-        self.build_output_root = artifact_root.display().to_string();
-        self.pending_artifact_root = self.build_output_root.clone();
-        if migrated {
-            self.artifact_root_status = format!(
-                "Saved artifact root was reset to the validated package user-data root: {}",
-                artifact_root.display()
-            );
-            self.status = self.artifact_root_status.clone();
-            self.package_status
-                .warnings
-                .push(self.artifact_root_status.clone());
-        }
+        // Build output selection is session-local. Persisted legacy roots are ignored.
         self.board = match s.board.as_str() {
             "Red / Lite" | "Red" | "Lite" => Board::RedLite,
             "Blue" => Board::Blue,
@@ -9963,21 +9982,19 @@ fn parse_configured_build(
     })
 }
 
-fn normalize_loaded_artifact_root(
-    candidate: &std::path::Path,
-    status: &distribution::PackageStatus,
-    installed_value: &std::path::Path,
-) -> (std::path::PathBuf, bool) {
-    if let (Some(package_root), Some(allowed)) =
-        (status.root.as_deref(), packaged_artifact_root(status))
-    {
-        return storage::normalize_packaged_artifact_root(candidate, package_root, allowed);
-    }
-    if candidate.as_os_str().is_empty() {
-        (installed_value.to_path_buf(), false)
+fn default_selected_build_output_path(status: &distribution::PackageStatus) -> std::path::PathBuf {
+    let candidate = storage::default_artifact_root(&status.user_data_root);
+    if validate_configured_artifact_root(&candidate, status).is_ok() {
+        candidate
     } else {
-        (candidate.to_path_buf(), false)
+        status.user_data_root.join("build-artifacts")
     }
+}
+
+fn default_selected_build_output_root(status: &distribution::PackageStatus) -> String {
+    default_selected_build_output_path(status)
+        .display()
+        .to_string()
 }
 
 fn packaged_artifact_root(status: &distribution::PackageStatus) -> Option<&std::path::Path> {
@@ -10098,7 +10115,7 @@ mod configured_cli_tests {
     }
 
     #[test]
-    fn configured_output_is_retained_as_the_artifact_root_override() {
+    fn configured_cli_output_is_authoritative_for_build_paths() {
         let parsed = parse_configured_build(&mut valid_args().into_iter()).unwrap();
         let paths = storage::build_output_paths(
             &parsed.output,
@@ -10140,6 +10157,60 @@ mod configured_cli_tests {
             },
             warnings: Vec::new(),
         }
+    }
+
+    #[test]
+    fn packaged_startup_ignores_stale_saved_build_root() {
+        let package = std::env::temp_dir().join("studio-stale-saved-root-startup");
+        std::fs::create_dir_all(package.join("user-data")).unwrap();
+        let status = packaged_status(&package);
+        let mut raw: serde_json::Value =
+            serde_json::from_str(&settings::AppSettings::default().to_json().unwrap()).unwrap();
+        raw["build_output_root"] = package.join("versions/old").display().to_string().into();
+        raw["artifact_root"] = package.join("versions/old").display().to_string().into();
+        raw["output_dir"] = package.join("versions/old").display().to_string().into();
+        let loaded = settings::AppSettings::from_json(&raw.to_string()).unwrap();
+        let serialized = loaded.to_json().unwrap();
+        assert!(!serialized.contains("build_output_root"));
+        assert!(!serialized.contains("artifact_root"));
+        assert_eq!(
+            default_selected_build_output_path(&status),
+            package.join("user-data").join(storage::BUILD_OUTPUT_FOLDER)
+        );
+        let _ = std::fs::remove_dir_all(package);
+    }
+
+    #[test]
+    fn browse_selection_changes_build_destination_immediately() {
+        let package = std::env::temp_dir().join("studio-browse-root");
+        std::fs::create_dir_all(package.join("user-data")).unwrap();
+        let mut app = super::StudioApp::default();
+        app.package_status = packaged_status(&package);
+        let selected = package.join("user-data/browsed");
+        app.select_build_output_root(selected.clone());
+        assert_eq!(
+            app.selected_build_output_root,
+            selected.display().to_string()
+        );
+        let _ = std::fs::remove_dir_all(package);
+    }
+
+    #[test]
+    fn use_default_recovers_from_invalid_build_root() {
+        let package = std::env::temp_dir().join("studio-default-root-recovery");
+        std::fs::create_dir_all(package.join("user-data")).unwrap();
+        let status = packaged_status(&package);
+        let mut app = super::StudioApp::default();
+        app.package_status = status.clone();
+        app.selected_build_output_root = package.join("versions/old").display().to_string();
+        app.select_build_output_root(default_selected_build_output_path(&status));
+        assert_eq!(
+            app.selected_build_output_root,
+            default_selected_build_output_path(&status)
+                .display()
+                .to_string()
+        );
+        let _ = std::fs::remove_dir_all(package);
     }
 
     #[test]
@@ -10225,19 +10296,29 @@ mod configured_cli_tests {
             },
             warnings: Vec::new(),
         };
-        let (normalized, migrated) = normalize_loaded_artifact_root(
-            &package.join("versions/old"),
-            &status,
-            std::path::Path::new("C:/unused-installed-root"),
-        );
-        assert!(migrated);
-        assert_eq!(normalized, user_data);
+        let normalized = default_selected_build_output_path(&status);
+        assert_eq!(normalized, user_data.join(storage::BUILD_OUTPUT_FOLDER));
 
-        let paths =
-            storage::artifact_paths(&normalized, "Green", "OSO-SWAT-A1-05", "Green").unwrap();
-        assert!(paths.latest.starts_with(&user_data));
         let profiles = components::default_profiles();
         let selected = profiles[0].config.clone();
+        let request = firmware_inputs::FirmwareInputRequest {
+            board: Board::Green,
+            revision: "OSO-SWAT-A1-05".into(),
+            profile: profiles[0].clone(),
+            components: selected.clone(),
+            preset_name: "Stock Casio".into(),
+            ordered_faces: vec!["SIMPLE_CLOCK".into()],
+            modules: Vec::new(),
+        };
+        let paths = build::preflight_output_root(
+            &normalized,
+            &request,
+            status.root.as_deref(),
+            packaged_artifact_root(&status),
+        )
+        .unwrap();
+        assert_eq!(paths.build_output_root, normalized);
+        assert!(paths.latest.starts_with(&user_data));
         let plan = firmware_inputs::resolve_build_plan(
             Board::Green,
             "OSO-SWAT-A1-05",
@@ -10478,18 +10559,7 @@ fn main() -> eframe::Result<()> {
     };
     let fallback_root = data_dir::default_path();
     let firmware = build::firmware_dir();
-    // The bootstrap output directory is the only safe output value available
-    // before selecting the executable-scoped profile. Do not load that profile
-    // merely to discover its output path: that would make profile selection
-    // circular.
-    let output_path = std::path::PathBuf::from(&bootstrap.output_dir);
-    let recovery = output_path.join("recovery");
-    let protected = [
-        firmware.as_path(),
-        output_path.as_path(),
-        recovery.as_path(),
-        executable.as_path(),
-    ];
+    let protected = [firmware.as_path(), executable.as_path()];
     let (root, root_warning) = if data_dir::validate(&requested_root, &protected).is_ok() {
         (requested_root, None)
     } else if packaged_root.is_none() && data_dir::validate(&fallback_root, &protected).is_ok() {
@@ -10518,12 +10588,7 @@ fn main() -> eframe::Result<()> {
     }
     let identity = test_runtime::current_executable_identity();
     let candidate_profile = test_runtime::resolve_from(fresh, identity, root.clone());
-    let profile_protected = [
-        firmware.as_path(),
-        output_path.as_path(),
-        recovery.as_path(),
-        executable.as_path(),
-    ];
+    let profile_protected = [firmware.as_path(), executable.as_path()];
     let profile_fresh = if data_dir::validate(&candidate_profile.root, &profile_protected).is_ok() {
         fresh
     } else {
@@ -13340,7 +13405,7 @@ mod tests {
         let mut app = super::StudioApp::default();
         app.language = super::Language::ChineseSimplified;
         app.editor_source = "unsaved source".to_string();
-        app.build_output_root = "user-output".to_string();
+        app.selected_build_output_root = "user-output".to_string();
         app.restore_store.points.push(super::restore::RestorePoint {
             name: "keep me".to_string(),
             timestamp: 7,
@@ -13355,13 +13420,13 @@ mod tests {
             .map(|point| (point.name.clone(), point.timestamp))
             .collect();
         let source = app.editor_source.clone();
-        let output_dir = app.build_output_root.clone();
+        let output_dir = app.selected_build_output_root.clone();
         let language = app.language;
 
         app.reset_compile_session_state("new-fingerprint".to_string());
 
         assert_eq!(app.editor_source, source);
-        assert_eq!(app.build_output_root, output_dir);
+        assert_eq!(app.selected_build_output_root, output_dir);
         assert_eq!(app.language, language);
         let current_restore_metadata: Vec<(String, u64)> = app
             .restore_store
@@ -13539,7 +13604,7 @@ mod tests {
         app.btn_l_down = true;
         app.held_button = Some(super::ButtonId::L);
         app.watch.light = true;
-        let output_dir = app.build_output_root.clone();
+        let output_dir = app.selected_build_output_root.clone();
         let mut invalid_effective = app.component_profiles[0].config.clone();
         invalid_effective.buzzer = !invalid_effective.buzzer;
         app.component_effective = invalid_effective;
@@ -13563,7 +13628,7 @@ mod tests {
         assert!(app.btn_l_down);
         assert_eq!(app.held_button, Some(super::ButtonId::L));
         assert!(app.watch.light);
-        assert_eq!(app.build_output_root, output_dir);
+        assert_eq!(app.selected_build_output_root, output_dir);
         assert!(app.pending_build.is_none());
     }
 

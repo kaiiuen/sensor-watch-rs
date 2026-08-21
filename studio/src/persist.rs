@@ -25,8 +25,6 @@ pub struct RuntimePreferences {
     pub persist_user_changes: bool,
     #[serde(default = "default_data_folder")]
     pub data_folder: String,
-    #[serde(default = "default_output_dir")]
-    pub output_dir: String,
 }
 
 impl Default for RuntimePreferences {
@@ -35,17 +33,12 @@ impl Default for RuntimePreferences {
             fresh_test_executable_profile: true,
             persist_user_changes: true,
             data_folder: default_data_folder(),
-            output_dir: default_output_dir(),
         }
     }
 }
 
 fn default_data_folder() -> String {
     super::data_dir::default_path().display().to_string()
-}
-
-fn default_output_dir() -> String {
-    super::settings::default_output_dir()
 }
 
 pub fn runtime_path() -> PathBuf {
@@ -67,7 +60,6 @@ pub fn load_runtime_preferences() -> RuntimePreferences {
             fresh_test_executable_profile: settings.fresh_test_executable_profile,
             persist_user_changes: settings.persist_user_changes,
             data_folder: settings.data_folder,
-            output_dir: settings.output_dir,
         })
         .unwrap_or_default();
     let _ = save_runtime_preferences(&migrated);
@@ -164,13 +156,11 @@ pub fn save_toggle_preferences(
     fresh_test_executable_profile: bool,
     persist_user_changes: bool,
     data_folder: String,
-    output_dir: String,
 ) -> Result<(), String> {
     save_runtime_preferences(&RuntimePreferences {
         fresh_test_executable_profile,
         persist_user_changes,
         data_folder,
-        output_dir,
     })
 }
 

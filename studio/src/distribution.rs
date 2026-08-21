@@ -615,17 +615,21 @@ mod tests {
         std::fs::write(root.join(MANIFEST_FILE), manifest()).unwrap();
         let status = resolve(&exe, false, None);
         assert_eq!(status.user_data_root, root.join("user-data"));
-        let artifacts =
-            crate::storage::artifact_paths(&status.user_data_root, "Green", "rev-a", "stock")
-                .unwrap();
+        let artifacts = crate::storage::artifact_paths(
+            &crate::storage::default_artifact_root(&status.user_data_root),
+            "Green",
+            "rev-a",
+            "stock",
+        )
+        .unwrap();
         assert_eq!(
-            artifacts.root,
-            root.join("user-data/firmware/Green/rev-a/stock")
+            artifacts.profile_root,
+            root.join("user-data/sensor-watch-studio-artifacts/Green/rev-a/stock")
         );
-        assert!(!status
-            .user_data_root
-            .to_string_lossy()
-            .contains("FirmwareStudio"));
+        assert_eq!(
+            crate::storage::default_artifact_root(&status.user_data_root),
+            root.join("user-data/sensor-watch-studio-artifacts")
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
     #[test]
