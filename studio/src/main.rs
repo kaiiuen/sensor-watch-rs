@@ -2349,7 +2349,7 @@ impl StudioApp {
         filename: &str,
         contents: impl AsRef<[u8]>,
     ) -> Result<std::path::PathBuf, String> {
-        let directory = std::path::PathBuf::from(&self.output_dir);
+        let directory = std::path::PathBuf::from(&self.pending_data_folder).join("export");
         std::fs::create_dir_all(&directory)
             .map_err(|error| format!("could not create export directory: {error}"))?;
         let path = directory.join(filename);
@@ -3330,7 +3330,7 @@ impl StudioApp {
             package_root,
             allowed_root,
         ) {
-            Ok(paths) => paths.latest,
+            Ok(paths) => paths,
             Err(reason) => {
                 self.build_message = format!("Build output preflight failed: {reason}");
                 self.status = self.build_message.clone();
