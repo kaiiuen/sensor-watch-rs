@@ -283,7 +283,7 @@ pub fn preflight_output_root(
     request: &FirmwareInputRequest,
     package_root: Option<&Path>,
     allowed_root: Option<&Path>,
-) -> Result<crate::storage::ArtifactPaths, String> {
+) -> Result<crate::storage::BuildOutputPaths, String> {
     crate::storage::prepare_artifact_root(
         root,
         request.board.label(),
@@ -301,32 +301,13 @@ pub fn missing_configuration_inputs() -> &'static [&'static str] {
     CONFIGURATION_INPUT_CONTRACT
 }
 
-fn artifact_paths_for_output(
-    output_dir: &Path,
-    board: &str,
-    revision: &str,
-    profile: &str,
-) -> Result<crate::storage::ArtifactPaths, String> {
-    // Studio passes the resolved `.../firmware/<board>/<revision>/<profile>/latest`
-    // directory to the build worker. Walk back over that fixed layout rather than
-    // consulting distribution state, which may describe a different root.
-    let mut artifact_root = output_dir.to_path_buf();
-    for _ in 0..5 {
-        artifact_root = artifact_root
-            .parent()
-            .ok_or("output directory does not have the configured artifact layout")?
-            .to_path_buf();
-    }
-    let paths = crate::storage::artifact_paths(&artifact_root, board, revision, profile)?;
-    if paths.latest != output_dir {
-        return Err("output directory does not match the configured artifact layout".into());
-    }
-    Ok(paths)
-}
-
 /// Runs the full firmware build: cargo build, extract the raw binary, and
 /// convert it to a `.uf2` file in the given output directory.
-pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> BuildResult {
+pub fn build_firmware(
+    request: FirmwareInputRequest,
+    paths: &crate::storage::BuildOutputPaths,
+) -> BuildResult {
+    let output_dir = &paths.latest;
     if let Err(error) = validate_output_dir(output_dir) {
         return BuildResult {
             success: false,
@@ -505,23 +486,27 @@ pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> Build
             uf2_path: None,
         };
     }
-    match publish_uf2_with_input_digest(output_dir, &uf2, &uf2_data, &generated.digest) {
+    match publish_uf2_with_writers_at(
+        output_dir,
+        &uf2,
+        &uf2_data,
+        |path, data, generation| {
+            write_manifest_with_input_digest(path, data, generation, &generated.digest)
+        },
+        |path| std::fs::remove_file(path),
+        Some(&paths.recovery_generations),
+        |from, to| std::fs::rename(from, to),
+    ) {
         Ok(()) => {
-            let paths = match artifact_paths_for_output(
-                output_dir,
-                request.board.label(),
-                &request.revision,
-                &request.profile.name,
-            ) {
-                Ok(paths) => paths,
-                Err(error) => {
-                    return BuildResult {
-                        success: false,
-                        message: error,
-                        uf2_path: None,
-                    }
-                }
-            };
+            let paths = paths.clone();
+            if paths.latest != *output_dir {
+                return BuildResult {
+                    success: false,
+                    message: "resolved build output paths changed before publication".into(),
+                    uf2_path: None,
+                };
+            }
+
             if let Err(error) = crate::storage::write_latest_atomic(
                 &paths,
                 &crate::storage::LatestMetadata {
@@ -530,7 +515,11 @@ pub fn build_firmware(request: FirmwareInputRequest, output_dir: &Path) -> Build
                     revision: request.revision.clone(),
                     profile: request.profile.name.clone(),
                     generated_input_digest: generated.digest.clone(),
-                    artifact: uf2.display().to_string(),
+                    artifact: uf2
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("sensor-watch.uf2")
+                        .to_string(),
                 },
             ) {
                 return BuildResult {
@@ -611,8 +600,33 @@ fn publish_uf2_with_writers<F, C, R>(
     output_dir: &Path,
     uf2: &Path,
     uf2_data: &[u8],
+    write_current_manifest: F,
+    remove_recovery_file: C,
+    rename_file: R,
+) -> Result<(), String>
+where
+    F: FnMut(&Path, &[u8], &str) -> std::io::Result<()>,
+    C: FnMut(&Path) -> std::io::Result<()>,
+    R: FnMut(&Path, &Path) -> std::io::Result<()>,
+{
+    publish_uf2_with_writers_at(
+        output_dir,
+        uf2,
+        uf2_data,
+        write_current_manifest,
+        remove_recovery_file,
+        None,
+        rename_file,
+    )
+}
+
+fn publish_uf2_with_writers_at<F, C, R>(
+    output_dir: &Path,
+    uf2: &Path,
+    uf2_data: &[u8],
     mut write_current_manifest: F,
     mut remove_recovery_file: C,
+    configured_recovery_dir: Option<&Path>,
     mut rename_file: R,
 ) -> Result<(), String>
 where
@@ -710,18 +724,9 @@ where
     }
 
     if had_old {
-        let recovery_dir =
-            if output_dir.file_name().and_then(|name| name.to_str()) == Some("latest") {
-                // Keep recovery beside the configured root, not beside the package
-                // and not in the default root when a custom root is selected.
-                let mut root = output_dir.to_path_buf();
-                for _ in 0..5 {
-                    root.pop();
-                }
-                root.join("recovery").join("generations")
-            } else {
-                output_dir.join("recovery").join("generations")
-            };
+        let recovery_dir = configured_recovery_dir
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| output_dir.join("recovery").join("generations"));
         if let Err(e) = std::fs::create_dir_all(&recovery_dir) {
             rollback(&mut retained_generation);
             return Err(format!(
@@ -1289,12 +1294,19 @@ mod tests {
             ordered_faces: vec!["SIMPLE_CLOCK".into()],
             modules: vec![],
         };
-        let output = temp_root("blocked-output");
+        let output_root = temp_root("blocked-output");
+        let output = super::super::storage::build_output_paths(
+            &output_root,
+            "Green",
+            "unknown-revision",
+            "Green",
+        )
+        .unwrap();
         let result = build_firmware(request, &output);
         assert!(!result.success);
         assert!(result.message.contains("unsupported"));
         assert!(result.uf2_path.is_none());
-        assert!(!output.exists());
+        assert!(!output_root.exists());
     }
 
     #[test]
@@ -1316,9 +1328,8 @@ mod tests {
             "custom-input-digest",
         )
         .unwrap();
-        let paths = artifact_paths_for_output(&custom.latest, "Green", "rev-a", "stock").unwrap();
         super::super::storage::write_latest_atomic(
-            &paths,
+            &custom,
             &super::super::storage::LatestMetadata {
                 format: "sensor-watch-latest-v1".into(),
                 board: "Green".into(),

@@ -11,8 +11,10 @@ static LATEST_COUNTER: AtomicU64 = AtomicU64::new(0);
 pub const PORTABLE_FLAG: &str = "portable.flag";
 
 /// The default configured-build root is always user data, never the package.
+pub const BUILD_OUTPUT_FOLDER: &str = "sensor-watch-studio-artifacts";
+
 pub fn default_artifact_root(user_data_root: &Path) -> PathBuf {
-    user_data_root.to_path_buf()
+    user_data_root.join(BUILD_OUTPUT_FOLDER)
 }
 
 /// Validates a configured-build root without creating it. Missing roots are a
@@ -106,9 +108,9 @@ pub fn prepare_artifact_root(
     profile: &str,
     package_root: Option<&Path>,
     allowed_root: Option<&Path>,
-) -> Result<ArtifactPaths, String> {
+) -> Result<BuildOutputPaths, String> {
     let attempted = root.display().to_string();
-    let paths = match artifact_paths(root, board, revision, profile) {
+    let paths = match build_output_paths(root, board, revision, profile) {
         Ok(paths) => paths,
         Err(error) => {
             return Err(format_root_preflight_error(
@@ -287,8 +289,12 @@ pub fn roots(
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ArtifactPaths {
-    pub root: PathBuf,
+pub struct BuildOutputPaths {
+    pub build_output_root: PathBuf,
+    pub board: String,
+    pub revision: String,
+    pub profile: String,
+    pub profile_root: PathBuf,
     pub latest: PathBuf,
     pub uf2: PathBuf,
     pub manifest: PathBuf,
@@ -298,31 +304,43 @@ pub struct ArtifactPaths {
     pub recovery_generations: PathBuf,
 }
 
-pub fn artifact_paths(
-    user_data_root: &Path,
+#[deprecated(note = "use BuildOutputPaths")]
+pub type ArtifactPaths = BuildOutputPaths;
+
+pub fn build_output_paths(
+    build_output_root: &Path,
     board: &str,
     revision: &str,
     profile: &str,
-) -> Result<ArtifactPaths, String> {
+) -> Result<BuildOutputPaths, String> {
     for value in [board, revision, profile] {
         validate_segment(value)?;
     }
-    let root = user_data_root
-        .join("firmware")
-        .join(board)
-        .join(revision)
-        .join(profile);
-    let latest = root.join("latest");
-    Ok(ArtifactPaths {
-        root: root.clone(),
+    let profile_root = build_output_root.join(board).join(revision).join(profile);
+    let latest = profile_root.join("latest");
+    Ok(BuildOutputPaths {
+        build_output_root: build_output_root.to_path_buf(),
+        board: board.to_string(),
+        revision: revision.to_string(),
+        profile: profile.to_string(),
+        profile_root,
         uf2: latest.join("sensor-watch.uf2"),
         manifest: latest.join("sensor-watch.uf2.json"),
         sidecar: latest.join("sensor-watch.uf2.json.sig"),
         inputs: latest.join("sensor-watch.uf2.inputs"),
         latest_json: latest.join("latest.json"),
         latest,
-        recovery_generations: user_data_root.join("recovery/generations"),
+        recovery_generations: build_output_root.join("recovery/generations"),
     })
+}
+
+pub fn artifact_paths(
+    build_output_root: &Path,
+    board: &str,
+    revision: &str,
+    profile: &str,
+) -> Result<BuildOutputPaths, String> {
+    build_output_paths(build_output_root, board, revision, profile)
 }
 
 fn validate_segment(value: &str) -> Result<(), String> {
@@ -349,7 +367,10 @@ pub struct LatestMetadata {
     pub artifact: String,
 }
 
-pub fn write_latest_atomic(paths: &ArtifactPaths, metadata: &LatestMetadata) -> Result<(), String> {
+pub fn write_latest_atomic(
+    paths: &BuildOutputPaths,
+    metadata: &LatestMetadata,
+) -> Result<(), String> {
     validate_path_chain(&paths.latest)?;
     std::fs::create_dir_all(&paths.latest)
         .map_err(|e| format!("cannot create artifact root: {e}"))?;
@@ -392,7 +413,7 @@ pub fn write_latest_atomic(paths: &ArtifactPaths, metadata: &LatestMetadata) -> 
 }
 
 pub fn read_latest(
-    paths: &ArtifactPaths,
+    paths: &BuildOutputPaths,
     expected_generated_input_digest: &str,
 ) -> Result<LatestMetadata, String> {
     validate_path_chain(&paths.latest)?;
@@ -406,34 +427,15 @@ pub fn read_latest(
 }
 
 fn validate_latest_metadata(
-    paths: &ArtifactPaths,
+    paths: &BuildOutputPaths,
     metadata: &LatestMetadata,
     expected_digest: &str,
 ) -> Result<(), String> {
     let expected_artifact = paths.uf2.file_name().and_then(|v| v.to_str()).unwrap_or("");
     if metadata.format != "sensor-watch-latest-v1"
-        || metadata.board
-            != paths
-                .root
-                .parent()
-                .and_then(Path::parent)
-                .and_then(Path::file_name)
-                .and_then(|v| v.to_str())
-                .unwrap_or("")
-        || metadata.revision
-            != paths
-                .root
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|v| v.to_str())
-                .unwrap_or("")
-        || metadata.profile
-            != paths
-                .latest
-                .parent()
-                .and_then(Path::file_name)
-                .and_then(|v| v.to_str())
-                .unwrap_or("")
+        || metadata.board != paths.board
+        || metadata.revision != paths.revision
+        || metadata.profile != paths.profile
         || metadata.artifact != expected_artifact
         || metadata.generated_input_digest != expected_digest
     {
@@ -490,8 +492,8 @@ mod tests {
         let custom = temp("custom-root");
         let a = artifact_paths(&default, "Green", "rev-a", "stock").unwrap();
         let b = artifact_paths(&custom, "Blue", "rev-b", "custom").unwrap();
-        assert_eq!(a.latest, default.join("firmware/Green/rev-a/stock/latest"));
-        assert_eq!(b.latest, custom.join("firmware/Blue/rev-b/custom/latest"));
+        assert_eq!(a.latest, default.join("Green/rev-a/stock/latest"));
+        assert_eq!(b.latest, custom.join("Blue/rev-b/custom/latest"));
         assert_ne!(a.latest, b.latest);
     }
 
@@ -511,7 +513,7 @@ mod tests {
         let root = temp("preflight-missing");
         let paths = prepare_artifact_root(&root, "Green", "rev-a", "stock", None, None).unwrap();
         assert!(root.is_dir());
-        assert_eq!(paths.latest, root.join("firmware/Green/rev-a/stock/latest"));
+        assert_eq!(paths.latest, root.join("Green/rev-a/stock/latest"));
         let _ = std::fs::remove_dir_all(root);
     }
 
@@ -520,7 +522,7 @@ mod tests {
         let root = temp("preflight-custom");
         std::fs::create_dir_all(&root).unwrap();
         let paths = prepare_artifact_root(&root, "Blue", "rev-b", "custom", None, None).unwrap();
-        assert_eq!(paths.root, root.join("firmware/Blue/rev-b/custom"));
+        assert_eq!(paths.profile_root, root.join("Blue/rev-b/custom"));
         let _ = std::fs::remove_dir_all(root);
     }
 

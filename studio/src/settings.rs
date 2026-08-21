@@ -200,14 +200,15 @@ pub struct AppSettings {
     /// The configured Studio data root. It is applied only on next launch.
     #[serde(default = "default_data_folder")]
     pub data_folder: String,
-    /// The output directory for built artifacts (e.g. the .uf2 file).
-    /// Defaults to a writable user folder when running as a standalone exe.
-    #[serde(default = "default_output_dir")]
+    /// General exports are kept separate from firmware build output.
+    #[serde(skip)]
     pub output_dir: String,
-    /// The single authoritative root for configured-build artifacts.
-    /// `output_dir` remains as a compatibility alias for older exports.
+    /// The only persisted root for configured-build artifacts.
     #[serde(default = "default_output_dir")]
-    pub artifact_root: String,
+    pub build_output_root: String,
+    /// Legacy configured-build alias accepted only during deserialization.
+    #[serde(default, skip_serializing)]
+    artifact_root: String,
     /// Whether the first-run welcome overlay has been dismissed.
     #[serde(default = "default_first_run")]
     pub first_run: bool,
@@ -311,8 +312,9 @@ impl AppSettings {
             preset_height,
             modules: modules.clone(),
             data_folder: default_data_folder(),
-            output_dir: output_dir.clone(),
-            artifact_root: output_dir,
+            output_dir: default_export_dir(),
+            build_output_root: output_dir,
+            artifact_root: String::new(),
             first_run,
             tour_claims,
             persist_user_changes,
@@ -369,7 +371,7 @@ impl AppSettings {
         for (field, value) in [
             ("language", &self.language),
             ("theme", &self.theme),
-            ("output directory", &self.output_dir),
+            ("build output root", &self.build_output_root),
             ("board", &self.board),
         ] {
             if value.len() > MAX_SETTINGS_TEXT_BYTES || value.chars().any(|c| c.is_control()) {
@@ -405,16 +407,11 @@ impl AppSettings {
         if self.text_size > 2 {
             return Err("text size must be 0, 1, or 2".into());
         }
-        if self.output_dir.len() > 4096 {
-            return Err("output directory must be at most 4096 bytes".into());
+        if self.build_output_root.len() > 4096 {
+            return Err("build output root must be at most 4096 bytes".into());
         }
-        if self.artifact_root.len() > 4096 {
-            return Err("artifact root must be at most 4096 bytes".into());
-        }
-        if self.output_dir.chars().any(|c| c.is_control())
-            || self.artifact_root.chars().any(|c| c.is_control())
-        {
-            return Err("output and artifact directories cannot contain control characters".into());
+        if self.build_output_root.chars().any(|c| c.is_control()) {
+            return Err("build output root cannot contain control characters".into());
         }
         if self.ntp_server >= sensor_watch_studio_ntp_server_count(&self.ntp_servers) {
             return Err("selected NTP server is out of range".into());
@@ -478,9 +475,15 @@ impl AppSettings {
             settings.developer_mode = settings.legacy_advanced_mode;
         }
         migrate_component_profiles(&mut settings, &value);
-        // Older settings called the configured-build root `output_dir`.
-        if value.get("artifact_root").is_none() {
-            settings.artifact_root = settings.output_dir.clone();
+        // Migrate once with explicit precedence. The canonical field wins,
+        // then the former artifact_root, then the oldest output_dir alias.
+        if value.get("build_output_root").is_none() {
+            settings.build_output_root = value
+                .get("artifact_root")
+                .or_else(|| value.get("output_dir"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string();
         }
         // Compatibility migration for settings written before face identity
         // became case-insensitive. It is order-preserving and idempotent.
@@ -509,8 +512,9 @@ impl Default for AppSettings {
             preset_height: 0.0,
             modules: ModuleManager::default(),
             data_folder: default_data_folder(),
-            output_dir: default_output_dir(),
-            artifact_root: default_output_dir(),
+            output_dir: default_export_dir(),
+            build_output_root: default_output_dir(),
+            artifact_root: String::new(),
             first_run: true,
             tour_claims: Vec::new(),
             persist_user_changes: true,
@@ -624,6 +628,10 @@ pub fn default_data_folder() -> String {
     super::data_dir::default_path().display().to_string()
 }
 
+pub fn default_export_dir() -> String {
+    default_data_folder()
+}
+
 pub fn default_output_dir() -> String {
     std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
@@ -657,23 +665,25 @@ mod tests {
     }
 
     #[test]
-    fn legacy_output_dir_migrates_to_artifact_root() {
+    fn legacy_output_dir_migrates_to_build_output_root() {
         let mut raw: serde_json::Value =
             serde_json::from_str(&AppSettings::default().to_json().unwrap()).unwrap();
+        raw.as_object_mut().unwrap().remove("build_output_root");
         raw.as_object_mut().unwrap().remove("artifact_root");
         raw["output_dir"] = "C:/old-package/versions/1.0.0".into();
         let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
-        assert_eq!(loaded.artifact_root, "C:/old-package/versions/1.0.0");
+        assert_eq!(loaded.build_output_root, "C:/old-package/versions/1.0.0");
     }
 
     #[test]
-    fn empty_saved_artifact_root_can_be_normalized_at_startup() {
+    fn empty_saved_build_output_root_can_be_normalized_at_startup() {
         let mut raw: serde_json::Value =
             serde_json::from_str(&AppSettings::default().to_json().unwrap()).unwrap();
+        raw["build_output_root"] = "".into();
         raw["artifact_root"] = "".into();
         raw["output_dir"] = "".into();
         let loaded = AppSettings::from_json(&raw.to_string()).unwrap();
-        assert!(loaded.artifact_root.is_empty());
+        assert!(loaded.build_output_root.is_empty());
     }
 
     #[test]

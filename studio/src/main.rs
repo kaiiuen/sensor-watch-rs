@@ -264,8 +264,8 @@ struct StudioApp {
     watch_config: watch_config::WatchConfig,
     /// Custom hardware modules.
     modules: modules::ModuleManager,
-    /// The output directory for built artifacts (e.g. the .uf2).
-    output_dir: String,
+    /// The canonical configured-build output root.
+    build_output_root: String,
     /// Pending configured-build artifact root; applied only after validation.
     pending_artifact_root: String,
     artifact_root_status: String,
@@ -1109,9 +1109,11 @@ impl Default for StudioApp {
             pending_checksum: None,
             watch_config: watch_config::WatchConfig::default(),
             modules: modules::ModuleManager::default(),
-            output_dir: storage::default_artifact_root(&distribution::active().user_data_root)
-                .display()
-                .to_string(),
+            build_output_root: storage::default_artifact_root(
+                &distribution::active().user_data_root,
+            )
+            .display()
+            .to_string(),
             pending_artifact_root: storage::default_artifact_root(
                 &distribution::active().user_data_root,
             )
@@ -3274,7 +3276,7 @@ impl StudioApp {
             ordered_faces,
             enabled_modules,
             &self.watch_config,
-            &self.output_dir,
+            &self.build_output_root,
         )
     }
 
@@ -3317,7 +3319,7 @@ impl StudioApp {
             return;
         }
         let build_fingerprint = plan.request_identity.clone();
-        let artifact_root = std::path::Path::new(&self.output_dir);
+        let artifact_root = std::path::Path::new(&self.build_output_root);
         let (package_root, allowed_root) = (
             self.package_status.root.as_deref(),
             packaged_artifact_root(&self.package_status),
@@ -8846,7 +8848,7 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.output_dir.clone(),
+            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -8901,7 +8903,7 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.output_dir.clone(),
+            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -8979,7 +8981,7 @@ impl StudioApp {
             fresh_test_executable_profile: self.fresh_test_executable_profile,
             persist_user_changes: self.persist_user_changes,
             data_folder: self.pending_data_folder.clone(),
-            output_dir: self.output_dir.clone(),
+            output_dir: self.build_output_root.clone(),
         };
         let mut defaults = settings::AppSettings::default();
         defaults.language = "English".into();
@@ -9045,7 +9047,7 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.output_dir.clone(),
+            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -9092,7 +9094,7 @@ impl StudioApp {
             self.catalog_width,
             self.preset_height,
             &self.modules,
-            self.output_dir.clone(),
+            self.build_output_root.clone(),
             self.first_run,
             self.tour_claims.keys(),
             self.drift_session.ppm,
@@ -9166,7 +9168,7 @@ impl StudioApp {
     fn apply_artifact_root(&mut self) {
         match self.validate_artifact_root_ui() {
             Ok(candidate) => {
-                self.output_dir = candidate.display().to_string();
+                self.build_output_root = candidate.display().to_string();
                 self.artifact_root_status = format!("Applied: {}", candidate.display());
                 self.save_settings_unconditionally();
             }
@@ -9192,7 +9194,7 @@ impl StudioApp {
         let candidate = std::path::PathBuf::from(self.pending_data_folder.trim());
         let executable = std::env::current_exe().unwrap_or_default();
         let firmware = build::firmware_dir();
-        let output = std::path::PathBuf::from(&self.output_dir);
+        let output = std::path::PathBuf::from(&self.build_output_root);
         let recovery = output.join("recovery");
         let protected = [
             firmware.as_path(),
@@ -9213,7 +9215,7 @@ impl StudioApp {
             fresh_test_executable_profile: self.fresh_test_executable_profile,
             persist_user_changes: self.persist_user_changes,
             data_folder: candidate.display().to_string(),
-            output_dir: self.output_dir.clone(),
+            output_dir: self.build_output_root.clone(),
         };
         if let Err(error) = persist::save_runtime_preferences(&preferences) {
             self.data_folder_status = format!("Data folder was not changed: {error}");
@@ -9235,7 +9237,7 @@ impl StudioApp {
             self.fresh_test_executable_profile,
             self.persist_user_changes,
             self.pending_data_folder.clone(),
-            self.output_dir.clone(),
+            self.build_output_root.clone(),
         ) {
             self.log_error(&format!("Failed to save runtime preferences: {error}"));
         }
@@ -9291,14 +9293,14 @@ impl StudioApp {
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
         self.rtc_calibration = s.rtc_calibration;
-        let saved_artifact_root = std::path::PathBuf::from(s.artifact_root.trim());
+        let saved_artifact_root = std::path::PathBuf::from(s.build_output_root.trim());
         let (artifact_root, migrated) = normalize_loaded_artifact_root(
             &saved_artifact_root,
             &self.package_status,
-            std::path::Path::new(&self.output_dir),
+            std::path::Path::new(&self.build_output_root),
         );
-        self.output_dir = artifact_root.display().to_string();
-        self.pending_artifact_root = self.output_dir.clone();
+        self.build_output_root = artifact_root.display().to_string();
+        self.pending_artifact_root = self.build_output_root.clone();
         if migrated {
             self.artifact_root_status = format!(
                 "Saved artifact root was reset to the validated package user-data root: {}",
@@ -10020,14 +10022,12 @@ fn create_configured_artifact_root(
 
 fn run_configured_build(cli: ConfiguredBuildCli) -> Result<(), String> {
     let package_status = distribution::active();
-    validate_configured_artifact_root(&cli.output, &package_status)?;
-    let output = storage::artifact_paths(
-        &cli.output,
-        cli.request.board.label(),
-        &cli.request.revision,
-        &cli.request.profile.name,
-    )?
-    .latest;
+    let (package_root, allowed_root) = (
+        package_status.root.as_deref(),
+        packaged_artifact_root(&package_status),
+    );
+    let output =
+        build::preflight_output_root(&cli.output, &cli.request, package_root, allowed_root)?;
     let result = build::build_firmware(cli.request, &output);
     if !result.success {
         return Err(result.message);
@@ -10038,7 +10038,9 @@ fn run_configured_build(cli: ConfiguredBuildCli) -> Result<(), String> {
     let inspection = build::inspect_artifact(&path)?;
     build::validate_generated_input_digest(&inspection)?;
     println!(
-        "configured build request succeeded\nartifact {}\ngenerated-input-digest {}",
+        "configured build request succeeded\nbuild-output-root {}\nresolved-latest {}\nartifact {}\ngenerated-input-digest {}",
+        output.build_output_root.display(),
+        output.latest.display(),
         path.display(),
         inspection.generated_input_digest
     );
@@ -10098,7 +10100,7 @@ mod configured_cli_tests {
     #[test]
     fn configured_output_is_retained_as_the_artifact_root_override() {
         let parsed = parse_configured_build(&mut valid_args().into_iter()).unwrap();
-        let paths = storage::artifact_paths(
+        let paths = storage::build_output_paths(
             &parsed.output,
             parsed.request.board.label(),
             &parsed.request.revision,
@@ -10107,9 +10109,7 @@ mod configured_cli_tests {
         .unwrap();
         assert_eq!(
             paths.latest,
-            std::path::PathBuf::from(
-                "target/test-configured/firmware/Green/OSO-SWAT-A1-05/Green/latest"
-            )
+            std::path::PathBuf::from("target/test-configured/Green/OSO-SWAT-A1-05/Green/latest",)
         );
     }
 
@@ -13340,7 +13340,7 @@ mod tests {
         let mut app = super::StudioApp::default();
         app.language = super::Language::ChineseSimplified;
         app.editor_source = "unsaved source".to_string();
-        app.output_dir = "user-output".to_string();
+        app.build_output_root = "user-output".to_string();
         app.restore_store.points.push(super::restore::RestorePoint {
             name: "keep me".to_string(),
             timestamp: 7,
@@ -13355,13 +13355,13 @@ mod tests {
             .map(|point| (point.name.clone(), point.timestamp))
             .collect();
         let source = app.editor_source.clone();
-        let output_dir = app.output_dir.clone();
+        let output_dir = app.build_output_root.clone();
         let language = app.language;
 
         app.reset_compile_session_state("new-fingerprint".to_string());
 
         assert_eq!(app.editor_source, source);
-        assert_eq!(app.output_dir, output_dir);
+        assert_eq!(app.build_output_root, output_dir);
         assert_eq!(app.language, language);
         let current_restore_metadata: Vec<(String, u64)> = app
             .restore_store
@@ -13539,7 +13539,7 @@ mod tests {
         app.btn_l_down = true;
         app.held_button = Some(super::ButtonId::L);
         app.watch.light = true;
-        let output_dir = app.output_dir.clone();
+        let output_dir = app.build_output_root.clone();
         let mut invalid_effective = app.component_profiles[0].config.clone();
         invalid_effective.buzzer = !invalid_effective.buzzer;
         app.component_effective = invalid_effective;
@@ -13563,7 +13563,7 @@ mod tests {
         assert!(app.btn_l_down);
         assert_eq!(app.held_button, Some(super::ButtonId::L));
         assert!(app.watch.light);
-        assert_eq!(app.output_dir, output_dir);
+        assert_eq!(app.build_output_root, output_dir);
         assert!(app.pending_build.is_none());
     }
 
