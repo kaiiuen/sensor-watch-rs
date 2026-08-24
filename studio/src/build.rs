@@ -1074,7 +1074,8 @@ struct IsolatedWorkspace {
 impl IsolatedWorkspace {
     fn new(source: &Path) -> Result<Self, String> {
         let root = std::env::temp_dir().join(format!("sensor-watch-studio-build-{}", unix_nanos()));
-        copy_tree(source, &root, source.join("target"))?;
+        copy_tree(source, &root, source.join("target"), true)?;
+        write_isolated_manifest(source, &root)?;
         Ok(Self { root })
     }
 }
@@ -1085,7 +1086,12 @@ impl Drop for IsolatedWorkspace {
     }
 }
 
-fn copy_tree(source: &Path, destination: &Path, excluded: PathBuf) -> Result<(), String> {
+fn copy_tree(
+    source: &Path,
+    destination: &Path,
+    excluded: PathBuf,
+    firmware_root: bool,
+) -> Result<(), String> {
     std::fs::create_dir_all(destination)
         .map_err(|e| format!("cannot create isolated workspace: {e}"))?;
     for entry in
@@ -1093,7 +1099,19 @@ fn copy_tree(source: &Path, destination: &Path, excluded: PathBuf) -> Result<(),
     {
         let entry = entry.map_err(|e| format!("cannot read firmware source entry: {e}"))?;
         let from = entry.path();
-        if from == excluded || from.file_name().is_some_and(|name| name == ".git") {
+        if from == excluded
+            || from.file_name().is_some_and(|name| name == ".git")
+            // These are host applications/tools or unrelated workspace members.
+            // The isolated build needs only the firmware package and its `core`
+            // path dependency; in particular, never copy the desktop Studio crate.
+            || (firmware_root
+                && from.file_name().is_some_and(|name| {
+                    matches!(
+                        name.to_str(),
+                        Some("studio" | "tools" | "desktop-update" | "launcher")
+                    )
+                }))
+        {
             continue;
         }
         let to = destination.join(entry.file_name());
@@ -1106,13 +1124,38 @@ fn copy_tree(source: &Path, destination: &Path, excluded: PathBuf) -> Result<(),
             ));
         }
         if metadata.is_dir() {
-            copy_tree(&from, &to, excluded.clone())?;
+            copy_tree(&from, &to, excluded.clone(), false)?;
         } else if metadata.is_file() {
             std::fs::copy(&from, &to)
                 .map_err(|e| format!("cannot copy firmware source {}: {e}", from.display()))?;
         }
     }
     Ok(())
+}
+
+fn write_isolated_manifest(source: &Path, workspace: &Path) -> Result<(), String> {
+    let original = std::fs::read_to_string(source.join("Cargo.toml"))
+        .map_err(|e| format!("cannot read firmware manifest: {e}"))?;
+    let package = original
+        .find("[package]")
+        .ok_or_else(|| "firmware manifest lacks [package]".to_string())?;
+    let profiles = original.find("[profile.dev]").unwrap_or(original.len());
+    let mut manifest = String::from(
+        "[workspace]\nresolver = \"2\"\nmembers = [\".\", \"core\"]\ndefault-members = [\".\"]\n\n",
+    );
+    manifest.push_str(&original[package..profiles]);
+    if profiles < original.len() {
+        let profile_text = &original[profiles..];
+        if let Some(package_profile) =
+            profile_text.find("[profile.release.package.sensor-watch-studio]")
+        {
+            manifest.push_str(&profile_text[..package_profile]);
+        } else {
+            manifest.push_str(profile_text);
+        }
+    }
+    std::fs::write(workspace.join("Cargo.toml"), manifest)
+        .map_err(|e| format!("cannot write isolated firmware manifest: {e}"))
 }
 
 fn generate_inputs(
@@ -1378,6 +1421,93 @@ mod tests {
             Some(root.canonicalize().unwrap())
         );
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn isolated_manifest_is_firmware_only_and_cargo_validates_it() {
+        let workspace = IsolatedWorkspace::new(&compiled_workspace_root().unwrap()).unwrap();
+        let manifest = std::fs::read_to_string(workspace.root.join("Cargo.toml")).unwrap();
+        assert!(manifest.contains("members = [\".\", \"core\"]"));
+        assert!(manifest.contains("default-members = [\".\"]"));
+        assert!(!manifest.contains("sensor-watch-studio"));
+        assert!(!workspace.root.join("studio").exists());
+        assert!(!workspace.root.join("tools").exists());
+        assert!(workspace.root.join("core/Cargo.toml").is_file());
+
+        let result = Command::new("cargo")
+            .args([
+                "metadata",
+                "--no-deps",
+                "--format-version",
+                "1",
+                "--manifest-path",
+            ])
+            .arg(workspace.root.join("Cargo.toml"))
+            .output()
+            .expect("cargo metadata should start");
+        assert!(
+            result.status.success(),
+            "isolated manifest rejected by cargo: {}",
+            String::from_utf8_lossy(&result.stderr)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the thumbv6m-none-eabi target and rust-objcopy"]
+    fn configured_green_and_red_lite_builds_use_isolated_workspace() {
+        let root = temp_root("configured-builds");
+        let profiles = super::super::components::default_profiles();
+        for (board, profile_index) in [
+            (super::super::components::BoardKind::Green, 0),
+            (super::super::components::BoardKind::RedLite, 1),
+        ] {
+            let profile = profiles[profile_index].clone();
+            let request = FirmwareInputRequest {
+                board,
+                revision: if board == super::super::components::BoardKind::RedLite {
+                    "OSO-SWAT-A1-02"
+                } else {
+                    "OSO-SWAT-A1-05"
+                }
+                .into(),
+                components: profile.config.clone(),
+                profile,
+                preset_name: "Stock Casio".into(),
+                ordered_faces: vec!["SIMPLE_CLOCK".into()],
+                modules: vec![],
+            };
+            let revision = if board == super::super::components::BoardKind::RedLite {
+                "OSO-SWAT-A1-02"
+            } else {
+                "OSO-SWAT-A1-05"
+            };
+            let output = super::super::storage::build_output_paths(
+                &root,
+                artifact_board_name(board),
+                revision,
+                artifact_profile_name(board, &request.profile.name),
+            )
+            .unwrap();
+            std::fs::create_dir_all(&output.latest).unwrap();
+            let result = build_firmware(request, &output);
+            assert!(
+                result.success,
+                "{} build failed: {}",
+                board.label(),
+                result.message
+            );
+            assert!(result.uf2_path.as_ref().is_some_and(|path| path.is_file()));
+            println!(
+                "{} artifacts: UF2={}, manifest={}, signature={}, inputs={}, latest={}",
+                board.label(),
+                output.uf2.display(),
+                output.manifest.display(),
+                output.sidecar.display(),
+                output.inputs.display(),
+                output.latest_json.display(),
+            );
+        }
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]
