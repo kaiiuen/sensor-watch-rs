@@ -1,344 +1,369 @@
-//! Read-only workspace file browser for Firmware Studio.
+//! Bounded Studio File Browser backed by the central filesystem policy.
 
+use crate::fs_policy::{Item, Policy, PolicyError, RootKind, Roots};
 use crate::help::{AnchorId, AnchorRect};
 use eframe::egui;
-use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
-
-const MAX_PREVIEW_BYTES: u64 = 512 * 1024;
 
 pub struct AnchorHit {
     pub key: AnchorId,
     pub rect: AnchorRect,
 }
 
-#[derive(Clone, Debug)]
-struct Entry {
-    path: PathBuf,
-    is_dir: bool,
-    size: Option<u64>,
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum SortMode {
+    Name,
+    Size,
 }
 
-/// State and UI for the project's read-only reference browser.
 pub struct FileBrowser {
-    root: PathBuf,
+    policy: Policy,
+    root_kind: RootKind,
     current_dir: PathBuf,
-    entries: Vec<Entry>,
+    entries: Vec<Item>,
     filter: String,
     selected: Option<PathBuf>,
-    preview: String,
-    preview_allowed: bool,
-    preview_size: Option<u64>,
     message: String,
+    sort: SortMode,
+    open_request: Option<PathBuf>,
+    new_name: String,
+    rename_name: String,
+    pending_delete: Option<PathBuf>,
+    pending_rename: Option<(PathBuf, PathBuf)>,
 }
 
 impl Default for FileBrowser {
     fn default() -> Self {
         Self {
-            root: PathBuf::new(),
+            policy: Policy::new(Roots::empty()),
+            root_kind: RootKind::ActiveProject,
             current_dir: PathBuf::new(),
             entries: Vec::new(),
             filter: String::new(),
             selected: None,
-            preview: String::new(),
-            preview_allowed: false,
-            preview_size: None,
             message: String::new(),
+            sort: SortMode::Name,
+            open_request: None,
+            new_name: String::new(),
+            rename_name: String::new(),
+            pending_delete: None,
+            pending_rename: None,
         }
     }
 }
 
 impl FileBrowser {
     pub fn new() -> Self {
-        let mut browser = Self::default();
-        browser.refresh_workspace();
-        browser
-    }
-
-    fn refresh_workspace(&mut self) {
-        let candidate = match crate::distribution::active().active_project_dir() {
-            Some(path) => path,
-            None => {
-                self.root.clear();
-                self.current_dir.clear();
-                self.entries.clear();
-                self.message = "Mutable project unavailable: bundled firmware is read-only".into();
-                return;
-            }
+        let mut browser = Self {
+            policy: Policy::new(Roots::from_distribution(&crate::distribution::active())),
+            ..Self::default()
         };
-        match candidate.canonicalize() {
-            Ok(root) if root.is_dir() => {
-                self.root = root.clone();
-                self.current_dir = root;
-                self.message.clear();
-                self.load_entries();
-            }
-            _ => {
-                self.root.clear();
-                self.current_dir.clear();
-                self.entries.clear();
-                self.message = format!("Workspace not found at {}", candidate.display());
-            }
-        }
+        browser.refresh();
+        browser
     }
 
     #[cfg(test)]
-    fn from_root(root: PathBuf) -> Self {
-        let root = root.canonicalize().unwrap();
+    fn from_roots(data: PathBuf, project: PathBuf) -> Self {
         let mut browser = Self {
-            root: root.clone(),
-            current_dir: root,
+            policy: Policy::new(Roots::test(data, Some(project))),
+            root_kind: RootKind::AppData,
             ..Self::default()
         };
-        browser.load_entries();
+        browser.refresh();
         browser
     }
 
-    fn load_entries(&mut self) {
+    fn refresh(&mut self) {
+        self.selected = None;
         self.entries.clear();
-        if !is_within_root(&self.current_dir, &self.root) {
-            self.current_dir = self.root.clone();
-            self.message = "Refusing to browse outside the workspace".to_string();
-            return;
+        if let Some(path) = self.pending_delete.take() {
+            if let Ok(root) = self.policy.root(self.root_kind) {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap_or(Path::new(""))
+                    .to_path_buf();
+                self.action(self.policy.remove(self.root_kind, &relative));
+            }
         }
-        let read_dir = match fs::read_dir(&self.current_dir) {
-            Ok(read_dir) => read_dir,
+        if let Some((from, to)) = self.pending_rename.take() {
+            if let Ok(root) = self.policy.root(self.root_kind) {
+                let from = from
+                    .strip_prefix(&root)
+                    .unwrap_or(Path::new(""))
+                    .to_path_buf();
+                let to = to
+                    .strip_prefix(&root)
+                    .unwrap_or(Path::new(""))
+                    .to_path_buf();
+                self.action(self.policy.rename(self.root_kind, &from, &to));
+            }
+        }
+        match self.policy.root(self.root_kind) {
+            Ok(root) => {
+                if self.current_dir.as_os_str().is_empty() || !self.current_dir.starts_with(&root) {
+                    self.current_dir = root;
+                }
+                let relative = self
+                    .current_dir
+                    .strip_prefix(self.policy.root(self.root_kind).unwrap())
+                    .unwrap_or(Path::new(""));
+                match self.policy.list(self.root_kind, relative) {
+                    Ok(entries) => {
+                        self.entries = entries;
+                        self.sort_entries();
+                    }
+                    Err(error) => self.message = error.to_string(),
+                }
+            }
             Err(error) => {
-                self.message = format!("Cannot read {}: {error}", self.current_dir.display());
-                return;
+                self.current_dir.clear();
+                self.message = error.to_string();
             }
-        };
-        for item in read_dir.flatten() {
-            let path = item.path();
-            let file_type = match item.file_type() {
-                Ok(file_type) => file_type,
-                Err(_) => continue,
-            };
-            // Do not follow links: a link can escape the workspace or create a cycle.
-            if file_type.is_symlink() || is_excluded(&path, &self.root) {
-                continue;
-            }
-            let canonical = match path.canonicalize() {
-                Ok(canonical) if is_within_root(&canonical, &self.root) => canonical,
-                _ => continue,
-            };
-            let metadata = match fs::metadata(&canonical) {
-                Ok(metadata) => metadata,
-                Err(_) => continue,
-            };
-            self.entries.push(Entry {
-                path: canonical,
-                is_dir: metadata.is_dir(),
-                size: (!metadata.is_dir()).then_some(metadata.len()),
-            });
-        }
-        self.entries.sort_by_key(|entry| {
-            (
-                !entry.is_dir,
-                entry
-                    .path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_lowercase()),
-            )
-        });
-    }
-
-    fn select(&mut self, path: PathBuf) {
-        let path = match path.canonicalize() {
-            Ok(path) if is_within_root(&path, &self.root) => path,
-            _ => {
-                self.message = "Refusing to inspect a path outside the workspace".to_string();
-                return;
-            }
-        };
-        // Re-resolve immediately before opening: the directory listing is not a
-        // capability, and a path can be swapped after it was displayed.
-        let reopened = match path.canonicalize() {
-            Ok(reopened) if reopened == path && is_within_root(&reopened, &self.root) => reopened,
-            _ => {
-                self.message =
-                    "Refusing to inspect a path changed outside the workspace".to_string();
-                return;
-            }
-        };
-        let metadata = match fs::symlink_metadata(&reopened) {
-            Ok(metadata) if metadata.file_type().is_file() => metadata,
-            Ok(metadata) => metadata,
-            Err(error) => {
-                self.message = format!("Cannot inspect {}: {error}", reopened.display());
-                return;
-            }
-        };
-        self.selected = Some(reopened.clone());
-        self.preview_size = Some(metadata.len());
-        if metadata.is_file() && is_previewable(&reopened, metadata.len()) {
-            match read_preview(&reopened) {
-                Ok(contents) => {
-                    self.preview = contents;
-                    self.preview_allowed = true;
-                    self.message.clear();
-                }
-                Err(error) => {
-                    self.preview = format!("Preview unavailable: {error}");
-                    self.preview_allowed = false;
-                }
-            }
-        } else {
-            self.preview.clear();
-            self.preview_allowed = false;
-            self.message = if metadata.is_dir() {
-                "Directory selected. Open it to browse its contents.".to_string()
-            } else {
-                "Content preview is disabled for credentials, secrets, and binary files."
-                    .to_string()
-            };
         }
     }
 
-    fn relative_path(&self, path: &Path) -> String {
-        path.strip_prefix(&self.root)
-            .map(|relative| {
-                if relative.as_os_str().is_empty() {
-                    "/".to_string()
-                } else {
-                    relative.display().to_string()
-                }
-            })
-            .unwrap_or_else(|_| path.display().to_string())
+    fn sort_entries(&mut self) {
+        match self.sort {
+            SortMode::Name => self.entries.sort_by_key(|item| {
+                (
+                    !item.is_dir,
+                    item.relative.to_string_lossy().to_ascii_lowercase(),
+                )
+            }),
+            SortMode::Size => self.entries.sort_by_key(|item| (!item.is_dir, item.size)),
+        }
     }
 
-    /// Render the read-only browser. Returns a status message when the user copies data.
+    fn navigate(&mut self, relative: PathBuf) {
+        match self.policy.root(self.root_kind).and_then(|root| {
+            self.policy
+                .list(self.root_kind, &relative)
+                .map(|_| root.join(&relative))
+        }) {
+            Ok(path) => {
+                self.current_dir = path;
+                self.selected = None;
+                self.refresh();
+            }
+            Err(error) => self.message = error.to_string(),
+        }
+    }
+
+    pub fn take_open_request(&mut self) -> Option<PathBuf> {
+        self.open_request.take()
+    }
+
+    pub fn read_text_path(&self, path: &Path) -> Result<String, PolicyError> {
+        for kind in [RootKind::ActiveProject, RootKind::AppData] {
+            if let Ok(root) = self.policy.root(kind) {
+                if let Ok(relative) = path.strip_prefix(&root) {
+                    return self.policy.read_text(kind, relative);
+                }
+            }
+        }
+        Err(PolicyError::OutsideRoot)
+    }
+
+    pub fn write_text_path(
+        &self,
+        path: &Path,
+        contents: &str,
+        expected: Option<&str>,
+    ) -> Result<(), PolicyError> {
+        for kind in [RootKind::ActiveProject, RootKind::AppData] {
+            if let Ok(root) = self.policy.root(kind) {
+                if let Ok(relative) = path.strip_prefix(&root) {
+                    return self.policy.write_text(kind, relative, contents, expected);
+                }
+            }
+        }
+        Err(PolicyError::OutsideRoot)
+    }
+
+    fn action(&mut self, result: Result<(), PolicyError>) {
+        self.message = match result {
+            Ok(()) => {
+                self.refresh();
+                "Operation completed".into()
+            }
+            Err(error) => error.to_string(),
+        };
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui) -> (Option<String>, Vec<AnchorHit>) {
         let mut copied = None;
         let mut anchors = Vec::new();
         ui.heading("File Browser");
         ui.horizontal(|ui| {
-            ui.colored_label(
-                egui::Color32::from_rgb(220, 180, 80),
-                "READ-ONLY REFERENCE BROWSER",
-            );
-            ui.weak("No writes or deletes are available");
+            ui.label("Root:");
+            for kind in [RootKind::AppData, RootKind::ActiveProject] {
+                if ui
+                    .selectable_label(self.root_kind == kind, kind.label())
+                    .clicked()
+                {
+                    self.root_kind = kind;
+                    self.current_dir.clear();
+                    self.refresh();
+                }
+            }
             let response = ui.button("Refresh");
             anchors.push(anchor(AnchorId::FileRefresh, &response));
             if response.clicked() {
-                self.refresh_workspace();
+                self.refresh();
             }
+            ui.label("Writes are limited to app data and the active project");
         });
         if !self.message.is_empty() {
-            ui.label(&self.message);
+            ui.colored_label(egui::Color32::YELLOW, &self.message);
         }
-        ui.separator();
         ui.horizontal(|ui| {
             ui.label("Search:");
-            let response = ui.add(
-                egui::TextEdit::singleline(&mut self.filter)
-                    .hint_text("Filter files and directories"),
-            );
+            let response = ui.text_edit_singleline(&mut self.filter);
             anchors.push(anchor(AnchorId::FileFilter, &response));
-        });
-        ui.horizontal_wrapped(|ui| {
-            ui.label("Workspace:");
-            if ui.link("/").clicked() {
-                self.current_dir = self.root.clone();
-                self.load_entries();
+            egui::ComboBox::from_id_source("file-sort")
+                .selected_text(match self.sort {
+                    SortMode::Name => "Name",
+                    SortMode::Size => "Size",
+                })
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut self.sort, SortMode::Name, "Name");
+                    ui.selectable_value(&mut self.sort, SortMode::Size, "Size");
+                });
+            if ui.button("Search recursively").clicked() {
+                match self.policy.search(self.root_kind, self.filter.trim()) {
+                    Ok(entries) => {
+                        self.entries = entries;
+                        self.sort_entries();
+                        self.message = format!("{} entries shown", self.entries.len());
+                    }
+                    Err(error) => self.message = error.to_string(),
+                }
             }
-            let relative = self.relative_path(&self.current_dir);
-            for component in Path::new(&relative).components() {
-                let name = component.as_os_str().to_string_lossy().to_string();
-                if name == "/" {
+        });
+        let root = self.policy.root(self.root_kind).ok();
+        let relative = root
+            .as_ref()
+            .and_then(|root| self.current_dir.strip_prefix(root).ok())
+            .unwrap_or(Path::new(""))
+            .to_path_buf();
+        ui.horizontal_wrapped(|ui| {
+            if ui.button("Root").clicked() {
+                self.navigate(PathBuf::new());
+            }
+            let mut crumb = PathBuf::new();
+            for component in relative.components() {
+                let name = component.as_os_str().to_owned();
+                crumb.push(&name);
+                if ui.button(name.to_string_lossy()).clicked() {
+                    self.navigate(crumb.clone());
+                }
+            }
+            if !relative.as_os_str().is_empty() && ui.button("Parent").clicked() {
+                self.navigate(relative.parent().unwrap_or(Path::new("")).to_path_buf());
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.text_edit_singleline(&mut self.new_name);
+            if ui.button("New folder").clicked() && !self.new_name.trim().is_empty() {
+                let path = relative.join(self.new_name.trim());
+                self.action(self.policy.create_dir(self.root_kind, &path));
+                self.new_name.clear();
+            }
+            if ui.button("New file").clicked() && !self.new_name.trim().is_empty() {
+                let path = relative.join(self.new_name.trim());
+                self.action(self.policy.create_file(self.root_kind, &path));
+                self.new_name.clear();
+            }
+        });
+        let filter = self.filter.to_ascii_lowercase();
+        let mut selected = None;
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            for item in &self.entries {
+                let name = item
+                    .relative
+                    .file_name()
+                    .map(|v| v.to_string_lossy())
+                    .unwrap_or_default();
+                if !filter.is_empty()
+                    && !item
+                        .relative
+                        .to_string_lossy()
+                        .to_ascii_lowercase()
+                        .contains(&filter)
+                {
                     continue;
                 }
-                ui.label("/");
-                ui.monospace(name);
+                let response = ui.selectable_label(
+                    self.selected.as_ref() == Some(&item.path),
+                    format!(
+                        "{} {} ({})",
+                        if item.is_dir { "DIR" } else { "FILE" },
+                        name,
+                        item.size
+                    ),
+                );
+                anchors.push(anchor(AnchorId::FileList, &response));
+                if response.clicked() {
+                    selected = Some(item.clone());
+                }
             }
-            ui.weak(format!("({})", self.current_dir.display()));
         });
-
-        let available = ui.available_height().max(180.0);
-        let filter = self.filter.trim().to_lowercase();
-        let mut open_path = None;
-        let mut select_path = None;
-        ui.columns(2, |columns| {
-            columns[0].set_min_width(240.0);
-            egui::ScrollArea::vertical()
-                .max_height(available)
-                .show(&mut columns[0], |ui| {
-                    for entry in &self.entries {
-                        let name = entry
-                            .path
-                            .file_name()
-                            .map(|n| n.to_string_lossy())
-                            .unwrap_or_default();
-                        if !filter.is_empty() && !name.to_lowercase().contains(&filter) {
-                            continue;
-                        }
-                        let size = entry
-                            .size
-                            .map(|size| format!(" ({})", format_size(size)))
-                            .unwrap_or_default();
-                        let label = format!(
-                            "{} {}{}",
-                            if entry.is_dir { "📁" } else { "📄" },
-                            name,
-                            size
-                        );
-                        let response =
-                            ui.selectable_label(self.selected.as_ref() == Some(&entry.path), label);
-                        anchors.push(anchor(AnchorId::FileList, &response));
-                        if response.clicked() {
-                            if entry.is_dir {
-                                open_path = Some(entry.path.clone());
-                            } else {
-                                select_path = Some(entry.path.clone());
-                            }
-                        }
-                    }
-                });
-            if let Some(path) = open_path.take() {
-                self.current_dir = path;
-                self.load_entries();
-            } else if let Some(path) = select_path.take() {
-                self.select(path);
-            }
-            columns[1].vertical(|ui| {
-                let selected = self.selected.clone();
-                ui.horizontal(|ui| {
-                    let preview_response = ui.heading("Selection");
-                    anchors.push(anchor(AnchorId::FilePreview, &preview_response));
-                    if let Some(path) = &selected {
-                        if ui.button("Copy path").clicked() {
-                            copied = copy_to_clipboard(&path.display().to_string());
-                        }
-                        if self.preview_allowed && ui.button("Copy contents").clicked() {
-                            copied = copy_to_clipboard(&self.preview);
-                        }
-                    }
-                });
-                if let Some(path) = selected {
-                    ui.label(format!("Path: {}", self.relative_path(&path)));
-                    ui.label(format!(
-                        "Size: {}",
-                        format_size(self.preview_size.unwrap_or(0))
-                    ));
-                    ui.separator();
-                    if self.preview_allowed {
-                        egui::ScrollArea::both().show(ui, |ui| {
-                            ui.add(
-                                egui::TextEdit::multiline(&mut self.preview)
-                                    .font(egui::TextStyle::Monospace)
-                                    .desired_width(f32::INFINITY)
-                                    .interactive(false),
-                            );
-                        });
-                    } else {
-                        ui.weak("No content preview for this selection.");
-                    }
-                } else {
-                    ui.weak("Select a file to view its contents.");
+        if let Some(item) = selected {
+            self.selected = Some(item.path.clone());
+            ui.separator();
+            ui.label(format!("Selected: {}", item.relative.display()));
+            ui.horizontal(|ui| {
+                if !item.is_dir && ui.button("Open in editor").clicked() {
+                    self.open_request = Some(item.path.clone());
+                }
+                if ui.button("Copy path").clicked() {
+                    copied = copy_to_clipboard(&item.path.display().to_string());
+                }
+                if ui.button("Delete").clicked() {
+                    self.pending_delete = Some(item.path.clone());
+                    self.message = "Confirm delete below".into();
                 }
             });
-        });
+            ui.horizontal(|ui| {
+                ui.text_edit_singleline(&mut self.rename_name);
+                if ui.button("Rename or move").clicked() && !self.rename_name.trim().is_empty() {
+                    if let Ok(root) = self.policy.root(self.root_kind) {
+                        let from = item
+                            .path
+                            .strip_prefix(&root)
+                            .unwrap_or(Path::new(""))
+                            .to_path_buf();
+                        let to = relative.join(self.rename_name.trim());
+                        self.pending_rename = Some((item.path.clone(), root.join(to)));
+                        self.rename_name.clear();
+                        self.message =
+                            format!("Confirm rename or move of {} below", from.display());
+                    }
+                }
+            });
+            if self.pending_delete.as_ref() == Some(&item.path) {
+                ui.colored_label(egui::Color32::YELLOW, "Delete this entry and its contents?");
+                if ui.button("Confirm delete").clicked() {
+                    self.refresh();
+                }
+                if ui.button("Cancel delete").clicked() {
+                    self.pending_delete = None;
+                }
+            }
+            if self
+                .pending_rename
+                .as_ref()
+                .is_some_and(|(from, _)| from == &item.path)
+            {
+                ui.colored_label(egui::Color32::YELLOW, "Confirm rename or move?");
+                if ui.button("Confirm rename or move").clicked() {
+                    self.refresh();
+                }
+                if ui.button("Cancel rename or move").clicked() {
+                    self.pending_rename = None;
+                }
+            }
+        }
         (copied, anchors)
     }
 }
@@ -352,124 +377,45 @@ fn anchor(key: AnchorId, response: &egui::Response) -> AnchorHit {
         },
     }
 }
-
-fn read_preview(path: &Path) -> std::io::Result<String> {
-    let mut file = fs::File::open(path)?;
-    let mut bytes = Vec::new();
-    file.by_ref()
-        .take(MAX_PREVIEW_BYTES + 1)
-        .read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > MAX_PREVIEW_BYTES {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "file changed and is too large to preview",
-        ));
-    }
-    String::from_utf8(bytes).map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, "file is not valid UTF-8")
-    })
-}
-
 fn copy_to_clipboard(text: &str) -> Option<String> {
-    match arboard::Clipboard::new().and_then(|mut clipboard| clipboard.set_text(text.to_string())) {
-        Ok(()) => Some("Copied to clipboard".to_string()),
-        Err(error) => Some(format!("Clipboard error: {error}")),
-    }
-}
-
-#[cfg(test)]
-mod project_root_tests {
-    use super::*;
-
-    #[test]
-    fn browser_uses_active_project_as_root() {
-        let root = std::env::temp_dir().join(format!("studio-browser-{}", std::process::id()));
-        std::fs::create_dir_all(root.join("src")).unwrap();
-        std::fs::write(root.join("src/editable.rs"), b"x").unwrap();
-        let browser = FileBrowser::from_root(root.join("."));
-        assert_eq!(browser.root, root.canonicalize().unwrap());
-        assert!(browser
-            .entries
-            .iter()
-            .any(|entry| entry.path.ends_with("src")));
-        let _ = std::fs::remove_dir_all(root);
-    }
-}
-
-fn format_size(size: u64) -> String {
-    if size < 1024 {
-        format!("{size} B")
-    } else if size < 1024 * 1024 {
-        format!("{:.1} KiB", size as f64 / 1024.0)
-    } else {
-        format!("{:.1} MiB", size as f64 / 1_048_576.0)
-    }
-}
-
-fn is_within_root(path: &Path, root: &Path) -> bool {
-    path.starts_with(root)
-}
-
-fn is_excluded(path: &Path, root: &Path) -> bool {
-    let relative = match path.strip_prefix(root) {
-        Ok(relative) => relative,
-        Err(_) => return true,
-    };
-    relative.components().any(|component| {
-        let name = component.as_os_str().to_string_lossy().to_ascii_lowercase();
-        name == ".git" || name == "target" || is_secret_name(&name)
-    })
-}
-
-fn is_secret_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.contains("credential")
-        || lower.contains("secret")
-        || lower.contains("password")
-        || lower.contains("token")
-        || lower == ".env"
-        || lower.ends_with(".pem")
-        || lower.ends_with(".key")
-}
-
-fn is_previewable(path: &Path, size: u64) -> bool {
-    if size > MAX_PREVIEW_BYTES
-        || path
-            .file_name()
-            .map(|n| is_secret_name(&n.to_string_lossy()))
-            .unwrap_or(true)
-    {
-        return false;
-    }
-    let binary_extensions = [
-        "bin", "uf2", "elf", "exe", "dll", "so", "dylib", "png", "jpg", "jpeg", "gif", "bmp",
-        "ico", "pdf", "zip", "gz", "wasm",
-    ];
-    !path
-        .extension()
-        .map(|ext| binary_extensions.contains(&ext.to_string_lossy().to_ascii_lowercase().as_str()))
-        .unwrap_or(false)
+    Some(
+        match arboard::Clipboard::new().and_then(|mut c| c.set_text(text.to_owned())) {
+            Ok(()) => "Copied to clipboard".into(),
+            Err(error) => format!("Clipboard error: {error}"),
+        },
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
-    fn excludes_sensitive_components() {
-        let root = Path::new("workspace");
-        assert!(is_excluded(&root.join("target/debug/a"), root));
-        assert!(is_excluded(&root.join("src/credentials.toml"), root));
-        assert!(!is_excluded(&root.join("src/main.rs"), root));
+    fn roots_and_refresh_clear_stale_selection() {
+        let root = std::env::temp_dir().join(format!("studio-browser-{}", std::process::id()));
+        let data = root.join("data");
+        let project = root.join("project");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(data.join("a.txt"), b"a").unwrap();
+        let mut browser = FileBrowser::from_roots(data.clone(), project);
+        browser.selected = Some(data.join("a.txt"));
+        browser.refresh();
+        assert!(browser.selected.is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
-
     #[test]
-    fn rejects_binary_and_large_previews() {
-        assert!(!is_previewable(Path::new("firmware.uf2"), 10));
-        assert!(!is_previewable(
-            Path::new("notes.txt"),
-            MAX_PREVIEW_BYTES + 1
-        ));
-        assert!(is_previewable(Path::new("notes.txt"), 10));
+    fn parent_navigation_is_root_bounded() {
+        let root =
+            std::env::temp_dir().join(format!("studio-browser-parent-{}", std::process::id()));
+        let data = root.join("data");
+        let project = root.join("project");
+        std::fs::create_dir_all(data.join("one/two")).unwrap();
+        std::fs::create_dir_all(&project).unwrap();
+        let mut browser = FileBrowser::from_roots(data, project);
+        browser.navigate(PathBuf::from("one/two"));
+        browser.navigate(PathBuf::from("one"));
+        browser.navigate(PathBuf::new());
+        assert!(browser.current_dir.ends_with("data"));
+        let _ = std::fs::remove_dir_all(root);
     }
 }

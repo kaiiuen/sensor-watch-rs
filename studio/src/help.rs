@@ -704,9 +704,9 @@ const TUTORIALS: &[Tutorial] = &[
         stable_key: "file-browser",
         title: "File Browser tutorial",
         steps: steps!
-        ("Purpose and controls" => "File Browser is a read-only view of workspace files, paths, and metadata. Refresh updates the host-side view. It does not scan the watch.",
-         "Beginner workflow" => "1. Refresh the listing. 2. Select a relevant source or artifact. 3. Inspect its path and metadata. 4. Use Build & Flash for explicit artifact inspection and approval. Expected result: you know which local file you are reviewing.",
-         "Safety and limits" => "This panel does not edit or flash files. Import/restore/delete actions elsewhere can be destructive. Confirm them and keep backups. File presence does not mean the artifact is valid or hardware-tested."),
+        ("Purpose and controls" => "File Browser shows the app-local data root and active project. Use the explicit root selector, breadcrumbs, bounded recursive search, sorting, and refresh controls.",
+         "Beginner workflow" => "1. Choose App data or Active project. 2. Navigate with Root, breadcrumbs, and Parent. 3. Select safe UTF-8 text and open it in Editor. 4. Use refresh after changes.",
+         "Safety and limits" => "Writes are limited to the active mutable project and app-local data. Package references, generated artifacts, secrets, links, traversal, oversized files, and root mutations are rejected. Destructive actions require confirmation."),
     },
     Tutorial {
         id: HelpId::Tutorials,

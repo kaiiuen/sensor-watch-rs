@@ -25,6 +25,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   preview / view code / test-before-adding actions. The catalog and active
   preset are stacked on the left and watch settings on the right, panel sizes
   are persisted and reset proportionally when the window is resized.
+- **File Browser** - a bounded browser for the app-local data root and active mutable project. It supports explicit root selection, parent and breadcrumb navigation, bounded recursive search, sorting, safe UTF-8 editor opening, and confirmation-gated CRUD. Package references, generated outputs, secrets, links, traversal, oversized files, and root mutations are rejected.
 - **Editor** - a self-IDE for creating, editing, or deleting watch faces from
   templates, with a collapsible "How to make a watch face" guide and a
   **description** field that shows up in the catalog. The beginner-safe
@@ -292,6 +293,8 @@ None of these results represent on-silicon validation.
 - `build.rs` - firmware build -> UF2, path resolution
 - `faces.rs` - discovers faces from the firmware `mod.rs`
 - `editor.rs` - face templates + read/write/delete
+- `file_browser.rs` - bounded File Browser UI and editor-open bridge
+- `fs_policy.rs` - centralized canonical path, root, size, link, and mutation policy
 - `presets.rs` - preset manager
 - `i18n.rs` - language (English, Simplified/Traditional Chinese)
 - `theme.rs` - Light/Dark/Auto

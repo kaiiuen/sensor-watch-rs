@@ -22,6 +22,7 @@ mod file_browser;
 pub mod firmware_inputs;
 mod flash;
 mod fonts;
+mod fs_policy;
 mod fuzz;
 mod help;
 mod i18n;
@@ -241,6 +242,9 @@ struct StudioApp {
     editor_name: String,
     /// The editor's current source.
     editor_source: String,
+    /// A text file opened from the bounded File Browser.
+    editor_file_path: Option<std::path::PathBuf>,
+    editor_file_original: String,
     /// The editor's face description (shown to users in the catalog).
     editor_description: String,
     /// The selected editor template.
@@ -1129,6 +1133,8 @@ impl Default for StudioApp {
             new_preset_name: String::new(),
             editor_name: String::new(),
             editor_source: String::new(),
+            editor_file_path: None,
+            editor_file_original: String::new(),
             editor_description: String::new(),
             editor_template: 0,
             block_editor: block_editor::BlockEditor::default(),
@@ -4634,6 +4640,37 @@ impl StudioApp {
                 self.block_editor.set_blocks_mode(false);
             }
         });
+        if let Some(path) = self.editor_file_path.clone() {
+            ui.horizontal(|ui| {
+                ui.label(format!("Open text file: {}", path.display()));
+                if ui.button("Save text file").clicked() {
+                    let source = self.editor_source.clone();
+                    let original = self.editor_file_original.clone();
+                    match self
+                        .file_browser
+                        .write_text_path(&path, &source, Some(&original))
+                    {
+                        Ok(()) => {
+                            self.editor_file_original = source;
+                            self.status = "Text file saved atomically".into();
+                        }
+                        Err(error) => {
+                            self.status = format!("Text file save failed: {error}");
+                            self.log_error(&self.status.clone());
+                        }
+                    }
+                }
+                if ui.button("Close text file").clicked() {
+                    if self.editor_source == self.editor_file_original {
+                        self.editor_file_path = None;
+                        self.editor_file_original.clear();
+                    } else {
+                        self.status =
+                            "Unsaved editor changes must be saved before closing the file".into();
+                    }
+                }
+            });
+        }
         if self.block_editor.is_blocks_mode() {
             ui.separator();
             ui.strong("Face identity");
@@ -6752,7 +6789,7 @@ impl StudioApp {
             });
     }
 
-    /// The read-only workspace reference browser.
+    /// The bounded workspace File Browser.
     fn file_browser(&mut self, ui: &mut egui::Ui) {
         let (message, anchors) = self.file_browser.ui(ui);
         for hit in anchors {
@@ -6761,6 +6798,27 @@ impl StudioApp {
         }
         if let Some(message) = message {
             self.status = message;
+        }
+        if let Some(path) = self.file_browser.take_open_request() {
+            if self.editor_file_path.is_some() && self.editor_source != self.editor_file_original {
+                self.status =
+                    "Unsaved editor changes must be saved before opening another file".into();
+            } else {
+                match self.file_browser.read_text_path(&path) {
+                    Ok(source) => {
+                        self.editor_name = path
+                            .file_name()
+                            .map(|name| name.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                        self.editor_source = source.clone();
+                        self.editor_file_original = source;
+                        self.editor_file_path = Some(path);
+                        self.current_panel = Panel::Editor;
+                        self.status = "Opened safe UTF-8 text file in editor".into();
+                    }
+                    Err(error) => self.status = format!("Open failed: {error}"),
+                }
+            }
         }
     }
 
