@@ -77,6 +77,19 @@ impl Roots {
             immutable: Vec::new(),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn test_with_immutable(
+        app_data: PathBuf,
+        active_project: PathBuf,
+        immutable: PathBuf,
+    ) -> Self {
+        Self {
+            app_data,
+            active_project: Some(active_project),
+            immutable: vec![immutable],
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,6 +98,8 @@ pub struct Item {
     pub relative: PathBuf,
     pub is_dir: bool,
     pub size: u64,
+    pub modified: Option<std::time::SystemTime>,
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -178,9 +193,11 @@ impl Policy {
                     .strip_prefix(&root)
                     .unwrap_or(Path::new(""))
                     .to_path_buf(),
-                path: canonical,
+                path: canonical.clone(),
                 is_dir: metadata.is_dir(),
                 size: metadata.len(),
+                modified: metadata.modified().ok(),
+                read_only: self.is_read_only(kind, &canonical),
             });
         }
         result.sort_by_key(|item| {
@@ -195,12 +212,13 @@ impl Policy {
     pub fn search(&self, kind: RootKind, query: &str) -> Result<Vec<Item>, PolicyError> {
         let root = self.root(kind)?;
         let mut found = Vec::new();
-        self.search_dir(&root, &root, query, 0, &mut found)?;
+        self.search_dir(kind, &root, &root, query, 0, &mut found)?;
         Ok(found)
     }
 
     fn search_dir(
         &self,
+        kind: RootKind,
         root: &Path,
         dir: &Path,
         query: &str,
@@ -235,6 +253,8 @@ impl Policy {
                 path: canonical.clone(),
                 is_dir: metadata.is_dir(),
                 size: metadata.len(),
+                modified: metadata.modified().ok(),
+                read_only: self.is_read_only(kind, &canonical),
             };
             if query.is_empty()
                 || item
@@ -246,10 +266,19 @@ impl Policy {
                 found.push(item.clone());
             }
             if metadata.is_dir() {
-                self.search_dir(root, &canonical, query, depth + 1, found)?;
+                self.search_dir(kind, root, &canonical, query, depth + 1, found)?;
             }
         }
         Ok(())
+    }
+
+    pub fn is_read_only(&self, kind: RootKind, path: &Path) -> bool {
+        kind == RootKind::ActiveProject
+            && self
+                .roots
+                .immutable
+                .iter()
+                .any(|root| same_or_below(path, root))
     }
 
     pub fn read_text(&self, kind: RootKind, relative: &Path) -> Result<String, PolicyError> {
@@ -601,6 +630,30 @@ mod tests {
         assert!(policy
             .read_text(RootKind::AppData, Path::new("link.txt"))
             .is_err());
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn immutable_descendants_are_read_only_and_cannot_be_mutated() {
+        let root =
+            std::env::temp_dir().join(format!("studio-policy-immutable-{}", std::process::id()));
+        let project = root.join("project");
+        let resources = project.join("package-v1");
+        fs::create_dir_all(&resources).unwrap();
+        fs::write(resources.join("version.txt"), b"v1").unwrap();
+        let policy = Policy::new(Roots::test_with_immutable(
+            root.join("data"),
+            project,
+            resources.canonicalize().unwrap(),
+        ));
+        let entries = policy.list(RootKind::ActiveProject, Path::new("")).unwrap();
+        assert!(entries
+            .iter()
+            .any(|entry| { entry.relative == Path::new("package-v1") && entry.read_only }));
+        assert_eq!(
+            policy.remove(RootKind::ActiveProject, Path::new("package-v1/version.txt")),
+            Err(PolicyError::Immutable)
+        );
         let _ = fs::remove_dir_all(root);
     }
 

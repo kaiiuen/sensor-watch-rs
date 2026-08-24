@@ -293,7 +293,7 @@ None of these results represent on-silicon validation.
 - `build.rs` - firmware build -> UF2, path resolution
 - `faces.rs` - discovers faces from the firmware `mod.rs`
 - `editor.rs` - face templates + read/write/delete
-- `file_browser.rs` - bounded File Browser UI and editor-open bridge
+- `file_browser.rs` - bounded Explorer UI, navigation history, details view, and editor-open bridge
 - `fs_policy.rs` - centralized canonical path, root, size, link, and mutation policy
 - `presets.rs` - preset manager
 - `i18n.rs` - language (English, Simplified/Traditional Chinese)
@@ -315,6 +315,21 @@ None of these results represent on-silicon validation.
   default-enabled `real-faces` feature)
 - `transport.rs` - simulated/UART-jig transport selection, serial discovery,
   line framing, timeout handling, and host tests
+
+### Explorer boundaries
+
+Studio Explorer starts at the active project when that project is available.
+It also exposes the bounded app-data root, with Back, Forward, Up, Refresh,
+breadcrumbs, and a Name/Type/Size/Modified details view. Directory double-click
+opens the directory; file double-click uses the existing editor bridge.
+
+Package, version, template, resource, and generated roots are shown as
+read-only or unavailable where applicable; policy-reserved roots remain
+unavailable. New, rename, and delete operations remain confirmation-gated and
+are submitted only through `fs_policy.rs`.
+Search remains bounded and continues to exclude sensitive files and unsafe
+links. Windows Explorer is launched only with a validated canonical path in an
+argument vector; Studio does not provide unrestricted external root access.
 
 ## License
 

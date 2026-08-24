@@ -1,6 +1,8 @@
 //! Native file and folder pickers used by path-based Studio inputs.
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilePickerKind {
@@ -84,6 +86,48 @@ pub fn selected_folder_is_allowed(path: &Path) -> bool {
     metadata.is_dir() && !metadata.file_type().is_symlink()
 }
 
+/// The exact executable and argument vector used to open a validated path in
+/// Windows Explorer. The path is never interpolated into a shell command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExplorerCommand {
+    pub program: PathBuf,
+    pub args: Vec<OsString>,
+}
+
+pub fn explorer_command(path: &Path) -> Option<ExplorerCommand> {
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if metadata.file_type().is_symlink() {
+        return None;
+    }
+    let canonical = path.canonicalize().ok()?;
+    let canonical_metadata = std::fs::symlink_metadata(&canonical).ok()?;
+    if canonical_metadata.file_type().is_symlink() {
+        return None;
+    }
+    Some(ExplorerCommand {
+        program: PathBuf::from("explorer.exe"),
+        args: vec![OsString::from(format!("/select,{}", canonical.display()))],
+    })
+}
+
+pub fn copy_path(path: &Path) -> Option<String> {
+    Some(
+        match arboard::Clipboard::new().and_then(|mut c| c.set_text(path.display().to_string())) {
+            Ok(()) => "Copied path to clipboard".into(),
+            Err(error) => format!("Clipboard error: {error}"),
+        },
+    )
+}
+
+pub fn open_in_explorer(path: &Path) -> Result<(), String> {
+    let command = explorer_command(path).ok_or_else(|| "path is not safe to open".to_string())?;
+    Command::new(&command.program)
+        .args(&command.args)
+        .spawn()
+        .map(|_| ())
+        .map_err(|error| format!("could not open Windows Explorer: {error}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -107,6 +151,30 @@ mod tests {
         assert_eq!(FilePickerKind::Uf2.filter().1, &["uf2"]);
         assert_eq!(FilePickerKind::MasterClock.filter().1, &["exe"]);
         assert_eq!(FilePickerKind::MasterClockNtpCatalog.filter().1, &["json"]);
+    }
+
+    #[test]
+    fn explorer_command_uses_validated_argument_vector() {
+        let root = std::env::temp_dir().join("studio-explorer-command-tests");
+        std::fs::create_dir_all(&root).unwrap();
+        let selected = root.join("name with spaces & punctuation.txt");
+        std::fs::write(&selected, b"x").unwrap();
+        let command = explorer_command(&selected).unwrap();
+        assert_eq!(command.program, PathBuf::from("explorer.exe"));
+        assert_eq!(command.args.len(), 1);
+        assert_eq!(
+            command.args[0],
+            OsString::from(format!(
+                "/select,{}",
+                selected.canonicalize().unwrap().display()
+            ))
+        );
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn explorer_command_rejects_missing_paths() {
+        assert!(explorer_command(Path::new("missing-explorer-path")).is_none());
     }
 
     #[test]
