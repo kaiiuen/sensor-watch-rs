@@ -39,6 +39,12 @@ pub fn validate_artifact_root_within(
     if root.parent().is_none() || root.components().count() <= 1 {
         return Err("artifact root cannot be a filesystem root".into());
     }
+    if root
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("artifact root cannot contain parent-directory components".into());
+    }
     validate_path_chain(root)?;
     let resolved = canonical_for_overlap(root)?;
     let package = package_root.map(canonical_for_overlap).transpose()?;
@@ -117,15 +123,25 @@ pub fn prepare_artifact_root(
             &error,
         ));
     }
-    if !root.exists() {
-        if let Err(error) = std::fs::create_dir_all(root) {
-            return Err(format_root_preflight_error(
-                &attempted,
-                &resolved,
-                nearest.as_ref(),
-                &format!("cannot create selected artifact root: {error}"),
-            ));
-        }
+    // Create the complete destination before the worker starts. In particular,
+    // a freshly extracted package may have neither `data` nor any artifact
+    // descendants yet, and the worker must never be the first code to create
+    // them.
+    if let Err(error) = std::fs::create_dir_all(&paths.latest) {
+        return Err(format_root_preflight_error(
+            &attempted,
+            &resolved,
+            nearest_existing_parent(root).as_ref(),
+            &format!("cannot create selected artifact layout: {error}"),
+        ));
+    }
+    if let Err(error) = validate_path_chain(&paths.latest) {
+        return Err(format_root_preflight_error(
+            &attempted,
+            &resolved,
+            nearest_existing_parent(&paths.latest).as_ref(),
+            &format!("selected artifact layout changed during setup: {error}"),
+        ));
     }
     if let Err(error) = validate() {
         return Err(format_root_preflight_error(
@@ -195,6 +211,12 @@ fn validate_path_chain(path: &Path) -> Result<(), String> {
             if meta.file_type().is_symlink() || is_reparse_point(&meta) {
                 return Err(format!(
                     "artifact root cannot use a symlink or reparse-point path: {}",
+                    candidate.display()
+                ));
+            }
+            if !meta.is_dir() {
+                return Err(format!(
+                    "artifact root path component must be a directory, not a file: {}",
                     candidate.display()
                 ));
             }
@@ -511,6 +533,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 
+    #[test]
+    fn fresh_extracted_package_creates_data_and_complete_artifact_layout() {
+        let package = temp("fresh-extracted-package");
+        std::fs::create_dir_all(&package).unwrap();
+        let data = package.join("data");
+        let root = default_artifact_root(&data);
+        let paths = prepare_artifact_root(
+            &root,
+            "Red-Lite",
+            "rev-a",
+            "stock",
+            Some(&package),
+            Some(&data),
+        )
+        .unwrap();
+        assert!(data.is_dir());
+        assert!(root.is_dir());
+        assert!(paths.latest.is_dir());
+        assert_eq!(
+            paths.latest,
+            package.join("data/sensor-watch-studio-artifacts/Red-Lite/rev-a/stock/latest")
+        );
+        let _ = std::fs::remove_dir_all(package);
+    }
+
+    #[test]
+    fn packaged_root_with_spaces_and_existing_data_keeps_exact_app_local_path() {
+        let package = temp("extracted package with spaces");
+        let data = package.join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        let root = default_artifact_root(&data);
+        let paths = prepare_artifact_root(
+            &root,
+            "Green",
+            "rev-a",
+            "stock",
+            Some(&package),
+            Some(&data),
+        )
+        .unwrap();
+        assert!(paths.latest.is_dir());
+        assert_eq!(
+            paths.latest,
+            package.join("data/sensor-watch-studio-artifacts/Green/rev-a/stock/latest")
+        );
+        let _ = std::fs::remove_dir_all(package);
+    }
+
+    #[test]
+    fn packaged_data_file_is_reported_as_protected_parent_not_directory() {
+        let package = temp("protected-data-file");
+        std::fs::create_dir_all(&package).unwrap();
+        let data = package.join("data");
+        std::fs::write(&data, b"not a directory").unwrap();
+        let root = default_artifact_root(&data);
+        let error = prepare_artifact_root(
+            &root,
+            "Green",
+            "rev-a",
+            "stock",
+            Some(&package),
+            Some(&data),
+        )
+        .unwrap_err();
+        assert!(error.contains(&root.display().to_string()));
+        assert!(error.contains("directory, not a file"));
+        assert!(error.contains("Nearest existing parent:"));
+        assert!(!root.is_dir());
+        let _ = std::fs::remove_file(data);
+        let _ = std::fs::remove_dir_all(package);
+    }
+
     #[cfg(windows)]
     #[test]
     fn preflight_reports_unavailable_drive_with_actionable_details() {
@@ -605,6 +699,7 @@ mod tests {
     fn rejects_traversal_and_link_overlap() {
         let root = temp("unsafe");
         assert!(artifact_paths(&root, "..", "rev", "profile").is_err());
+        assert!(validate_artifact_root(&root.join("../escaped"), None).is_err());
         std::fs::create_dir_all(root.join("firmware")).unwrap();
         #[cfg(unix)]
         {

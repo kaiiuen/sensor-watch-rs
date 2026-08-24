@@ -286,12 +286,31 @@ pub fn preflight_output_root(
 ) -> Result<crate::storage::BuildOutputPaths, String> {
     crate::storage::prepare_artifact_root(
         root,
-        request.board.label(),
+        artifact_board_name(request.board),
         &request.revision,
-        &request.profile.name,
+        artifact_profile_name(request.board, &request.profile.name),
         package_root,
         allowed_root,
     )
+}
+
+fn artifact_board_name(board: crate::components::BoardKind) -> &'static str {
+    // Board labels are presentation text; artifact directories use one safe,
+    // stable component even for the Red / Lite display label.
+    match board {
+        crate::components::BoardKind::RedLite => "Red-Lite",
+        crate::components::BoardKind::Green => "Green",
+        crate::components::BoardKind::Blue => "Blue",
+        crate::components::BoardKind::Pro => "Pro",
+    }
+}
+
+fn artifact_profile_name(board: crate::components::BoardKind, profile: &str) -> &str {
+    if profile == board.label() {
+        artifact_board_name(board)
+    } else {
+        profile
+    }
 }
 
 /// The exact inputs currently missing from the Studio-to-firmware build path.
@@ -511,9 +530,9 @@ pub fn build_firmware(
                 &paths,
                 &crate::storage::LatestMetadata {
                     format: "sensor-watch-latest-v1".into(),
-                    board: request.board.label().into(),
+                    board: artifact_board_name(request.board).into(),
                     revision: request.revision.clone(),
-                    profile: request.profile.name.clone(),
+                    profile: artifact_profile_name(request.board, &request.profile.name).into(),
                     generated_input_digest: generated.digest.clone(),
                     artifact: uf2
                         .file_name()
@@ -1280,6 +1299,33 @@ mod tests {
         assert!(error.contains("Artifact root preflight failed"));
         assert!(error.contains("Create folder"));
         assert!(error.contains("Use default"));
+    }
+
+    #[test]
+    fn packaged_red_lite_preflight_creates_complete_layout() {
+        let package = temp_root("fresh-package-red-lite");
+        std::fs::create_dir_all(&package).unwrap();
+        let data = package.join("data");
+        let root = super::super::storage::default_artifact_root(&data);
+        let profiles = super::super::components::default_profiles();
+        let request = FirmwareInputRequest {
+            board: super::super::components::BoardKind::RedLite,
+            revision: "OSO-SWAT-A1-05".into(),
+            profile: profiles[1].clone(),
+            components: profiles[1].config.clone(),
+            preset_name: "Stock Casio".into(),
+            ordered_faces: vec!["SIMPLE_CLOCK".into()],
+            modules: vec![],
+        };
+        let paths = preflight_output_root(&root, &request, Some(&package), Some(&data)).unwrap();
+        assert!(paths.latest.is_dir());
+        assert_eq!(paths.board, "Red-Lite");
+        assert_eq!(
+            paths.latest,
+            package
+                .join("data/sensor-watch-studio-artifacts/Red-Lite/OSO-SWAT-A1-05/Red-Lite/latest")
+        );
+        let _ = std::fs::remove_dir_all(package);
     }
 
     #[test]
