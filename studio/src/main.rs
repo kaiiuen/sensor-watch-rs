@@ -2239,6 +2239,7 @@ impl StudioApp {
             .unwrap_or_else(|| {
                 components::BuildProfile::new("draft", self.component_draft.clone())
             });
+        let mut auto_selected_profile = false;
         let (profile, draft) = if board != self.board
             && profile == self.component_profile
             && components::is_unedited_stock_selection(
@@ -2249,6 +2250,7 @@ impl StudioApp {
             ) {
             let stock_profile = components::stock_profile_index(board);
             if self.component_profiles.get(stock_profile).is_some() {
+                auto_selected_profile = true;
                 (stock_profile, components::stock_profile_config(board))
             } else {
                 (profile, draft)
@@ -2282,6 +2284,19 @@ impl StudioApp {
                 previous_board,
                 &previous_effective,
             );
+            let _ = self.current_build_plan();
+            if auto_selected_profile && previous_board != board {
+                let profile_name = self.component_profiles[profile].name.clone();
+                let summary = components::stock_profile_defaults_summary(&draft);
+                let message = format!(
+                    "Profile auto-selected for target board: {profile_name}. Requested component defaults: {summary}"
+                );
+                if !self.build_worker_active() {
+                    self.status = message.clone();
+                }
+                self.log.log(&message);
+                self.build_log.log(message);
+            }
         }
     }
 
@@ -11753,6 +11768,58 @@ mod tests {
     }
 
     #[test]
+    fn board_transition_reports_each_matching_stock_profile_and_defaults() {
+        for board in Board::ALL {
+            let mut app = StudioApp::default();
+            let source = if board == Board::Green {
+                Board::RedLite
+            } else {
+                Board::Green
+            };
+            app.board = source;
+            app.component_profile = source as usize;
+            app.component_draft = components::stock_profile_config(source);
+            app.component_effective = app.component_draft.clone();
+            app.log.clear();
+            app.build_log.clear();
+            app.request_component_change(
+                board,
+                app.component_profile,
+                app.component_draft.clone(),
+                format!("Switch to {}", board.label()),
+            );
+
+            let message = app.status.clone();
+            assert!(message.starts_with(&format!(
+                "Profile auto-selected for target board: {}.",
+                board.label()
+            )));
+            assert!(message.contains("Requested component defaults:"));
+            assert!(app
+                .log
+                .entries()
+                .iter()
+                .any(|entry| entry.message == message));
+            assert!(app
+                .build_log
+                .entries()
+                .iter()
+                .any(|entry| entry.message == message));
+            assert_eq!(app.component_profile, board as usize);
+            assert_eq!(app.component_draft, components::stock_profile_config(board));
+            assert_eq!(app.component_effective, app.component_draft);
+            assert_eq!(
+                app.build_estimator_state,
+                BuildEstimatorState::NeedsValidation
+            );
+            assert!(matches!(
+                app.current_build_plan().preflight,
+                crate::firmware_inputs::PreflightStatus::Valid
+            ));
+        }
+    }
+
+    #[test]
     fn edited_stock_and_custom_profiles_preserve_requested_state_for_review() {
         for profile_index in [0, 4] {
             let mut app = StudioApp::default();
@@ -11807,6 +11874,41 @@ mod tests {
         assert_eq!(app.component_draft, before.2);
         assert_eq!(app.component_effective, before.3);
         assert!(app.pending_component_conflict.is_some());
+        assert!(!app.log.entries().iter().any(|entry| entry
+            .message
+            .starts_with("Profile auto-selected for target board:")));
+        app.pending_component_conflict = None;
+        assert_eq!(app.board, before.0);
+        assert!(!app.build_log.entries().iter().any(|entry| entry
+            .message
+            .starts_with("Profile auto-selected for target board:")));
+    }
+
+    #[test]
+    fn canceling_board_change_keeps_state_and_emits_no_auto_selection_log() {
+        let mut app = StudioApp::default();
+        app.component_draft.light_sensor = true;
+        app.component_profiles[0].config = app.component_draft.clone();
+        let before = (
+            app.board,
+            app.component_profile,
+            app.component_draft.clone(),
+        );
+        app.request_component_change(
+            Board::RedLite,
+            app.component_profile,
+            app.component_draft.clone(),
+            "Switch board".to_string(),
+        );
+        assert!(app.pending_component_conflict.is_some());
+        app.pending_component_conflict = None;
+        assert_eq!(
+            (app.board, app.component_profile, app.component_draft),
+            before
+        );
+        assert!(!app.log.entries().iter().any(|entry| entry
+            .message
+            .starts_with("Profile auto-selected for target board:")));
     }
 
     #[test]

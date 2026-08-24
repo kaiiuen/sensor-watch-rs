@@ -1075,6 +1075,35 @@ pub fn stock_profile_config(board: BoardKind) -> ComponentsConfig {
         .clone()
 }
 
+/// Returns a compact description of the requested component defaults.
+pub fn stock_profile_defaults_summary(config: &ComponentsConfig) -> String {
+    let mut defaults = vec![format!(
+        "LCD {}",
+        match config.lcd {
+            LcdVariant::Standard => "Standard",
+            LcdVariant::OsoAccessory => "OSO accessory",
+            LcdVariant::Custom => "Custom",
+        }
+    )];
+    for (name, enabled) in [
+        ("accelerometer", config.accelerometer),
+        ("light sensor", config.light_sensor),
+        ("thermistor", config.thermistor),
+        ("buzzer", config.buzzer),
+        ("LED", config.led),
+        ("RGB LED", config.rgb_led),
+        ("UART shell", config.uart_shell),
+        ("GPIO", config.gpio),
+        ("SPI", config.spi),
+        ("I2C", config.i2c),
+    ] {
+        if enabled {
+            defaults.push(format!("{name} on"));
+        }
+    }
+    defaults.join(", ")
+}
+
 /// Returns whether the selected profile and requested draft are both the
 /// untouched stock profile for the currently selected board.
 pub fn is_unedited_stock_selection(
