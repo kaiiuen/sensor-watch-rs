@@ -593,6 +593,18 @@ fn preset_name(value: &str) -> Option<&str> {
     (!trimmed.is_empty()).then_some(trimmed)
 }
 
+fn face_count_wording(face_list: &[faces::FaceInfo]) -> String {
+    let registered = face_list
+        .iter()
+        .filter(|face| face.kind == faces::FaceKind::Registered)
+        .count();
+    let editor = face_list
+        .iter()
+        .filter(|face| face.kind == faces::FaceKind::Editor)
+        .count();
+    format!("Discovered {registered} registered watch faces and {editor} editor-only faces")
+}
+
 const WATCH_FACES_MIN_CATALOG_WIDTH: f32 = 220.0;
 const WATCH_FACES_MIN_SETTINGS_WIDTH: f32 = 320.0;
 const WATCH_FACES_MIN_PANE_HEIGHT: f32 = 180.0;
@@ -1243,8 +1255,7 @@ impl Default for StudioApp {
         // Existing output files are inspection/recovery artifacts, not flashable
         // session state. A UF2 becomes flashable only after this process builds it.
         app.face_list = faces::discover_faces();
-        app.log
-            .log(format!("Discovered {} watch faces", app.face_list.len()));
+        app.log.log(face_count_wording(&app.face_list));
         // Load active-profile settings, then apply launch preferences from the
         // unscoped bootstrap file so a new debug executable cannot revert them.
         if let Some(saved) = persist::load() {
@@ -2867,9 +2878,22 @@ impl StudioApp {
         ui.add_space(8.0);
 
         ui.label(tr(self.language, Key::Target));
+        let registered_faces = self
+            .face_list
+            .iter()
+            .filter(|face| face.kind == faces::FaceKind::Registered)
+            .count();
+        let editor_faces = self
+            .face_list
+            .iter()
+            .filter(|face| face.kind == faces::FaceKind::Editor)
+            .count();
         ui.label(
-            tr(self.language, Key::FlashRam).replace("{faces}", &self.face_list.len().to_string()),
+            tr(self.language, Key::FlashRam).replace("{faces}", &registered_faces.to_string()),
         );
+        ui.label(format!(
+            "Registered watch faces: {registered_faces} | Editor-only faces: {editor_faces}"
+        ));
         ui.add_space(8.0);
         if let Some(uf2) = self
             .approved_artifact
@@ -3690,6 +3714,7 @@ impl StudioApp {
                                         "Sensors",
                                         "Astronomy",
                                         "System",
+                                        "Custom",
                                         "Other",
                                     ] {
                                         if ui
@@ -11600,6 +11625,30 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn startup_face_count_wording_is_truthful() {
+        let faces = vec![
+            faces::FaceInfo {
+                index: 0,
+                name: "SIMPLE_CLOCK".into(),
+                description: String::new(),
+                category: "Time",
+                kind: faces::FaceKind::Registered,
+            },
+            faces::FaceInfo {
+                index: 111,
+                name: "EDITOR_FACE".into(),
+                description: String::new(),
+                category: "Custom",
+                kind: faces::FaceKind::Editor,
+            },
+        ];
+        assert_eq!(
+            super::face_count_wording(&faces),
+            "Discovered 1 registered watch faces and 1 editor-only faces"
+        );
+    }
+
+    #[test]
     fn watch_faces_layout_keeps_wide_viewport_bounds() {
         let width = super::watch_faces_catalog_width(0.5, 1200.0);
         assert_eq!(width, 600.0);
@@ -11652,6 +11701,7 @@ mod tests {
     }
 
     use super::configured_estimator_status;
+    use super::faces;
     use super::Board;
     use super::{
         approve_artifact_state, clamp_sim_weekday, configuration_fingerprint,

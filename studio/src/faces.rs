@@ -3,7 +3,13 @@
 //! Scans the firmware source to enumerate the registered watch faces. This
 //! gives the Watch Faces panel a live list of faces to enable/disable/reorder.
 
-/// A discovered watch face.
+/// Identifies whether a catalog entry comes from firmware or the editor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FaceKind {
+    Registered,
+    Editor,
+}
+
 pub struct FaceInfo {
     pub index: usize,
     pub name: String,
@@ -11,6 +17,7 @@ pub struct FaceInfo {
     pub description: String,
     /// A category label derived from the face name.
     pub category: &'static str,
+    pub kind: FaceKind,
 }
 
 /// Returns the one ASCII identity used for face names throughout Studio.
@@ -27,23 +34,47 @@ fn valid_face_identifier(name: &str) -> bool {
     !name.is_empty() && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
-/// Scans the firmware's `app_setup()` for registered faces.
-///
-/// This parses the `WATCH_FACES[N] = Some(&mut *core::ptr::addr_of_mut!(NAME));`
-/// lines in `src/movement/mod.rs` to build the face list.
-pub fn discover_faces() -> Vec<FaceInfo> {
-    let mut faces = Vec::new();
-    let path = crate::build::firmware_dir().join("src/movement/mod.rs");
-    let content = match std::fs::read_to_string(&path) {
-        Ok(c) => c,
-        Err(_) => return faces,
+/// Movement modules that support the firmware but are not watch faces.
+const INFRASTRUCTURE_MODULES: &[&str] = &[
+    "battery",
+    "board",
+    "debounce",
+    "fault",
+    "persist",
+    "rtc_calibration_store",
+    "shell_auth",
+    "stats",
+    "types",
+];
+
+fn is_infrastructure_module(name: &str) -> bool {
+    INFRASTRUCTURE_MODULES
+        .iter()
+        .any(|module| face_identity(module) == face_identity(name))
+}
+
+fn make_face(index: usize, name: String, kind: FaceKind) -> FaceInfo {
+    let category = match kind {
+        FaceKind::Registered => face_category(&name),
+        FaceKind::Editor => "Custom",
     };
+    FaceInfo {
+        index,
+        description: face_description(&name),
+        category,
+        name,
+        kind,
+    }
+}
+
+fn discover_faces_from_content(content: &str) -> Vec<FaceInfo> {
+    let mut faces = Vec::new();
 
     // Parse by occurrence rather than physical line: generated firmware may
     // split a WATCH_FACES assignment across several lines.
     let mut cursor = 0;
-    while let Some(start) = content[cursor..].find("WATCH_FACES[") {
-        let start = cursor + start;
+    while let Some(found) = content[cursor..].find("WATCH_FACES[") {
+        let start = cursor + found;
         let rest = &content[start + "WATCH_FACES[".len()..];
         let Some(idx_end) = rest.find(']') else { break };
         let Ok(index) = rest[..idx_end].trim().parse::<usize>() else {
@@ -58,46 +89,33 @@ pub fn discover_faces() -> Vec<FaceInfo> {
             let after = &assignment[name_start + "addr_of_mut!(".len()..];
             if let Some(name_end) = after.find(')') {
                 let name = after[..name_end].trim().to_string();
-                if valid_face_identifier(&name) {
-                    faces.push(FaceInfo {
-                        index,
-                        description: face_description(&name),
-                        category: face_category(&name),
-                        name,
-                    });
+                if valid_face_identifier(&name) && !is_infrastructure_module(&name) {
+                    faces.push(make_face(index, name, FaceKind::Registered));
                 }
             }
         }
         cursor = start + "WATCH_FACES[".len();
     }
 
-    // Also surface faces that only have a `pub mod <name>;` declaration but no
-    // `WATCH_FACES[]` entry yet (e.g. a face the editor just registered). This
-    // lets a freshly saved face appear in the catalog so it can be added to a
-    // preset, even though it isn't wired into the firmware's arrays.
+    // A declaration without a registry entry is an editor-created face. The
+    // infrastructure allowlist prevents support modules from entering the
+    // catalog while keeping arbitrary custom faces visible.
     let anchor_pos = content
         .find("use crate::movement::types::*;")
         .unwrap_or(content.len());
     let mut next_index = faces.iter().map(|f| f.index).max().map_or(0, |m| m + 1);
-    // Scan only the `pub mod` block (everything before the `use ...` anchor) to
-    // avoid picking up unrelated `pub mod` lines further down.
     for line in content[..anchor_pos].lines() {
         let line = line.trim();
-        // pub mod simple_clock;
         if let Some(rest) = line.strip_prefix("pub mod ") {
             if let Some(name) = rest.strip_suffix(';') {
                 let name = name.trim().to_string();
                 if valid_face_identifier(&name)
+                    && !is_infrastructure_module(&name)
                     && !faces
                         .iter()
                         .any(|f| face_identity(&f.name) == face_identity(&name))
                 {
-                    faces.push(FaceInfo {
-                        index: next_index,
-                        description: face_description(&name),
-                        category: face_category(&name),
-                        name: name.clone(),
-                    });
+                    faces.push(make_face(next_index, name, FaceKind::Editor));
                     next_index += 1;
                 }
             }
@@ -105,6 +123,14 @@ pub fn discover_faces() -> Vec<FaceInfo> {
     }
     faces.sort_by_key(|f| f.index);
     faces
+}
+
+/// Returns all registered firmware faces and safe editor-only face entries.
+pub fn discover_faces() -> Vec<FaceInfo> {
+    let path = crate::build::firmware_dir().join("src/movement/mod.rs");
+    std::fs::read_to_string(&path)
+        .map(|content| discover_faces_from_content(&content))
+        .unwrap_or_default()
 }
 
 /// Reads a short description from a face's source file (the first `//!` doc
@@ -227,6 +253,7 @@ mod tests {
                         description: String::new(),
                         category: "Other",
                         name: after[..name_end].trim().to_string(),
+                        kind: FaceKind::Registered,
                     });
                 }
             }
@@ -242,8 +269,12 @@ mod tests {
     #[test]
     fn current_catalog_has_111_registered_faces() {
         let catalog = discover_faces();
-        let registered: Vec<_> = catalog.iter().filter(|face| face.index <= 110).collect();
+        let registered: Vec<_> = catalog
+            .iter()
+            .filter(|face| face.kind == FaceKind::Registered)
+            .collect();
         assert_eq!(registered.len(), 111);
+        assert_eq!(catalog.len(), 111);
         assert!(registered
             .iter()
             .any(|face| face.name == "ACCELEROMETER_DATA_ACQUISITION"));
@@ -252,6 +283,25 @@ mod tests {
             .map(|face| face_identity(&face.name))
             .collect();
         assert_eq!(identities.len(), registered.len());
+    }
+
+    #[test]
+    fn infrastructure_modules_are_not_faces() {
+        let content = "pub mod battery;\npub mod board;\npub mod debounce;\npub mod fault;\npub mod persist;\npub mod rtc_calibration_store;\npub mod shell_auth;\npub mod stats;\npub mod types;\npub mod editor_face;\nWATCH_FACES[0] = Some(&mut *core::ptr::addr_of_mut!(battery));\nuse crate::movement::types::*;";
+        let faces = discover_faces_from_content(content);
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].name, "editor_face");
+        assert_eq!(faces[0].kind, FaceKind::Editor);
+        assert_eq!(faces[0].category, "Custom");
+    }
+
+    #[test]
+    fn editor_modules_are_classified_separately() {
+        let content = "pub mod custom_editor_face;\nuse crate::movement::types::*;";
+        let faces = discover_faces_from_content(content);
+        assert_eq!(faces.len(), 1);
+        assert_eq!(faces[0].kind, FaceKind::Editor);
+        assert_eq!(faces[0].category, "Custom");
     }
 
     #[test]
