@@ -4883,6 +4883,14 @@ impl StudioApp {
                      selection records which board you're flashing and is auto-selected\n\
                      from the watch when it is detected.",
                 );
+                let buzzer_drive = components::capabilities(self.board).buzzer_drive;
+                ui.colored_label(
+                    colors.warning,
+                    format!(
+                        "Buzzer safety: {}. 9 V boosted drive is allowed only for the supported Pro converter revision; unknown or mismatched revisions fail closed.",
+                        buzzer_drive.label()
+                    ),
+                );
                 ui.add_space(8.0);
 
                 ui.add_space(8.0);

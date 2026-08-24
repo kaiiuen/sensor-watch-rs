@@ -3,7 +3,7 @@
 //! Stores the board type (green/red/blue/pro) and the buzzer voltage. This is
 //! configurable from the diagnostics face so a freshly-flashed watch can be
 //! set up without recompiling. Board presets affect LED polarity and buzzer
-//! voltage.
+//! voltage; the buzzer driver enforces the board safety limit.
 
 use crate::watch::deepsleep;
 
@@ -31,20 +31,33 @@ impl BoardConfig {
     /// Reads the board config from the backup register.
     pub fn read() -> Self {
         let reg = deepsleep::get_backup_data(REG_BOARD);
+        let board = match reg & 0x3 {
+            1 => Board::Red,
+            2 => Board::Blue,
+            3 => Board::Pro,
+            _ => Board::Green,
+        };
+        let requested_voltage = ((reg >> 8) & 0xFF) as u8;
+        let buzzer_voltage = if matches!(board, Board::Pro) {
+            requested_voltage
+        } else {
+            requested_voltage.min(sensor_watch_core::safety::BUZZER_BATTERY_LEVEL_MAX_TENTHS)
+        };
         BoardConfig {
-            board: match reg & 0x3 {
-                1 => Board::Red,
-                2 => Board::Blue,
-                3 => Board::Pro,
-                _ => Board::Green,
-            },
-            buzzer_voltage: ((reg >> 8) & 0xFF) as u8,
+            board,
+            buzzer_voltage,
         }
     }
 
     /// Writes the board config to the backup register.
     pub fn write(&self) {
-        let reg = (self.board as u32 & 0x3) | ((self.buzzer_voltage as u32 & 0xFF) << 8);
+        let safe_voltage = if matches!(self.board, Board::Pro) {
+            self.buzzer_voltage
+        } else {
+            self.buzzer_voltage
+                .min(sensor_watch_core::safety::BUZZER_BATTERY_LEVEL_MAX_TENTHS)
+        };
+        let reg = (self.board as u32 & 0x3) | ((safe_voltage as u32 & 0xFF) << 8);
         deepsleep::store_backup_data(reg, REG_BOARD);
     }
 
@@ -63,5 +76,5 @@ impl BoardConfig {
 pub fn apply() {
     let cfg = BoardConfig::read();
     crate::watch::led::set_invert_polarity(cfg.invert_led_polarity());
-    let _ = crate::watch::buzzer::set_voltage(cfg.buzzer_voltage);
+    let _ = crate::watch::buzzer::set_voltage(cfg.board, cfg.buzzer_voltage);
 }

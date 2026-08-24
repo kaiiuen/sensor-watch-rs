@@ -6,6 +6,14 @@
 //! volt range. These are validation limits, not electrical certification.
 
 pub const BUZZER_VOLTAGE_MAX_TENTHS: u8 = 90;
+/// Maximum safe unboosted drive, expressed in tenths of a volt.
+/// 4.2 V is the battery charging maximum; boosted output is a separate
+/// capability and is never implied by this limit.
+pub const BUZZER_BATTERY_LEVEL_MAX_TENTHS: u8 = 42;
+
+pub fn valid_buzzer_voltage_for_battery(voltage: u8) -> bool {
+    voltage <= BUZZER_BATTERY_LEVEL_MAX_TENTHS
+}
 pub const TCC_PERIOD_MAX: u32 = 0x00ff_ffff;
 pub const DISPLAY_CHAR_COUNT: u8 = 10;
 
@@ -69,6 +77,12 @@ mod tests {
     fn rejects_hardware_boundary_overruns() {
         assert!(valid_buzzer_voltage(BUZZER_VOLTAGE_MAX_TENTHS));
         assert!(!valid_buzzer_voltage(BUZZER_VOLTAGE_MAX_TENTHS + 1));
+        assert!(valid_buzzer_voltage_for_battery(
+            BUZZER_BATTERY_LEVEL_MAX_TENTHS
+        ));
+        assert!(!valid_buzzer_voltage_for_battery(
+            BUZZER_BATTERY_LEVEL_MAX_TENTHS + 1
+        ));
         assert!(valid_buzzer_period(1));
         assert!(!valid_buzzer_period(0));
         assert!(!valid_buzzer_period(TCC_PERIOD_MAX + 1));

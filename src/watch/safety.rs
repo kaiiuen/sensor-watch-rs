@@ -1,7 +1,12 @@
 //! Firmware-local copies of pure hardware input guards.
 
 pub const BUZZER_VOLTAGE_MAX_TENTHS: u8 = 90;
+pub const BUZZER_BATTERY_LEVEL_MAX_TENTHS: u8 = 42;
 pub const TCC_PERIOD_MAX: u32 = 0x00ff_ffff;
+
+pub const fn valid_buzzer_voltage_for_battery(value: u8) -> bool {
+    value <= BUZZER_BATTERY_LEVEL_MAX_TENTHS
+}
 
 pub const fn valid_buzzer_voltage(value: u8) -> bool {
     value <= BUZZER_VOLTAGE_MAX_TENTHS
@@ -54,6 +59,13 @@ pub const fn valid_datetime(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn buzzer_voltage_is_limited_by_drive_mode() {
+        assert!(valid_buzzer_voltage(90));
+        assert!(!valid_buzzer_voltage_for_battery(90));
+        assert!(valid_buzzer_voltage_for_battery(42));
+    }
 
     #[test]
     fn reject_reserved_i2c_addresses() {

@@ -21,10 +21,16 @@ static mut BUZZER_VOLTAGE: u8 = 0;
 
 /// Sets the buzzer voltage (in tenths of a volt).
 ///
-/// This is stored and applied to the buzzer drive. On boards with an
-/// adjustable buzzer supply, this controls the output level.
-pub fn set_voltage(voltage: u8) -> Result<(), ()> {
-    if !crate::watch::safety::valid_buzzer_voltage(voltage) {
+/// Non-Pro boards are limited to battery-level drive. A 9 V setting is valid
+/// only for the explicitly supported Pro converter path; invalid requests
+/// disable the buzzer and are not retained.
+pub fn set_voltage(board: crate::movement::board::Board, voltage: u8) -> Result<(), ()> {
+    let valid = if matches!(board, crate::movement::board::Board::Pro) {
+        crate::watch::safety::valid_buzzer_voltage(voltage)
+    } else {
+        crate::watch::safety::valid_buzzer_voltage_for_battery(voltage)
+    };
+    if !valid {
         // Keep the output disabled rather than retaining an unsafe request.
         unsafe {
             BUZZER_VOLTAGE = 0;

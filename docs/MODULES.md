@@ -176,7 +176,7 @@ visible while the CPU sleeps.
 | `set_buzzer_on()` / `set_buzzer_off()` | fn | Output control. |
 | `play_note()` | fn | Play a note (blocking). |
 | `play_sequence()` | fn | Play a note sequence (non-blocking, TC3). |
-| `set_voltage()` | fn | Set buzzer voltage. |
+| `set_voltage()` | fn | Set buzzer voltage with board-aware safety; 9 V is accepted only for Pro. |
 
 ---
 

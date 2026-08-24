@@ -40,6 +40,23 @@ pub enum CapabilityStatus {
     Unsupported,
 }
 
+/// The only supported buzzer drive modes. Boosted output is deliberately tied
+/// to a validated board revision rather than inferred from a product label.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BuzzerDrive {
+    BatteryLevel,
+    Boosted9V,
+}
+
+impl BuzzerDrive {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::BatteryLevel => "battery-level/unboosted",
+            Self::Boosted9V => "9 V boosted/amplified",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BoardCapabilities {
     pub lcd: CapabilityStatus,
@@ -51,6 +68,7 @@ pub struct BoardCapabilities {
     pub accelerometer: CapabilityStatus,
     pub light_sensor: CapabilityStatus,
     pub buzzer: CapabilityStatus,
+    pub buzzer_drive: BuzzerDrive,
     pub i2c: CapabilityStatus,
     pub spi: CapabilityStatus,
     pub uart: CapabilityStatus,
@@ -64,6 +82,7 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
     (
         BoardKind::Green,
         BoardCapabilities {
+            buzzer_drive: BuzzerDrive::BatteryLevel,
             lcd: CapabilityStatus::Verified,
             red_led: CapabilityStatus::Verified,
             green_led: CapabilityStatus::Verified,
@@ -83,6 +102,7 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
     (
         BoardKind::RedLite,
         BoardCapabilities {
+            buzzer_drive: BuzzerDrive::BatteryLevel,
             lcd: CapabilityStatus::Verified,
             red_led: CapabilityStatus::Verified,
             green_led: CapabilityStatus::Verified,
@@ -102,6 +122,7 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
     (
         BoardKind::Blue,
         BoardCapabilities {
+            buzzer_drive: BuzzerDrive::BatteryLevel,
             lcd: CapabilityStatus::Verified,
             red_led: CapabilityStatus::Verified,
             green_led: CapabilityStatus::Unsupported,
@@ -121,6 +142,7 @@ pub const CAPABILITY_TABLE: [(BoardKind, BoardCapabilities); 4] = [
     (
         BoardKind::Pro,
         BoardCapabilities {
+            buzzer_drive: BuzzerDrive::Boosted9V,
             lcd: CapabilityStatus::Documented,
             red_led: CapabilityStatus::Documented,
             green_led: CapabilityStatus::Documented,
@@ -168,11 +190,31 @@ mod tests {
     use super::{
         capabilities, capability_chart_cells, capability_chart_rows, default_profiles,
         effective_config, is_unedited_stock_selection, resolve_conflict, stock_profile_config,
-        stock_profile_index, validate_compatibility, BoardKind, BuildProfile, CapabilityStatus,
-        CompatibilitySeverity, ComponentsConfig, ConflictResolution, LcdVariant,
+        stock_profile_index, validate_compatibility, BoardKind, BuildProfile, BuzzerDrive,
+        CapabilityStatus, CompatibilitySeverity, ComponentsConfig, ConflictResolution, LcdVariant,
         CAPABILITY_BOARD_WIDTH, CAPABILITY_CHART, CAPABILITY_CHART_MIN_WIDTH,
         CAPABILITY_NAME_WIDTH, CAPABILITY_VALUE_WIDTH,
     };
+
+    #[test]
+    fn buzzer_drive_capabilities_are_conservative_by_board() {
+        assert_eq!(
+            capabilities(BoardKind::Green).buzzer_drive,
+            BuzzerDrive::BatteryLevel
+        );
+        assert_eq!(
+            capabilities(BoardKind::RedLite).buzzer_drive,
+            BuzzerDrive::BatteryLevel
+        );
+        assert_eq!(
+            capabilities(BoardKind::Blue).buzzer_drive,
+            BuzzerDrive::BatteryLevel
+        );
+        assert_eq!(
+            capabilities(BoardKind::Pro).buzzer_drive,
+            BuzzerDrive::Boosted9V
+        );
+    }
 
     #[test]
     fn stock_profiles_match_product_thermistor_evidence() {

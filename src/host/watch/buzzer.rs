@@ -104,8 +104,28 @@ pub enum Note {
 }
 
 /// Host model of the board buzzer voltage configuration.
-pub fn set_voltage(voltage: u8) -> Result<(), ()> {
-    (voltage <= 90).then_some(()).ok_or(())
+pub fn set_voltage(board: crate::movement::board::Board, voltage: u8) -> Result<(), ()> {
+    let valid = if matches!(board, crate::movement::board::Board::Pro) {
+        voltage <= 90
+    } else {
+        voltage <= sensor_watch_core::safety::BUZZER_BATTERY_LEVEL_MAX_TENTHS
+    };
+    valid.then_some(()).ok_or(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::set_voltage;
+    use crate::movement::board::Board;
+
+    #[test]
+    fn only_pro_accepts_9v() {
+        assert!(set_voltage(Board::Pro, 90).is_ok());
+        for board in [Board::Green, Board::Red, Board::Blue] {
+            assert!(set_voltage(board, 90).is_err());
+            assert!(set_voltage(board, 42).is_ok());
+        }
+    }
 }
 
 /// Host: no-op (the mock does not play audio yet).

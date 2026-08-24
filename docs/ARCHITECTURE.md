@@ -569,7 +569,10 @@ them back on boot. Uses the wear-leveled storage.
 ### 7.6 `movement/board.rs` - Board configuration
 
 Stores the board type (green/red/blue/pro) and buzzer voltage. `apply()` applies
-the config to hardware (LED polarity, buzzer voltage) at boot.
+the config to hardware (LED polarity, buzzer voltage). Buzzer drive is board-aware:
+Red / Lite, Green, and Blue remain battery-level/unboosted, while 9 V boosted drive
+is reserved for the explicitly supported Pro converter revision and unknown inputs
+fail closed.
 
 **Why:** a freshly-flashed watch can be configured on-device (via the diagnostics
 face) without recompiling.
