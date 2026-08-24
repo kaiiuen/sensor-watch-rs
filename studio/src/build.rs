@@ -7,8 +7,10 @@
 use sha2::{Digest, Sha256};
 
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::thread;
 
 use super::firmware_inputs::{self, FirmwareInputRequest, GeneratedFirmwareInputs};
 
@@ -80,11 +82,10 @@ fn trusted_runtime_root(candidate: &Path, trusted: &Path) -> Option<PathBuf> {
 /// to the workspace this binary was compiled from. This prevents an unrelated
 /// ancestor `Cargo.toml` from redirecting firmware builds or source discovery.
 pub fn firmware_dir() -> PathBuf {
-    // Once distribution discovery has run, never reach back into the compiled
-    // checkout unless explicit developer mode selected it.
+    // Once distribution discovery has run, use only the validated mutable
+    // project. The bundled project is a read-only template.
     if crate::distribution::initialized() {
-        return crate::distribution::active()
-            .firmware_project_dir()
+        return select_active_project(&crate::distribution::active())
             .unwrap_or_else(|| PathBuf::from("."));
     }
     let Some(trusted) = compiled_workspace_root() else {
@@ -109,8 +110,170 @@ pub fn firmware_dir() -> PathBuf {
     trusted
 }
 
+fn select_active_project(status: &crate::distribution::PackageStatus) -> Option<PathBuf> {
+    select_project_for_build(
+        status.mode,
+        status.active_project_dir()?.as_path(),
+        status.firmware_project_dir().as_deref(),
+        &status.user_data_root,
+    )
+}
+
+fn select_project_for_build(
+    mode: crate::distribution::DistributionMode,
+    active: &Path,
+    bundled: Option<&Path>,
+    data_root: &Path,
+) -> Option<PathBuf> {
+    let project = active.canonicalize().ok()?;
+    if !is_workspace_root(&project) {
+        return None;
+    }
+    if mode == crate::distribution::DistributionMode::Packaged {
+        let data_root = data_root.canonicalize().ok()?;
+        if project == data_root || !project.starts_with(&data_root) {
+            return None;
+        }
+        if bundled
+            .and_then(|path| path.canonicalize().ok())
+            .is_some_and(|template| template == project)
+        {
+            return None;
+        }
+    }
+    Some(project)
+}
+
 /// The embedded target triple.
 pub const TARGET: &str = "thumbv6m-none-eabi";
+
+const MAX_DIAGNOSTIC_BYTES: usize = 64 * 1024;
+const MAX_DIAGNOSTIC_LINES: usize = 400;
+
+#[derive(Debug, PartialEq, Eq)]
+struct CapturedCommand {
+    code: Option<i32>,
+    diagnostics: String,
+}
+
+fn capture_command(
+    mut command: Command,
+    redacted_roots: &[&Path],
+) -> Result<CapturedCommand, String> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("failed to start command: {error}"))?;
+    let stdout = child.stdout.take().expect("stdout was piped");
+    let stderr = child.stderr.take().expect("stderr was piped");
+    let stdout_thread = thread::spawn(|| read_bounded(stdout));
+    let stderr_thread = thread::spawn(|| read_bounded(stderr));
+    let status = child
+        .wait()
+        .map_err(|error| format!("failed waiting for command: {error}"))?;
+    let stdout = stdout_thread
+        .join()
+        .map_err(|_| "stdout capture thread panicked".to_string())??;
+    let stderr = stderr_thread
+        .join()
+        .map_err(|_| "stderr capture thread panicked".to_string())??;
+    let mut text = String::from_utf8_lossy(&stdout).into_owned();
+    if !text.is_empty() && !stderr.is_empty() {
+        text.push('\n');
+    }
+    text.push_str(&String::from_utf8_lossy(&stderr));
+    Ok(CapturedCommand {
+        code: status.code(),
+        diagnostics: sanitize_diagnostics(&text, redacted_roots),
+    })
+}
+
+fn read_bounded(mut reader: impl Read) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::with_capacity(MAX_DIAGNOSTIC_BYTES);
+    let mut buffer = [0_u8; 4096];
+    let mut discarded = false;
+    loop {
+        let count = reader
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        let available = MAX_DIAGNOSTIC_BYTES.saturating_sub(bytes.len());
+        let take = count.min(available);
+        bytes.extend_from_slice(&buffer[..take]);
+        discarded |= take < count;
+    }
+    if discarded {
+        bytes.extend_from_slice(b"\n[diagnostics exceeded byte limit]");
+    }
+    Ok(bytes)
+}
+
+fn sanitize_diagnostics(text: &str, redacted_roots: &[&Path]) -> String {
+    let mut output = String::new();
+    let mut lines = 0;
+    for original in text.lines() {
+        if lines == MAX_DIAGNOSTIC_LINES {
+            output.push_str("[diagnostics truncated by line limit]\n");
+            break;
+        }
+        let mut line = original.to_string();
+        for root in redacted_roots {
+            let path = root.to_string_lossy();
+            if !path.is_empty() {
+                line = line.replace(path.as_ref(), "<path>");
+            }
+        }
+        let lower = line.to_ascii_lowercase();
+        if ["password=", "token=", "secret=", "api_key=", "apikey="]
+            .iter()
+            .any(|marker| lower.contains(marker))
+        {
+            line = "[redacted diagnostic secret]".into();
+        }
+        let remaining = MAX_DIAGNOSTIC_BYTES.saturating_sub(output.len());
+        if remaining == 0 {
+            output.push_str("[diagnostics truncated by byte limit]\n");
+            break;
+        }
+        let line_bytes = line.as_bytes();
+        let take = line_bytes.len().min(remaining);
+        output.push_str(&String::from_utf8_lossy(&line_bytes[..take]));
+        output.push('\n');
+        lines += 1;
+        if take < line_bytes.len() {
+            output.push_str("[diagnostics truncated by byte limit]\n");
+            break;
+        }
+    }
+    let mut output = output.trim_end().to_string();
+    if output.len() > MAX_DIAGNOSTIC_BYTES {
+        let mut end = MAX_DIAGNOSTIC_BYTES;
+        while !output.is_char_boundary(end) {
+            end -= 1;
+        }
+        output.truncate(end);
+    }
+    output
+}
+
+fn write_build_log(output_dir: &Path, diagnostics: &str) {
+    if diagnostics.is_empty()
+        || validate_output_dir(output_dir).is_err()
+        || std::fs::symlink_metadata(output_dir.join("build.log")).map_or(false, |metadata| {
+            metadata.file_type().is_symlink() || !metadata.is_file()
+        })
+    {
+        return;
+    }
+    let path = output_dir.join("build.log");
+    let temporary = output_dir.join("build.log.tmp");
+    if std::fs::write(&temporary, diagnostics).is_ok() {
+        let _ = std::fs::rename(temporary, path);
+    }
+}
 
 /// Rejects output paths that could accidentally target a file instead of a
 /// directory. The build worker still reports every filesystem/tool failure.
@@ -405,34 +568,57 @@ pub fn build_firmware(
         };
     }
 
-    // 1. Build the firmware in release mode.
-    let status = Command::new("cargo")
-        .arg("build")
-        .arg("--release")
-        .arg("--package")
-        .arg("sensor-watch")
-        .arg("--bin")
-        .arg("sensor-watch")
-        .arg("--target")
-        .arg(TARGET)
-        .current_dir(fw_dir)
-        .status();
-    match status {
-        Ok(s) if s.success() => {}
-        Ok(s) => {
+    // 1. Build the firmware in release mode. Keep the worker independent from
+    // the UI while retaining bounded, safe diagnostics for the result.
+    let cargo = capture_command(
+        {
+            let mut command = Command::new("cargo");
+            command
+                .arg("build")
+                .arg("--release")
+                .arg("--message-format=short")
+                .arg("--package")
+                .arg("sensor-watch")
+                .arg("--bin")
+                .arg("sensor-watch")
+                .arg("--target")
+                .arg(TARGET)
+                .current_dir(fw_dir);
+            command
+        },
+        &[fw_dir, output_dir, &source_root],
+    );
+    let cargo = match cargo {
+        Ok(result) => result,
+        Err(error) => {
+            let message = format!("Cargo could not start: {error}");
+            write_build_log(output_dir, &message);
             return BuildResult {
                 success: false,
-                message: format!("cargo build failed with exit code {:?}", s.code()),
+                message,
                 uf2_path: None,
             };
         }
-        Err(e) => {
-            return BuildResult {
-                success: false,
-                message: format!("failed to run cargo: {e}"),
-                uf2_path: None,
-            };
-        }
+    };
+    if !cargo.diagnostics.is_empty() {
+        write_build_log(output_dir, &cargo.diagnostics);
+    }
+    if cargo.code != Some(0) {
+        let details = if cargo.diagnostics.is_empty() {
+            "no diagnostic output captured".to_string()
+        } else {
+            cargo.diagnostics.clone()
+        };
+        let message = format!(
+            "Cargo build failed with exit code {:?}\n{details}",
+            cargo.code
+        );
+        write_build_log(output_dir, &message);
+        return BuildResult {
+            success: false,
+            message,
+            uf2_path: None,
+        };
     }
 
     // 2. Locate the ELF and the raw binary.
@@ -462,21 +648,50 @@ pub fn build_firmware(
             };
         }
     };
-    let status = Command::new(&objcopy)
-        .arg("-O")
-        .arg("binary")
-        .arg(&elf)
-        .arg(&bin)
-        .status();
-    match status {
-        Ok(s) if s.success() => {}
-        _ => {
+    let objcopy_result = capture_command(
+        {
+            let mut command = Command::new(&objcopy);
+            command
+                .arg("-O")
+                .arg("binary")
+                .arg(&elf)
+                .arg(&bin)
+                .current_dir(fw_dir);
+            command
+        },
+        &[fw_dir, output_dir, &source_root],
+    );
+    let objcopy_result = match objcopy_result {
+        Ok(result) => result,
+        Err(error) => {
+            let message = format!("rust-objcopy could not start: {error}");
+            write_build_log(output_dir, &message);
             return BuildResult {
                 success: false,
-                message: "rust-objcopy failed".to_string(),
+                message,
                 uf2_path: None,
             };
         }
+    };
+    if !objcopy_result.diagnostics.is_empty() {
+        write_build_log(output_dir, &objcopy_result.diagnostics);
+    }
+    if objcopy_result.code != Some(0) {
+        let details = if objcopy_result.diagnostics.is_empty() {
+            "no diagnostic output captured".to_string()
+        } else {
+            objcopy_result.diagnostics.clone()
+        };
+        let message = format!(
+            "rust-objcopy failed with exit code {:?}\n{details}",
+            objcopy_result.code
+        );
+        write_build_log(output_dir, &message);
+        return BuildResult {
+            success: false,
+            message,
+            uf2_path: None,
+        };
     }
 
     // 4. Read the raw binary and convert it to UF2.
@@ -1798,5 +2013,95 @@ pub fn last_uf2(output_dir: &Path) -> Option<PathBuf> {
         Some(p)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_tests {
+    use super::*;
+
+    fn diagnostic_command() -> Command {
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("cmd");
+            command.args([
+                "/C",
+                "echo password=do-not-log && echo C:\\private\\project",
+            ]);
+            command
+        }
+        #[cfg(not(windows))]
+        {
+            let mut command = Command::new("sh");
+            command.args([
+                "-c",
+                "printf 'password=do-not-log\\n/tmp/private/project\\n'",
+            ]);
+            command
+        }
+    }
+
+    #[test]
+    fn captures_stdout_and_stderr_and_preserves_exit_code() {
+        #[cfg(windows)]
+        let mut command = Command::new("cmd");
+        #[cfg(windows)]
+        command.args(["/C", "echo stdout && echo stderr 1>&2 && exit /B 7"]);
+        #[cfg(not(windows))]
+        let mut command = Command::new("sh");
+        #[cfg(not(windows))]
+        command.args(["-c", "printf stdout; printf stderr >&2; exit 7"]);
+        let result = capture_command(command, &[]).unwrap();
+        assert_eq!(result.code, Some(7));
+        assert!(result.diagnostics.contains("stdout"));
+        assert!(result.diagnostics.contains("stderr"));
+    }
+
+    #[test]
+    fn bounds_and_redacts_diagnostics() {
+        let result = capture_command(diagnostic_command(), &[Path::new("C:\\private")]).unwrap();
+        assert!(!result.diagnostics.contains("do-not-log"));
+        assert!(!result.diagnostics.contains("C:\\private"));
+        assert!(result.diagnostics.len() <= MAX_DIAGNOSTIC_BYTES);
+
+        let text = (0..(MAX_DIAGNOSTIC_LINES + 20))
+            .map(|index| format!("line {index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let sanitized = sanitize_diagnostics(&text, &[]);
+        assert!(sanitized.contains("diagnostics truncated by line limit"));
+        assert!(sanitized.lines().count() <= MAX_DIAGNOSTIC_LINES + 1);
+    }
+
+    #[test]
+    fn packaged_build_selects_valid_mutable_project_not_template() {
+        let root = std::env::temp_dir().join(format!("studio-build-selection-{}", unix_nanos()));
+        let data = root.join("data");
+        let project = data.join("project");
+        let template = root.join("firmware");
+        std::fs::create_dir_all(project.join("src")).unwrap();
+        std::fs::create_dir_all(&template).unwrap();
+        std::fs::write(
+            project.join("Cargo.toml"),
+            "[workspace]\n[package]\nname = \"sensor-watch\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            select_project_for_build(
+                crate::distribution::DistributionMode::Packaged,
+                &project,
+                Some(&template),
+                &data,
+            ),
+            Some(project.canonicalize().unwrap())
+        );
+        assert!(select_project_for_build(
+            crate::distribution::DistributionMode::Packaged,
+            &template,
+            Some(&template),
+            &data,
+        )
+        .is_none());
+        let _ = std::fs::remove_dir_all(root);
     }
 }

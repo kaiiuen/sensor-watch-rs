@@ -1488,9 +1488,10 @@ impl eframe::App for StudioApp {
                                 }
                             }
                         } else {
-                            self.status = format!("Build failed: {}", result.message);
+                            self.status = format!("Build failed:\n{}", result.message);
                             self.build_estimator_state =
                                 BuildEstimatorState::Failed(result.message.clone());
+                            self.error_log.log(&result.message);
                             // start_build normally clears this before spawning, but keep
                             // failed completion fail-closed if that invariant changes.
                             self.pending_artifact = None;

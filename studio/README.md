@@ -46,10 +46,10 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   set provide a display preview, not physical hardware validation.
 - **Build & Flash** - combined panel: review the target board and component
   profile, then request a firmware build. The build preflight is explicitly
-  fail-closed and the profile panel displays the disabled state. No configured
-  `.uf2` is published, so the flash action cannot use a newly selected Studio
-  configuration. The panel still documents the intended USB-drive/`INFO_UF2.TXT`
-  workflow for when the missing input contract is implemented.
+  fail-closed and the profile panel displays the disabled state. Build failures
+  include bounded Cargo and tool diagnostics in the panel, status, terminal,
+  error log, and a safe `build.log` under the resolved output path. The panel
+  still documents the intended USB-drive/`INFO_UF2.TXT` workflow.
 - **Calibration** - guided clock calibration (generates a `settime` command for
   the next minute boundary), a **beep-on-minute-rollover** helper, and guided
   drift calibration (parts-per-million). The hardware path requires UART Jig
@@ -174,7 +174,10 @@ is exactly `<package root>/data`: settings, runtime preferences, restore
 points, the mutable project, logs and exports, update state, startup markers, and
 launcher state stay below that directory. Firmware build output is separate at
 `<package root>/data/sensor-watch-studio-artifacts/<board>/<revision>/<profile>/latest`.
-Recovery generations are under that artifact root. Immutable version directories and bundled templates are never used for mutable writes.
+Recovery generations are under that artifact root. Immutable version directories
+and bundled templates are never used for mutable writes. Packaged builds copy and
+validate the bundled template into the mutable project first, then build only
+from that active project.
 
 The launcher forwards the package root, the same app-local data root, version, attempt, and portable context explicitly. A package-root write failure is reported as an
 actionable error; Studio does not silently fall back to Windows AppData,
