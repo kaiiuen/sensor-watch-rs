@@ -158,10 +158,9 @@ pub struct ArtifactInspection {
 /// the shared verifier then requires the matching `.json.sig` sidecar as well.
 pub fn inspect_artifact(path: &Path) -> Result<ArtifactInspection, String> {
     let manifest_path = path.with_extension("uf2.json");
-    // Validate UF2 bytes with the shared verifier, then validate the extended
-    // Studio manifest locally. The shared tool verifier intentionally compares
-    // its stock manifest digest, while configured manifests contain the extra
-    // generated-input provenance field.
+    // Validate UF2 bytes with the shared verifier, then validate the manifest
+    // locally. Configured manifests include generated-input provenance in the
+    // same canonical digest used by the shared verifier.
     sensor_watch_core::uf2::validate(
         &std::fs::read(path).map_err(|e| format!("cannot read UF2 {}: {e}", path.display()))?,
     )
@@ -172,14 +171,27 @@ pub fn inspect_artifact(path: &Path) -> Result<ArtifactInspection, String> {
     )
     .map_err(|e| format!("cannot parse manifest: {e}"))?;
     let generation = sensor_watch_tools::manifest_value(&manifest, "generation_id");
-    let baseline = sensor_watch_tools::create_manifest(
+    let mut baseline = sensor_watch_tools::create_manifest(
         path,
         (!generation.is_empty()).then(|| generation.clone()),
         None,
     )?;
+    if let Some(value) = manifest.get("generated_input_digest") {
+        let expected = value
+            .as_str()
+            .ok_or_else(|| "manifest generated-input digest is not a string".to_string())?;
+        baseline.insert("generated_input_digest".into(), expected.into());
+        let baseline_digest = sensor_watch_tools::manifest_digest(&baseline);
+        baseline.insert("manifest_digest".into(), baseline_digest.clone().into());
+        baseline.insert("signature".into(), baseline_digest.into());
+        validate_generated_input_files(path, expected)?;
+    }
     let digest = sensor_watch_tools::manifest_value(&manifest, "manifest_digest");
     if digest.is_empty() || digest != sensor_watch_tools::manifest_digest(&manifest) {
         return Err("manifest local digest is invalid".into());
+    }
+    if digest != sensor_watch_tools::manifest_digest(&baseline) {
+        return Err("manifest local digest mismatch".into());
     }
     let sidecar = manifest_path.with_extension("json.sig");
     if std::fs::read_to_string(&sidecar)
@@ -1014,13 +1026,15 @@ fn copy_generated_inputs(source: &Path, destination: &Path) -> Result<(), String
 }
 
 /// Recomputes the generated-input digest from the final published bundle.
-/// Generic stock-artifact inspection deliberately does not call this function;
-/// configured approval and flashing do.
 pub fn validate_generated_input_digest(inspection: &ArtifactInspection) -> Result<(), String> {
-    if inspection.generated_input_digest.is_empty() {
+    validate_generated_input_files(&inspection.path, &inspection.generated_input_digest)
+}
+
+fn validate_generated_input_files(path: &Path, expected: &str) -> Result<(), String> {
+    if expected.is_empty() {
         return Err("configured artifact lacks generated-input provenance".into());
     }
-    let directory = inspection.path.with_extension("uf2.inputs");
+    let directory = path.with_extension("uf2.inputs");
     let mut files = BTreeMap::new();
     for entry in std::fs::read_dir(&directory)
         .map_err(|e| format!("generated-input provenance is unavailable: {e}"))?
@@ -1040,10 +1054,9 @@ pub fn validate_generated_input_digest(inspection: &ArtifactInspection) -> Resul
         );
     }
     let actual = super::firmware_inputs::digest_generated_files(&files);
-    if actual != inspection.generated_input_digest {
+    if actual != expected {
         return Err(format!(
-            "generated-input digest changed (manifest {}, files {})",
-            inspection.generated_input_digest, actual
+            "generated-input digest changed (manifest {expected}, files {actual})"
         ));
     }
     Ok(())

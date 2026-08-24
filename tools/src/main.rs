@@ -169,6 +169,7 @@ mod tests {
     use sensor_watch_core::uf2;
     use sensor_watch_tools::MAX_UF2_BYTES;
     use serde_json::Value;
+    use std::collections::BTreeMap;
     use std::fs;
     use std::time::{SystemTime, UNIX_EPOCH};
     fn fixture() -> Vec<u8> {
@@ -262,6 +263,70 @@ mod tests {
         let error =
             tools::verify_uf2(&artifact, Some(&manifest_path), Some(&"0".repeat(64))).unwrap_err();
         assert!(error.contains("trusted release SHA-256"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn configured_manifest_verifies_and_binds_inputs() {
+        let root = temp_dir("configured-manifest");
+        fs::create_dir_all(&root).unwrap();
+        let artifact = root.join("configured.uf2");
+        fs::write(&artifact, fixture()).unwrap();
+        let inputs = artifact.with_extension("uf2.inputs");
+        fs::create_dir_all(&inputs).unwrap();
+        let mut files = BTreeMap::new();
+        files.insert(
+            "firmware_inputs.json".into(),
+            "{\"board\":\"Green\"}".into(),
+        );
+        files.insert(
+            "firmware_inputs.rs".into(),
+            "const MARKER: &str = \"configured\";".into(),
+        );
+        files.insert("Cargo.config.toml".into(), "# generated\n".into());
+        files.insert("PROVENANCE.json".into(), "[{\"path\":\"pins.h\"}]".into());
+        for (name, contents) in &files {
+            fs::write(inputs.join(name), contents).unwrap();
+        }
+        let mut manifest =
+            tools::create_manifest(&artifact, Some("configured-generation".into()), None).unwrap();
+        manifest.insert(
+            "generated_input_digest".into(),
+            Value::String(tools::digest_named_files(&files)),
+        );
+        let digest = tools::manifest_digest(&manifest);
+        manifest.insert("manifest_digest".into(), Value::String(digest.clone()));
+        manifest.insert("signature".into(), Value::String(digest));
+        let manifest_path = root.join("configured.uf2.json");
+        tools::write_manifest(&manifest_path, &manifest).unwrap();
+
+        tools::verify_uf2(&artifact, Some(&manifest_path), None).unwrap();
+
+        let mut tampered_manifest = manifest.clone();
+        tampered_manifest.insert(
+            "generated_input_digest".into(),
+            Value::String("0".repeat(64)),
+        );
+        fs::write(
+            &manifest_path,
+            serde_json::to_vec(&tampered_manifest).unwrap(),
+        )
+        .unwrap();
+        let error = tools::verify_uf2(&artifact, Some(&manifest_path), None).unwrap_err();
+        assert!(
+            error.contains("local digest is invalid"),
+            "unexpected error: {error}"
+        );
+
+        fs::remove_file(&manifest_path).unwrap();
+        fs::remove_file(manifest_path.with_extension("json.sig")).unwrap();
+        tools::write_manifest(&manifest_path, &manifest).unwrap();
+        fs::write(inputs.join("PROVENANCE.json"), "tampered").unwrap();
+        let error = tools::verify_uf2(&artifact, Some(&manifest_path), None).unwrap_err();
+        assert!(
+            error.contains("generated-input digest changed"),
+            "unexpected error: {error}"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

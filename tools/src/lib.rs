@@ -124,6 +124,63 @@ pub fn manifest_value(manifest: &Manifest, key: &str) -> String {
         .unwrap_or_default()
         .to_owned()
 }
+
+/// Computes the canonical digest used to bind generated input files to a build.
+/// The caller supplies the already-finalized UTF-8 file contents; the sidecar
+/// containing this digest is intentionally not part of the input set.
+pub fn digest_named_files(files: &std::collections::BTreeMap<String, String>) -> String {
+    let mut hasher = Sha256::new();
+    for (name, contents) in files {
+        hasher.update(name.as_bytes());
+        hasher.update([0]);
+        hasher.update(contents.as_bytes());
+        hasher.update([0]);
+    }
+    hex(&hasher.finalize())
+}
+
+fn generated_input_digest(path: &Path) -> ToolResult<String> {
+    let directory = path.with_extension("uf2.inputs");
+    let metadata = fs::symlink_metadata(&directory)
+        .map_err(|e| format!("generated-input provenance is unavailable: {e}"))?;
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err("generated-input provenance is not a directory".into());
+    }
+    let mut files = std::collections::BTreeMap::new();
+    for entry in fs::read_dir(&directory)
+        .map_err(|e| format!("generated-input provenance is unavailable: {e}"))?
+    {
+        let entry = entry.map_err(|e| e.to_string())?;
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if name == "SHA256" {
+            continue;
+        }
+        let metadata = fs::symlink_metadata(entry.path()).map_err(|e| e.to_string())?;
+        if metadata.file_type().is_symlink() || !metadata.is_file() {
+            return Err("generated-input provenance contains an unsafe entry".into());
+        }
+        files.insert(
+            name,
+            String::from_utf8(fs::read(entry.path()).map_err(|e| e.to_string())?)
+                .map_err(|e| format!("generated-input provenance is not UTF-8: {e}"))?,
+        );
+    }
+    Ok(digest_named_files(&files))
+}
+
+fn validate_generated_input_digest(path: &Path, expected: &str) -> ToolResult<()> {
+    if expected.is_empty() {
+        return Err("configured artifact lacks generated-input provenance".into());
+    }
+    let actual = generated_input_digest(path)?;
+    if actual != expected {
+        return Err(format!(
+            "generated-input digest changed (manifest {expected}, files {actual})"
+        ));
+    }
+    Ok(())
+}
+
 /// Returns a local consistency digest for the manifest fields.
 ///
 /// This is not a cryptographic signature and does not establish provenance or
@@ -467,8 +524,25 @@ fn verify_snapshot(
     if std::str::from_utf8(&sidecar).map(str::trim).ok() != Some(manifest_digest_value(&m)) {
         return Err("manifest digest sidecar is invalid".into());
     }
-    let actual =
+    let generated_digest = match m.get("generated_input_digest") {
+        Some(value) => Some(
+            value
+                .as_str()
+                .ok_or_else(|| "manifest generated-input digest is not a string".to_string())?,
+        ),
+        None => None,
+    };
+    if let Some(expected) = generated_digest {
+        validate_generated_input_digest(path, expected)?;
+    }
+    let mut actual =
         manifest_from_inspection(&inspected, Some(manifest_value(&m, "generation_id")), path);
+    if let Some(expected) = generated_digest {
+        actual.insert("generated_input_digest".into(), expected.into());
+        let digest = manifest_digest(&actual);
+        actual.insert("manifest_digest".into(), digest.clone().into());
+        actual.insert("signature".into(), digest.into());
+    }
     trusted_match(&actual, trusted)?;
     for key in [
         "format",

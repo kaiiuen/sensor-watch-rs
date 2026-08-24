@@ -489,18 +489,7 @@ fn read_generated_files<'a>(
 }
 
 pub(crate) fn digest_generated_files(files: &BTreeMap<String, String>) -> String {
-    let mut hasher = Sha256::new();
-    for (name, contents) in files {
-        hasher.update(name.as_bytes());
-        hasher.update([0]);
-        hasher.update(contents.as_bytes());
-        hasher.update([0]);
-    }
-    hasher
-        .finalize()
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    sensor_watch_tools::digest_named_files(files)
 }
 
 struct BoardData {
