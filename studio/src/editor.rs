@@ -4,6 +4,9 @@
 //! faces. The editor works on the firmware's `src/movement/` source files.
 
 use super::faces::face_identity;
+use crate::file_browser::FileBrowser;
+use sha2::{Digest, Sha256};
+use std::path::PathBuf;
 
 /// A template for a new watch face.
 pub struct Template {
@@ -296,6 +299,137 @@ fn atomic_write(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> 
     std::fs::rename(temp, path)
 }
 
+/// A safe text document owned by an IDE editor tab.
+#[derive(Clone, Debug)]
+pub struct DocumentTab {
+    pub path: PathBuf,
+    pub contents: String,
+    pub original_hash: [u8; 32],
+    original_contents: String,
+    pub dirty: bool,
+    pub external_conflict: bool,
+}
+
+impl DocumentTab {
+    fn hash(contents: &str) -> [u8; 32] {
+        Sha256::digest(contents.as_bytes()).into()
+    }
+
+    pub fn new(path: PathBuf, contents: String) -> Self {
+        Self {
+            original_hash: Self::hash(&contents),
+            original_contents: contents.clone(),
+            path,
+            contents,
+            dirty: false,
+            external_conflict: false,
+        }
+    }
+
+    pub fn set_contents(&mut self, contents: String) {
+        self.dirty = contents != self.contents || Self::hash(&contents) != self.original_hash;
+        self.contents = contents;
+    }
+
+    pub fn check_external_change(&mut self, browser: &FileBrowser) -> bool {
+        let changed = browser
+            .read_text_path(&self.path)
+            .map(|source| Self::hash(&source) != self.original_hash)
+            .unwrap_or(true);
+        self.external_conflict = changed;
+        changed
+    }
+
+    pub fn reload(&mut self, browser: &FileBrowser) -> Result<(), String> {
+        let source = browser
+            .read_text_path(&self.path)
+            .map_err(|e| e.to_string())?;
+        self.original_hash = Self::hash(&source);
+        self.original_contents = source.clone();
+        self.contents = source;
+        self.dirty = false;
+        self.external_conflict = false;
+        Ok(())
+    }
+
+    pub fn save(&mut self, browser: &FileBrowser) -> Result<(), String> {
+        if self.external_conflict || self.check_external_change(browser) {
+            return Err("file changed externally, reload or resolve the conflict".into());
+        }
+        browser
+            .write_text_path(&self.path, &self.contents, Some(&self.original_contents))
+            .map_err(|e| e.to_string())?;
+        self.original_hash = Self::hash(&self.contents);
+        self.original_contents = self.contents.clone();
+        self.dirty = false;
+        self.external_conflict = false;
+        Ok(())
+    }
+}
+
+#[derive(Default, Debug)]
+pub struct DocumentTabs {
+    pub tabs: Vec<DocumentTab>,
+    pub active: Option<usize>,
+    pub close_prompt: Option<usize>,
+}
+
+impl DocumentTabs {
+    pub fn open(&mut self, path: PathBuf, contents: String) -> usize {
+        if let Some(index) = self.tabs.iter().position(|tab| tab.path == path) {
+            self.active = Some(index);
+            return index;
+        }
+        self.tabs.push(DocumentTab::new(path, contents));
+        let index = self.tabs.len() - 1;
+        self.active = Some(index);
+        index
+    }
+    pub fn active(&self) -> Option<&DocumentTab> {
+        self.active.and_then(|i| self.tabs.get(i))
+    }
+
+    pub fn select(&mut self, index: usize) -> bool {
+        if index < self.tabs.len() {
+            self.active = Some(index);
+            true
+        } else {
+            false
+        }
+    }
+    pub fn request_close(&mut self, index: usize) -> bool {
+        if let Some(tab) = self.tabs.get(index) {
+            if tab.dirty || tab.external_conflict {
+                self.close_prompt = Some(index);
+                return false;
+            }
+            self.close_confirmed(index);
+            return true;
+        }
+        false
+    }
+    pub fn confirm_close(&mut self, index: usize) -> bool {
+        if self.close_prompt != Some(index) {
+            return false;
+        }
+        self.close_prompt = None;
+        self.close_confirmed(index);
+        true
+    }
+    pub fn cancel_close(&mut self) {
+        self.close_prompt = None;
+    }
+    fn close_confirmed(&mut self, index: usize) {
+        self.tabs.remove(index);
+        self.active = match self.active {
+            Some(_) if self.tabs.is_empty() => None,
+            Some(active) if active > index => Some(active - 1),
+            Some(active) if active == index => Some(active.min(self.tabs.len() - 1)),
+            other => other,
+        };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -304,6 +438,73 @@ mod tests {
     fn registration_rejects_case_only_existing_module_collision() {
         let error = register_face("SIMPLE_CLOCK").expect_err("case-only collision must fail");
         assert!(error.contains("simple_clock"));
+    }
+
+    #[test]
+    fn document_tabs_switch_and_protect_dirty_close() {
+        let mut tabs = DocumentTabs::default();
+        let first = tabs.open(PathBuf::from("one.txt"), "one".into());
+        let second = tabs.open(PathBuf::from("two.txt"), "two".into());
+        assert_eq!(tabs.active, Some(second));
+        tabs.tabs[first].set_contents("edited".into());
+        assert!(!tabs.request_close(first));
+        assert_eq!(tabs.close_prompt, Some(first));
+        tabs.cancel_close();
+        assert!(tabs.select(first));
+        assert_eq!(tabs.active().unwrap().contents, "edited");
+        assert!(tabs.request_close(second));
+        assert_eq!(tabs.tabs.len(), 1);
+    }
+
+    #[test]
+    fn document_hash_and_external_change_are_detectable() {
+        let first = DocumentTab::new(PathBuf::from("a.txt"), "same".into());
+        let changed = DocumentTab::new(PathBuf::from("a.txt"), "different".into());
+        assert_ne!(first.original_hash, changed.original_hash);
+        let mut tabs = DocumentTabs::default();
+        tabs.open(first.path.clone(), first.contents.clone());
+        tabs.tabs[0].external_conflict = true;
+        assert!(!tabs.request_close(0));
+        assert_eq!(tabs.close_prompt, Some(0));
+    }
+
+    #[test]
+    fn external_change_requires_reload_before_save() {
+        let root =
+            std::env::temp_dir().join(format!("studio-document-conflict-{}", std::process::id()));
+        let data = root.join("data");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.join("note.txt");
+        std::fs::write(&path, "original").unwrap();
+        let path = path.canonicalize().unwrap();
+        let browser = FileBrowser::from_project_roots(data, project.clone());
+        let mut tab = DocumentTab::new(path.clone(), "original".into());
+        tab.set_contents("local edit".into());
+        std::fs::write(&path, "external edit").unwrap();
+        assert!(tab.check_external_change(&browser));
+        assert!(tab.save(&browser).is_err());
+        tab.reload(&browser).unwrap();
+        assert_eq!(tab.contents, "external edit");
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn project_root_constructor_starts_at_active_project() {
+        let root = std::env::temp_dir().join(format!("studio-project-root-{}", std::process::id()));
+        let data = root.join("data");
+        let project = root.join("project");
+        std::fs::create_dir_all(&project).unwrap();
+        let browser = FileBrowser::from_project_roots(data, project.clone());
+        assert_eq!(
+            browser.active_tab().root_kind,
+            crate::fs_policy::RootKind::ActiveProject
+        );
+        assert_eq!(
+            browser.active_tab().current_dir,
+            project.canonicalize().unwrap()
+        );
+        let _ = std::fs::remove_dir_all(root);
     }
 
     #[test]

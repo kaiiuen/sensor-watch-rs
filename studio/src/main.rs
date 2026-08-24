@@ -245,6 +245,8 @@ struct StudioApp {
     /// A text file opened from the bounded File Browser.
     editor_file_path: Option<std::path::PathBuf>,
     editor_file_original: String,
+    /// Independent safe text document tabs; face editing remains separate.
+    document_tabs: editor::DocumentTabs,
     /// The editor's face description (shown to users in the catalog).
     editor_description: String,
     /// The selected editor template.
@@ -1135,6 +1137,7 @@ impl Default for StudioApp {
             editor_source: String::new(),
             editor_file_path: None,
             editor_file_original: String::new(),
+            document_tabs: editor::DocumentTabs::default(),
             editor_description: String::new(),
             editor_template: 0,
             block_editor: block_editor::BlockEditor::default(),
@@ -4641,32 +4644,88 @@ impl StudioApp {
             }
         });
         if let Some(path) = self.editor_file_path.clone() {
+            if let Some(index) = self.document_tabs.active {
+                if let Some(tab) = self.document_tabs.tabs.get_mut(index) {
+                    tab.set_contents(self.editor_source.clone());
+                }
+            }
+            ui.horizontal(|ui| {
+                for index in 0..self.document_tabs.tabs.len() {
+                    let name = self.document_tabs.tabs[index]
+                        .path
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_else(|| "document".into());
+                    let dirty = self.document_tabs.tabs[index].dirty;
+                    if ui
+                        .selectable_label(
+                            self.document_tabs.active == Some(index),
+                            format!("{}{}", name, if dirty { " *" } else { "" }),
+                        )
+                        .clicked()
+                    {
+                        self.document_tabs.select(index);
+                        if let Some(tab) = self.document_tabs.active() {
+                            self.editor_file_path = Some(tab.path.clone());
+                            self.editor_source = tab.contents.clone();
+                            self.editor_file_original = tab.contents.clone();
+                        }
+                    }
+                }
+            });
+            if let Some(index) = self.document_tabs.active {
+                if let Some(tab) = self.document_tabs.tabs.get_mut(index) {
+                    tab.check_external_change(&self.file_browser);
+                }
+            }
             ui.horizontal(|ui| {
                 ui.label(format!("Open text file: {}", path.display()));
                 if ui.button("Save text file").clicked() {
-                    let source = self.editor_source.clone();
-                    let original = self.editor_file_original.clone();
-                    match self
-                        .file_browser
-                        .write_text_path(&path, &source, Some(&original))
-                    {
-                        Ok(()) => {
-                            self.editor_file_original = source;
-                            self.status = "Text file saved atomically".into();
+                    if let Some(index) = self.document_tabs.active {
+                        if let Some(tab) = self.document_tabs.tabs.get_mut(index) {
+                            tab.set_contents(self.editor_source.clone());
+                            match tab.save(&self.file_browser) {
+                                Ok(()) => {
+                                    self.editor_file_original = self.editor_source.clone();
+                                    self.status = "Text file saved atomically".into();
+                                }
+                                Err(error) => {
+                                    self.status = format!("Text file save failed: {error}");
+                                    self.log_error(&self.status.clone());
+                                }
+                            }
                         }
-                        Err(error) => {
-                            self.status = format!("Text file save failed: {error}");
-                            self.log_error(&self.status.clone());
+                    }
+                }
+                if ui.button("Reload text file").clicked() {
+                    if let Some(index) = self.document_tabs.active {
+                        if let Some(tab) = self.document_tabs.tabs.get_mut(index) {
+                            match tab.reload(&self.file_browser) {
+                                Ok(()) => {
+                                    self.editor_source = tab.contents.clone();
+                                    self.editor_file_original = tab.contents.clone();
+                                    self.status = "Text file reloaded".into();
+                                }
+                                Err(error) => self.status = format!("Reload failed: {error}"),
+                            }
                         }
                     }
                 }
                 if ui.button("Close text file").clicked() {
-                    if self.editor_source == self.editor_file_original {
-                        self.editor_file_path = None;
-                        self.editor_file_original.clear();
+                    let index = self.document_tabs.active.unwrap_or(0);
+                    if self.document_tabs.request_close(index) {
+                        self.sync_active_document();
                     } else {
-                        self.status =
-                            "Unsaved editor changes must be saved before closing the file".into();
+                        self.status = "Close this text file and discard unsaved changes?".into();
+                    }
+                }
+                if let Some(index) = self.document_tabs.close_prompt {
+                    if ui.button("Confirm close and discard").clicked() {
+                        self.document_tabs.confirm_close(index);
+                        self.sync_active_document();
+                    }
+                    if ui.button("Keep editing").clicked() {
+                        self.document_tabs.cancel_close();
                     }
                 }
             });
@@ -6789,6 +6848,17 @@ impl StudioApp {
             });
     }
 
+    fn sync_active_document(&mut self) {
+        if let Some(tab) = self.document_tabs.active() {
+            self.editor_file_path = Some(tab.path.clone());
+            self.editor_source = tab.contents.clone();
+            self.editor_file_original = tab.contents.clone();
+        } else {
+            self.editor_file_path = None;
+            self.editor_file_original.clear();
+        }
+    }
+
     /// The bounded workspace File Browser.
     fn file_browser(&mut self, ui: &mut egui::Ui) {
         let (message, anchors) = self.file_browser.ui(ui);
@@ -6800,24 +6870,20 @@ impl StudioApp {
             self.status = message;
         }
         if let Some(path) = self.file_browser.take_open_request() {
-            if self.editor_file_path.is_some() && self.editor_source != self.editor_file_original {
-                self.status =
-                    "Unsaved editor changes must be saved before opening another file".into();
-            } else {
-                match self.file_browser.read_text_path(&path) {
-                    Ok(source) => {
-                        self.editor_name = path
-                            .file_name()
-                            .map(|name| name.to_string_lossy().into_owned())
-                            .unwrap_or_default();
-                        self.editor_source = source.clone();
-                        self.editor_file_original = source;
-                        self.editor_file_path = Some(path);
-                        self.current_panel = Panel::Editor;
-                        self.status = "Opened safe UTF-8 text file in editor".into();
-                    }
-                    Err(error) => self.status = format!("Open failed: {error}"),
+            match self.file_browser.read_text_path(&path) {
+                Ok(source) => {
+                    self.editor_name = path
+                        .file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    self.editor_source = source.clone();
+                    self.editor_file_original = source.clone();
+                    self.document_tabs.open(path.clone(), source);
+                    self.editor_file_path = Some(path);
+                    self.current_panel = Panel::Editor;
+                    self.status = "Opened safe UTF-8 text file in editor".into();
                 }
+                Err(error) => self.status = format!("Open failed: {error}"),
             }
         }
     }
