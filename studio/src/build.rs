@@ -7,7 +7,7 @@
 use sha2::{Digest, Sha256};
 
 use std::collections::BTreeMap;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -156,9 +156,21 @@ struct CapturedCommand {
     diagnostics: String,
 }
 
-fn capture_command(
+#[cfg(test)]
+fn capture_command(command: Command, redacted_roots: &[&Path]) -> Result<CapturedCommand, String> {
+    capture_command_with_progress(
+        command,
+        redacted_roots,
+        &crate::progress::ProgressSink::disabled(),
+        crate::progress::Phase::Cargo,
+    )
+}
+
+fn capture_command_with_progress(
     mut command: Command,
     redacted_roots: &[&Path],
+    progress: &crate::progress::ProgressSink,
+    phase: crate::progress::Phase,
 ) -> Result<CapturedCommand, String> {
     let mut child = command
         .stdout(Stdio::piped())
@@ -167,48 +179,68 @@ fn capture_command(
         .map_err(|error| format!("failed to start command: {error}"))?;
     let stdout = child.stdout.take().expect("stdout was piped");
     let stderr = child.stderr.take().expect("stderr was piped");
-    let stdout_thread = thread::spawn(|| read_bounded(stdout));
-    let stderr_thread = thread::spawn(|| read_bounded(stderr));
+    let (line_sender, line_receiver) = std::sync::mpsc::channel();
+    let stdout_thread = thread::spawn({
+        let sender = line_sender.clone();
+        move || read_lines_to_channel(stdout, "stdout", sender)
+    });
+    let stderr_thread = thread::spawn({
+        let sender = line_sender;
+        move || read_lines_to_channel(stderr, "stderr", sender)
+    });
+    let mut output = Vec::new();
+    while let Ok((stream, line)) = line_receiver.recv() {
+        let safe_line = sanitize_diagnostics(&format!("{stream}: {line}"), redacted_roots);
+        progress.emit(phase, safe_line.clone(), None, None);
+        output.push(safe_line);
+    }
     let status = child
         .wait()
         .map_err(|error| format!("failed waiting for command: {error}"))?;
-    let stdout = stdout_thread
+    stdout_thread
         .join()
         .map_err(|_| "stdout capture thread panicked".to_string())??;
-    let stderr = stderr_thread
+    stderr_thread
         .join()
         .map_err(|_| "stderr capture thread panicked".to_string())??;
-    let mut text = String::from_utf8_lossy(&stdout).into_owned();
-    if !text.is_empty() && !stderr.is_empty() {
-        text.push('\n');
-    }
-    text.push_str(&String::from_utf8_lossy(&stderr));
+    let text = output.join("\n");
     Ok(CapturedCommand {
         code: status.code(),
         diagnostics: sanitize_diagnostics(&text, redacted_roots),
     })
 }
 
-fn read_bounded(mut reader: impl Read) -> Result<Vec<u8>, String> {
-    let mut bytes = Vec::with_capacity(MAX_DIAGNOSTIC_BYTES);
-    let mut buffer = [0_u8; 4096];
-    let mut discarded = false;
-    loop {
-        let count = reader
-            .read(&mut buffer)
-            .map_err(|error| error.to_string())?;
-        if count == 0 {
-            break;
+fn read_lines_to_channel(
+    reader: impl Read,
+    stream: &'static str,
+    sender: std::sync::mpsc::Sender<(&'static str, String)>,
+) -> Result<(), String> {
+    let mut bytes = 0usize;
+    let mut lines = 0usize;
+    let mut truncated = false;
+    for line in BufReader::new(reader).lines() {
+        let line = line.map_err(|error| error.to_string())?;
+        if lines >= MAX_DIAGNOSTIC_LINES || bytes >= MAX_DIAGNOSTIC_BYTES {
+            truncated = true;
+            continue;
         }
-        let available = MAX_DIAGNOSTIC_BYTES.saturating_sub(bytes.len());
-        let take = count.min(available);
-        bytes.extend_from_slice(&buffer[..take]);
-        discarded |= take < count;
+        let clean = line
+            .chars()
+            .filter(|c| c.is_ascii() && !c.is_control())
+            .collect::<String>();
+        bytes = bytes.saturating_add(clean.len() + 1);
+        lines += 1;
+        sender
+            .send((stream, clean))
+            .map_err(|_| "output receiver closed".to_string())?;
     }
-    if discarded {
-        bytes.extend_from_slice(b"\n[diagnostics exceeded byte limit]");
+    if truncated {
+        let _ = sender.send((
+            stream,
+            "[diagnostics truncated by line or byte limit]".into(),
+        ));
     }
-    Ok(bytes)
+    Ok(())
 }
 
 fn sanitize_diagnostics(text: &str, redacted_roots: &[&Path]) -> String {
@@ -296,6 +328,38 @@ pub struct BuildResult {
     pub success: bool,
     pub message: String,
     pub uf2_path: Option<PathBuf>,
+}
+
+struct BuildTraceGuard<'a> {
+    progress: &'a crate::progress::ProgressSink,
+    success: bool,
+}
+impl Drop for BuildTraceGuard<'_> {
+    fn drop(&mut self) {
+        self.progress.emit(
+            crate::progress::Phase::Cleanup,
+            "Cleaning isolated workspace and temporary build state",
+            None,
+            None,
+        );
+        self.progress.finish(
+            self.success,
+            if self.success {
+                "Build complete"
+            } else {
+                "Build failed"
+            },
+        );
+    }
+}
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut digest = Sha256::new();
+    digest.update(bytes);
+    digest
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
 }
 
 /// Metadata produced by the shared local UF2/manifest verification path.
@@ -501,6 +565,24 @@ pub fn build_firmware(
     request: FirmwareInputRequest,
     paths: &crate::storage::BuildOutputPaths,
 ) -> BuildResult {
+    build_firmware_with_progress(request, paths, &crate::progress::ProgressSink::disabled())
+}
+
+pub fn build_firmware_with_progress(
+    request: FirmwareInputRequest,
+    paths: &crate::storage::BuildOutputPaths,
+    progress: &crate::progress::ProgressSink,
+) -> BuildResult {
+    let mut trace_guard = BuildTraceGuard {
+        progress,
+        success: false,
+    };
+    progress.emit(
+        crate::progress::Phase::Preflight,
+        "Build preflight started",
+        None,
+        None,
+    );
     let output_dir = &paths.latest;
     if let Err(error) = validate_output_dir(output_dir) {
         return BuildResult {
@@ -509,7 +591,19 @@ pub fn build_firmware(
             uf2_path: None,
         };
     }
+    progress.emit(
+        crate::progress::Phase::OutputRoot,
+        format!("Resolved output root: {}", output_dir.display()),
+        None,
+        None,
+    );
     let source_root = firmware_dir();
+    progress.emit(
+        crate::progress::Phase::SourceSnapshot,
+        format!("Source snapshot root: {}", source_root.display()),
+        None,
+        None,
+    );
     let workspace = match IsolatedWorkspace::new(&source_root) {
         Ok(workspace) => workspace,
         Err(error) => {
@@ -517,9 +611,15 @@ pub fn build_firmware(
                 success: false,
                 message: error,
                 uf2_path: None,
-            }
+            };
         }
     };
+    progress.emit(
+        crate::progress::Phase::Workspace,
+        format!("Isolated workspace ready: {}", workspace.root.display()),
+        None,
+        None,
+    );
     let inputs_dir = workspace.root.join("studio-generated");
     let generated = match generate_inputs(&request, &source_root, &inputs_dir, &workspace.root) {
         Ok(generated) => generated,
@@ -528,9 +628,21 @@ pub fn build_firmware(
                 success: false,
                 message: error,
                 uf2_path: None,
-            }
+            };
         }
     };
+    progress.emit(
+        crate::progress::Phase::GeneratedInputs,
+        format!("Generated-input digest: {}", generated.digest),
+        None,
+        None,
+    );
+    progress.emit(
+        crate::progress::Phase::GeneratedInputs,
+        format!("Generated-input files and digest: {}", generated.digest),
+        None,
+        None,
+    );
     if let Err(error) = validate_output_dir(output_dir) {
         return BuildResult {
             success: false,
@@ -539,6 +651,12 @@ pub fn build_firmware(
         };
     }
     let fw_dir = &workspace.root;
+    progress.emit(
+        crate::progress::Phase::Lock,
+        "Acquiring Cargo build lock",
+        None,
+        None,
+    );
     let _build_lock = match acquire_build_lock(fw_dir) {
         Ok(lock) => lock,
         Err(error) => {
@@ -568,9 +686,16 @@ pub fn build_firmware(
         };
     }
 
+    progress.emit(
+        crate::progress::Phase::Cargo,
+        "Cargo build started",
+        None,
+        None,
+    );
     // 1. Build the firmware in release mode. Keep the worker independent from
     // the UI while retaining bounded, safe diagnostics for the result.
-    let cargo = capture_command(
+    let cargo_started = std::time::Instant::now();
+    let cargo = capture_command_with_progress(
         {
             let mut command = Command::new("cargo");
             command
@@ -587,6 +712,8 @@ pub fn build_firmware(
             command
         },
         &[fw_dir, output_dir, &source_root],
+        progress,
+        crate::progress::Phase::Cargo,
     );
     let cargo = match cargo {
         Ok(result) => result,
@@ -600,6 +727,16 @@ pub fn build_firmware(
             };
         }
     };
+    progress.emit(
+        crate::progress::Phase::Cargo,
+        format!(
+            "Cargo exited {:?} after {} ms",
+            cargo.code,
+            cargo_started.elapsed().as_millis()
+        ),
+        None,
+        None,
+    );
     if !cargo.diagnostics.is_empty() {
         write_build_log(output_dir, &cargo.diagnostics);
     }
@@ -621,11 +758,23 @@ pub fn build_firmware(
         };
     }
 
+    progress.emit(
+        crate::progress::Phase::Elf,
+        "ELF discovery succeeded",
+        None,
+        None,
+    );
     // 2. Locate the ELF and the raw binary.
     let elf = fw_dir.join(format!("target/{TARGET}/release/sensor-watch"));
     let bin = fw_dir.join(format!("target/{TARGET}/release/sensor-watch.bin"));
     let uf2 = output_dir.join("sensor-watch.uf2");
 
+    progress.emit(
+        crate::progress::Phase::PanicMap,
+        "Writing panic map",
+        None,
+        None,
+    );
     // Keep the ELF, source tree, and panic resolver tied to this exact build.
     // The manifest is host-side only and does not change firmware behavior.
     if let Err(error) = crate::panic_map::write_manifest(&elf, fw_dir) {
@@ -648,7 +797,14 @@ pub fn build_firmware(
             };
         }
     };
-    let objcopy_result = capture_command(
+    progress.emit(
+        crate::progress::Phase::Objcopy,
+        "rust-objcopy started",
+        None,
+        None,
+    );
+    let objcopy_started = std::time::Instant::now();
+    let objcopy_result = capture_command_with_progress(
         {
             let mut command = Command::new(&objcopy);
             command
@@ -660,6 +816,8 @@ pub fn build_firmware(
             command
         },
         &[fw_dir, output_dir, &source_root],
+        progress,
+        crate::progress::Phase::Objcopy,
     );
     let objcopy_result = match objcopy_result {
         Ok(result) => result,
@@ -673,6 +831,16 @@ pub fn build_firmware(
             };
         }
     };
+    progress.emit(
+        crate::progress::Phase::Objcopy,
+        format!(
+            "rust-objcopy exited {:?} after {} ms",
+            objcopy_result.code,
+            objcopy_started.elapsed().as_millis()
+        ),
+        None,
+        None,
+    );
     if !objcopy_result.diagnostics.is_empty() {
         write_build_log(output_dir, &objcopy_result.diagnostics);
     }
@@ -715,6 +883,22 @@ pub fn build_firmware(
             uf2_path: None,
         };
     }
+    progress.emit(
+        crate::progress::Phase::Binary,
+        format!(
+            "Binary size {} bytes, SHA-256 {}",
+            image.len(),
+            hex_digest(&image)
+        ),
+        Some(image.len() as u64),
+        None,
+    );
+    progress.emit(
+        crate::progress::Phase::Uf2,
+        "UF2 conversion and validation started",
+        None,
+        None,
+    );
     let uf2_data = sensor_watch_core::uf2::convert_to_uf2(&image);
     if let Err(error) = sensor_watch_core::uf2::validate(&uf2_data) {
         return BuildResult {
@@ -724,6 +908,12 @@ pub fn build_firmware(
         };
     }
 
+    progress.emit(
+        crate::progress::Phase::Provenance,
+        "Publishing generated-input provenance",
+        None,
+        None,
+    );
     let input_bundle = uf2.with_extension("uf2.inputs");
     if let Err(error) = copy_generated_inputs(&generated.directory, &input_bundle) {
         return BuildResult {
@@ -732,6 +922,12 @@ pub fn build_firmware(
             uf2_path: None,
         };
     }
+    progress.emit(
+        crate::progress::Phase::Publication,
+        "Publishing UF2 atomically",
+        None,
+        None,
+    );
     match publish_uf2_with_writers_at(
         output_dir,
         &uf2,
@@ -753,6 +949,12 @@ pub fn build_firmware(
                 };
             }
 
+            progress.emit(
+                crate::progress::Phase::Metadata,
+                "Writing latest and recovery metadata",
+                None,
+                None,
+            );
             if let Err(error) = crate::storage::write_latest_atomic(
                 &paths,
                 &crate::storage::LatestMetadata {
@@ -774,6 +976,13 @@ pub fn build_firmware(
                     uf2_path: None,
                 };
             }
+            progress.emit(
+                crate::progress::Phase::Approval,
+                "Artifact ready for explicit approval",
+                None,
+                None,
+            );
+            trace_guard.success = true;
             BuildResult {
                 success: true,
                 message: format!(

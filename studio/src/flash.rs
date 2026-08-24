@@ -244,6 +244,26 @@ pub(crate) fn flash_with_start_progress<F>(
 where
     F: FnOnce(),
 {
+    struct TraceGuard<'a> {
+        progress: &'a ProgressSink,
+        success: bool,
+    }
+    impl Drop for TraceGuard<'_> {
+        fn drop(&mut self) {
+            self.progress.finish(
+                self.success,
+                if self.success {
+                    "Flash complete"
+                } else {
+                    "Flash failed"
+                },
+            );
+        }
+    }
+    let mut trace_guard = TraceGuard {
+        progress,
+        success: false,
+    };
     // This function intentionally owns every artifact and removable-drive
     // filesystem operation. A blocked OS syscall cannot be forcibly cancelled
     // from a Rust thread, but it cannot block eframe's UI thread either.
@@ -258,7 +278,13 @@ where
         Ok(data) => data,
         Err(result) => return result,
     };
-    match select_watch_drive_with_progress(windows_drive_roots(), progress) {
+    progress.emit(
+        Phase::Approval,
+        "Approved artifact revalidation started",
+        None,
+        None,
+    );
+    let result = match select_watch_drive_with_progress(windows_drive_roots(), progress) {
         WatchDriveSelection::Multiple(count) => {
             progress.emit(
                 Phase::Failure,
@@ -267,10 +293,10 @@ where
                 None,
             );
             FlashResult {
-            status: FlashStatus::Ambiguous,
-            message: format!(
-                "Refusing to flash: {count} Sensor Watch bootloader drives are present. Disconnect all but one"
-            ),
+                status: FlashStatus::Ambiguous,
+                message: format!(
+                    "Refusing to flash: {count} Sensor Watch bootloader drives are present. Disconnect all but one"
+                ),
             }
         }
         WatchDriveSelection::None => {
@@ -305,7 +331,9 @@ where
                 progress,
             )
         }
-    }
+    };
+    trace_guard.success = result.status == FlashStatus::HostCopySucceeded;
+    result
 }
 
 fn read_verified_artifact<R, A>(
@@ -635,7 +663,7 @@ where
         Ok(())
     })();
 
-    match result {
+    let result = match result {
         Ok(()) => FlashResult {
             status: FlashStatus::HostCopySucceeded,
             message: format!(
@@ -653,7 +681,8 @@ where
             let _ = std::fs::remove_file(&temp_path);
             result
         }
-    }
+    };
+    result
 }
 
 fn rollback_published(

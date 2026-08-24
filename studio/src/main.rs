@@ -156,6 +156,8 @@ struct StudioApp {
     shutting_down: bool,
     /// The handle to the background build thread.
     pending_build: Option<std::thread::JoinHandle<build::BuildResult>>,
+    /// Nonblocking build progress receiver; the worker continues after UI backpressure.
+    build_progress: Option<(u64, ProgressReceiver)>,
     /// Durable structured operation traces; Terminal remains intentionally separate.
     trace_store: Option<trace::TraceStore>,
     /// The operation currently rendered by Debug Output, when one exists.
@@ -275,6 +277,8 @@ struct StudioApp {
     modules: modules::ModuleManager,
     /// The canonical configured-build output root.
     build_output_root: String,
+    /// Compatibility value for the existing session-local output-root call sites.
+    selected_build_output_root: String,
     /// Pending configured-build artifact root; applied only after validation.
     pending_artifact_root: String,
     artifact_root_status: String,
@@ -1076,6 +1080,7 @@ impl Default for StudioApp {
             building: false,
             shutting_down: false,
             pending_build: None,
+            build_progress: None,
             pending_inspection: None,
             cached_watch: WatchDriveSelection::None,
             pending_detection: None,
@@ -1137,6 +1142,7 @@ impl Default for StudioApp {
             )
             .display()
             .to_string(),
+            selected_build_output_root: default_selected_build_output_root(&distribution::active()),
             pending_artifact_root: storage::default_artifact_root(
                 &distribution::active().user_data_root,
             )
@@ -1428,6 +1434,7 @@ impl eframe::App for StudioApp {
 
         self.poll_master_clock();
         self.poll_flash_workers();
+        self.drain_build_progress();
         self.poll_inspection_worker();
         self.poll_probe_worker();
         self.invalidate_stale_artifact();
@@ -1438,6 +1445,12 @@ impl eframe::App for StudioApp {
                 let build_fingerprint = self.pending_build_fingerprint.take();
                 match handle.join() {
                     Ok(result) => {
+                        self.build_progress = None;
+                        self.selected_trace = self
+                            .trace_store
+                            .as_ref()
+                            .and_then(|store| store.list().ok())
+                            .and_then(|mut traces| traces.pop());
                         self.building = false;
                         self.build_message = result.message.clone();
                         self.log.log(&result.message);
@@ -3423,8 +3436,17 @@ impl StudioApp {
             self.begin_compile_session(build_fingerprint);
         }
         let request = plan.request;
+        let operation_id = self.next_operation_id;
+        self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
+        let trace = self.trace_store.as_ref().and_then(|store| {
+            store
+                .start(trace::OperationKind::Build, "build", trace::Origin::Host)
+                .ok()
+        });
+        let (progress, receiver) = progress::channel_with_trace(operation_id, trace);
+        self.build_progress = Some((operation_id, receiver));
         self.pending_build = Some(std::thread::spawn(move || {
-            build::build_firmware(request, &output)
+            build::build_firmware_with_progress(request, &output, &progress)
         }));
     }
 
@@ -5082,7 +5104,7 @@ impl StudioApp {
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.strong(format!("{} · op {}", event.phase.label(), event.operation_id));
+                            ui.strong(format!("Build/Flash: {} · op {}", event.phase.label(), event.operation_id));
                         });
                         ui.label(&event.message);
                         if let (Some(current), Some(total)) = (event.current, event.total) {
@@ -9673,7 +9695,12 @@ impl StudioApp {
         }
         let operation_id = self.next_operation_id;
         self.next_operation_id = self.next_operation_id.wrapping_add(1).max(1);
-        let (progress, receiver) = progress::channel(operation_id);
+        let trace = self.trace_store.as_ref().and_then(|store| {
+            store
+                .start(trace::OperationKind::Flash, "flash", trace::Origin::Host)
+                .ok()
+        });
+        let (progress, receiver) = progress::channel_with_trace(operation_id, trace);
         let path = approved.path.clone();
         let selected_drive = Some(selected_drive);
 
@@ -9814,6 +9841,35 @@ impl StudioApp {
         self.status = "Refreshing Sensor Watch detection…".to_string();
     }
 
+    fn drain_build_progress(&mut self) {
+        let Some((_, receiver)) = self.build_progress.as_ref() else {
+            return;
+        };
+        for event in receiver.drain() {
+            self.current_progress = Some(event.clone());
+            let progress = match (event.current, event.total) {
+                (Some(current), Some(total)) if total > 0 => format!(" [{current}/{total}]"),
+                _ => String::new(),
+            };
+            self.build_log.log(format!(
+                "op={} [{}]{} {}",
+                event.operation_id,
+                event.phase.label(),
+                progress,
+                event.message
+            ));
+        }
+        let dropped = receiver.take_dropped();
+        if dropped > 0 {
+            self.build_log.log(format!(
+                "UI progress dropped {dropped} event(s); durable trace retained output"
+            ));
+        }
+        if self.pending_build.is_none() {
+            self.build_progress = None;
+        }
+    }
+
     fn drain_progress(&mut self, receiver: &ProgressReceiver) {
         for event in receiver.drain() {
             self.current_progress = Some(event.clone());
@@ -9884,6 +9940,11 @@ impl StudioApp {
                     Ok(result) => {
                         self.flash_worker_state.finish();
                         self.clear_completed_progress(operation_id);
+                        self.selected_trace = self
+                            .trace_store
+                            .as_ref()
+                            .and_then(|store| store.list().ok())
+                            .and_then(|mut traces| traces.pop());
                         self.apply_flash_result(result);
                     }
                     Err(_) => {
