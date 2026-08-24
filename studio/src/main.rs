@@ -175,6 +175,10 @@ struct StudioApp {
     flash_worker_state: flash::WorkerState,
     /// The last build result message.
     build_message: String,
+    /// Whether the post-build UF2 guidance banner is visible.
+    build_success_notice: bool,
+    /// Whether the UF2 flashing explanation dialog is open.
+    uf2_info_open: bool,
     /// The explicitly approved artifact and the metadata verified at approval time.
     approved_artifact: Option<ApprovedArtifact>,
     /// Path entered for explicit artifact inspection.
@@ -1075,6 +1079,8 @@ impl Default for StudioApp {
             next_operation_id: 1,
             flash_worker_state: flash::WorkerState::Idle,
             build_message: String::new(),
+            build_success_notice: false,
+            uf2_info_open: false,
             approved_artifact: initial_flashable_uf2(),
             artifact_path_input: String::new(),
             pending_artifact: None,
@@ -1456,6 +1462,8 @@ impl eframe::App for StudioApp {
                                         self.pending_artifact_fingerprint =
                                             Some(current_fingerprint);
                                         self.build_estimator_state = BuildEstimatorState::Verified;
+                                        self.build_success_notice =
+                                            should_show_build_success_notice(true, true);
                                         self.last_build_time = Some(
                                             std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -1499,6 +1507,7 @@ impl eframe::App for StudioApp {
                                 }
                             }
                         } else {
+                            self.build_success_notice = false;
                             self.status = format!("Build failed:\n{}", result.message);
                             self.build_estimator_state =
                                 BuildEstimatorState::Failed(result.message.clone());
@@ -1514,6 +1523,7 @@ impl eframe::App for StudioApp {
                         }
                     }
                     Err(_) => {
+                        self.build_success_notice = false;
                         self.building = false;
                         self.build_message =
                             tr(self.language, Key::BuildThreadPanicked).to_string();
@@ -1911,6 +1921,19 @@ impl eframe::App for StudioApp {
         }
         self.help_spotlight(ctx);
         self.show_component_conflict(ctx);
+
+        if self.uf2_info_open {
+            egui::Window::new("How UF2 flashing works")
+                .open(&mut self.uf2_info_open)
+                .resizable(true)
+                .default_width(560.0)
+                .show(ctx, |ui| {
+                    let colors = semantic(ui);
+                    ui.colored_label(colors.info, UF2_FLASHING_INFO);
+                    ui.add_space(8.0);
+                    ui.weak("This is a host-side explanation. It does not approve or flash an artifact.");
+                });
+        }
 
         if self.advanced_mode_confirm {
             egui::Window::new("Enable Developer Mode?")
@@ -3384,6 +3407,7 @@ impl StudioApp {
                 return;
             }
         };
+        self.build_success_notice = false;
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
         if self.reset_test_session_on_compile {
@@ -4777,7 +4801,26 @@ impl StudioApp {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let colors = semantic(ui);
                 ui.heading("Build & Flash");
+                if self.build_success_notice {
+                    egui::Frame::group(ui.style())
+                        .fill(colors.surface)
+                        .stroke(egui::Stroke::new(1.0_f32, colors.success))
+                        .show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.colored_label(colors.success, "Build complete");
+                                ui.label("Your UF2 passed local checks and is ready for review.");
+                                if ui.button("Learn more").clicked() {
+                                    open_uf2_info(&mut self.uf2_info_open);
+                                }
+                                if ui.button("Dismiss").clicked() {
+                                    dismiss_build_success_notice(&mut self.build_success_notice);
+                                }
+                            });
+                        });
+                    ui.add_space(8.0);
+                }
 
                 // Board selection (which revision the .uf2 targets).
                 ui.horizontal(|ui| {
@@ -4801,9 +4844,10 @@ impl StudioApp {
                     ui.separator();
                     // Description of the selected board: what it is, hardware
                     // details, and how it differs from the other revisions.
-                    ui.weak(board_info(self.board));
+                    ui.colored_label(colors.secondary_text, board_info(self.board));
                 });
-                ui.weak(
+                ui.colored_label(
+                    colors.info,
                     "Choose the board revision you're flashing. The firmware binary is\n\
                      the same for all boards; the board type (affecting LED polarity\n\
                      and buzzer voltage) is set at runtime on the watch itself. This\n\
@@ -4838,10 +4882,15 @@ impl StudioApp {
                     );
                 }
                 let plan = self.current_build_plan();
-                ui.weak(configured_estimator_status(
-                    &self.build_estimator_state,
-                    &plan,
-                ));
+                ui.colored_label(
+                    match self.build_estimator_state {
+                        BuildEstimatorState::Verified => colors.success,
+                        BuildEstimatorState::Failed(_) => colors.error,
+                        BuildEstimatorState::Building => colors.pending,
+                        BuildEstimatorState::NeedsValidation => colors.info,
+                    },
+                    configured_estimator_status(&self.build_estimator_state, &plan),
+                );
                 ui.add_space(8.0);
                 self.register_anchor_rect(
                     Panel::BuildFlash,
@@ -4917,6 +4966,9 @@ impl StudioApp {
                     {
                         self.inspect_artifact_from_input();
                     }
+                    if ui.button("How UF2 flashing works").clicked() {
+                        open_uf2_info(&mut self.uf2_info_open);
+                    }
                     let latest_enabled = latest_artifact_action_enabled(
                         &self.build_estimator_state,
                         self.pending_artifact.as_ref(),
@@ -4943,10 +4995,10 @@ impl StudioApp {
                     }
                 });
                 if !self.artifact_path_input.trim().is_empty() {
-                    ui.weak("Path entered: ready for explicit artifact inspection.");
+                    ui.colored_label(colors.info, "Path entered: ready for explicit artifact inspection.");
                 }
                 if artifact_actions_blocked {
-                    ui.weak("Artifact inspection and approval are disabled while a build is in progress.");
+                    ui.colored_label(colors.disabled_text, "Artifact inspection and approval are disabled while a build is in progress.");
                 }
                 if let Some(result) = self.inspection_result.clone() {
                     let result_response = ui.group(|ui| {
@@ -5002,10 +5054,10 @@ impl StudioApp {
                     });
                 }
                 if self.pending_artifact.is_some() {
-                    ui.weak("Artifact inspected. UF2, sidecars, and hashes verified. Approval is still required.");
+                    ui.colored_label(colors.pending, "Artifact inspected. UF2, sidecars, and hashes verified. Approval is still required.");
                 }
                 if self.approved_artifact.is_some() {
-                    ui.weak("Artifact approved for this session.");
+                    ui.colored_label(colors.success, "Artifact approved for this session.");
                 }
                 if let Some(uf2) = self.approved_artifact.as_ref().map(|artifact| &artifact.path) {
                     ui.label(
@@ -5073,12 +5125,12 @@ impl StudioApp {
                     }
                 }
                 if self.flash_busy() {
-                    ui.weak("Flash or drive detection is in progress; conflicting controls are disabled.");
+                    ui.colored_label(colors.disabled_text, "Flash or drive detection is in progress; conflicting controls are disabled.");
                 } else if self.building || self.pending_build.is_some() {
-                    ui.weak("Build in progress; flashing is disabled until it finishes.");
+                    ui.colored_label(colors.disabled_text, "Build in progress; flashing is disabled until it finishes.");
                 } else if let Some(approved) = &self.approved_artifact {
                     let approved = approved.clone();
-                    ui.weak("Copy ready: current artifact and drive will be checked again before scheduling.");
+                    ui.colored_label(colors.info, "Copy ready: current artifact and drive will be checked again before scheduling.");
                     let copy_response = ui.button(tr(self.language, Key::CopyToWatch));
                     self.register_anchor(Panel::BuildFlash, AnchorId::BuildCopy, &copy_response);
                     if !self.shutting_down
@@ -5119,7 +5171,7 @@ impl StudioApp {
                             .collect();
                         entries.sort_by_key(|e| e.timestamp);
                         if entries.is_empty() {
-                            ui.weak("(no activity yet)");
+                            ui.colored_label(colors.secondary_text, "(no activity yet)");
                         }
                         for entry in entries {
                             let secs = entry.timestamp % 60;
@@ -11206,6 +11258,20 @@ fn verified_artifact_after_build(
     Ok(inspection)
 }
 
+const UF2_FLASHING_INFO: &str = "A UF2 has two sizes: the logical payload is the firmware bytes written to flash, while the UF2 container is larger because each 256-byte payload is wrapped in a 512-byte block with headers, padding, and an end marker.\n\nThe SAM L22J18A has 256 KiB of flash: the bootloader uses 0x00000000..0x00002000, the application uses 0x00002000..0x0003C000 (232 KiB), and RWW EEPROM emulation uses 0x0003C000..0x00040000. The application must fit in its region; the remaining margin is payload headroom, not UF2 file headroom.\n\nThe watch exposes a virtual UF2 bootloader drive over USB. Its reported capacity is mass-storage geometry, not the SAM L22 flash capacity. Copy the intended .uf2 to that drive and eject normally.\n\nThe .uf2.json manifest and .json.sig sidecar stay on the host. They record local metadata and digests for Studio and host tools; they are not part of the UF2 stream and are not copied to flash.\n\nCopy and host-side verification establish artifact consistency only. They are not hardware validation and do not prove that the watch was programmed, that its bootloader is healthy, or that the firmware works on the device.";
+
+fn should_show_build_success_notice(build_succeeded: bool, artifact_verified: bool) -> bool {
+    build_succeeded && artifact_verified
+}
+
+fn dismiss_build_success_notice(notice: &mut bool) {
+    *notice = false;
+}
+
+fn open_uf2_info(info_open: &mut bool) {
+    *info_open = true;
+}
+
 const ARTIFACT_VERIFIED_PENDING_STATUS: &str = "Artifact verified; approval pending";
 const ARTIFACT_APPROVED_STATUS: &str = "Artifact approved for this session";
 const ARTIFACT_VERIFICATION_FAILED_STATUS: &str = "Artifact verification failed";
@@ -12987,6 +13053,45 @@ mod tests {
         let inspection = verified_artifact_after_build(&result).unwrap();
         assert_eq!(inspection.path, artifact);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn uf2_info_content_explains_container_layout_and_validation_scope() {
+        for phrase in [
+            "logical payload",
+            "UF2 container",
+            "SAM L22J18A",
+            "bootloader",
+            "RWW EEPROM",
+            "remaining margin",
+            "virtual UF2 bootloader drive",
+            "host",
+            ".json.sig",
+            "not hardware validation",
+        ] {
+            assert!(
+                super::UF2_FLASHING_INFO.contains(phrase),
+                "missing {phrase}"
+            );
+        }
+    }
+
+    #[test]
+    fn successful_build_shows_notice_but_failure_does_not() {
+        assert!(super::should_show_build_success_notice(true, true));
+        assert!(!super::should_show_build_success_notice(false, true));
+        assert!(!super::should_show_build_success_notice(true, false));
+    }
+
+    #[test]
+    fn build_notice_can_be_dismissed_and_info_can_be_reopened() {
+        let mut notice = true;
+        super::dismiss_build_success_notice(&mut notice);
+        assert!(!notice);
+
+        let mut info_open = false;
+        super::open_uf2_info(&mut info_open);
+        assert!(info_open);
     }
 
     #[test]
