@@ -21,6 +21,10 @@ pub struct PackageToolCapability {
     pub path: String,
     pub sha256: String,
     pub signature: Option<String>,
+    #[serde(default)]
+    pub license: String,
+    #[serde(default)]
+    pub provenance: String,
 }
 
 /// Hook for the desktop-update trust policy. A signed capability is rejected
@@ -43,6 +47,12 @@ pub fn validate_package_tool<A: CapabilityAuthenticator>(
 ) -> Result<PathBuf, String> {
     if capability.path != TOOL_RELATIVE_PATH {
         return Err("Master Clock capability path must be tools/master-clock.exe".into());
+    }
+    if capability.license.trim().is_empty() {
+        return Err("Master Clock capability has no license metadata".into());
+    }
+    if capability.provenance.trim().is_empty() {
+        return Err("Master Clock capability has no provenance metadata".into());
     }
     if capability.sha256.len() != 64 || !capability.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err("Master Clock capability has an invalid SHA-256".into());
@@ -152,6 +162,8 @@ mod tests {
             path: path.into(),
             sha256: format!("{:x}", Sha256::digest(bytes)),
             signature: None,
+            license: "MIT OR Apache-2.0".into(),
+            provenance: "test fixture".into(),
         }
     }
     #[test]

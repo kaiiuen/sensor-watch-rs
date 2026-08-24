@@ -14,6 +14,9 @@ fn help() {
     println!(
         "verify checks UF2 structure, local manifest consistency, and optional trusted release SHA-256 matching; SHA-256 is a digest/hash for integrity, not a signing key or authenticity proof. Authenticity requires a signature verified with a separately trusted public key (for example, Ed25519)."
     );
+    println!(
+        "package-studio optionally accepts --master-clock-exe PATH or --master-clock-source PATH plus --master-clock-license TEXT and --master-clock-provenance TEXT; omission leaves the optional tool out."
+    );
 }
 fn ensure_no_extra(args: &mut impl Iterator<Item = String>) {
     if let Some(extra) = args.next() {
@@ -42,6 +45,7 @@ fn main() -> ExitCode {
         "package-studio" => {
             let mut output = None;
             let mut launcher = None;
+            let mut master_clock = tools::MasterClockPackageOptions::default();
             while let Some(arg) = args.next() {
                 match arg.as_str() {
                     "--output" if output.is_none() => {
@@ -50,12 +54,27 @@ fn main() -> ExitCode {
                     "--launcher" if launcher.is_none() => {
                         launcher = Some(PathBuf::from(required(&mut args)))
                     }
+                    "--master-clock-source" if master_clock.source_directory.is_none() => {
+                        master_clock.source_directory = Some(PathBuf::from(required(&mut args)))
+                    }
+                    "--master-clock-exe" if master_clock.executable_override.is_none() => {
+                        master_clock.executable_override = Some(PathBuf::from(required(&mut args)))
+                    }
+                    "--master-clock-license" if master_clock.license.is_none() => {
+                        master_clock.license = Some(required(&mut args))
+                    }
+                    "--master-clock-provenance" if master_clock.provenance.is_none() => {
+                        master_clock.provenance = Some(required(&mut args))
+                    }
                     _ => usage(),
                 }
             }
-            let result =
-                tools::package_studio_with_launcher(output.as_deref(), launcher.as_deref())
-                    .unwrap_or_else(|e| fail(e));
+            let result = tools::package_studio_with_options(
+                output.as_deref(),
+                launcher.as_deref(),
+                master_clock,
+            )
+            .unwrap_or_else(|e| fail(e));
             println!("wrote {}", result.output.display());
         }
         "build" => {

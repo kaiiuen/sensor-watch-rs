@@ -60,8 +60,9 @@ pub const MAX_UF2_BYTES: usize = MAX_APPLICATION_BYTES.div_ceil(UF2_PAYLOAD_SIZE
 pub type Manifest = Map<String, Value>;
 pub type ToolResult<T> = Result<T, String>;
 pub use studio_package::{
-    StudioPackageResult, package_studio, package_studio_artifacts,
+    MasterClockPackageOptions, StudioPackageResult, package_studio, package_studio_artifacts,
     package_studio_artifacts_with_launcher, package_studio_with_launcher,
+    package_studio_with_options,
 };
 
 #[derive(Debug, Clone)]

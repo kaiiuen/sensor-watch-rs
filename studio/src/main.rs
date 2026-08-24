@@ -2094,7 +2094,7 @@ impl eframe::App for StudioApp {
                             match master_clock::MasterClockProcess::launch(&path) {
                                 Ok(process) => {
                                     self.master_clock_process = Some(process);
-                                    self.status = "Master Clock started; NTP/geolocation network activity is external and Windows time will not change".into();
+                                    self.status = "Master Clock started; NTP/geolocation and system activity are external; Windows time changes only if you explicitly use the tool's own control".into();
                                     self.log.log("Master Clock launched on user request");
                                 }
                                 Err(error) => {
@@ -8174,8 +8174,8 @@ impl StudioApp {
         ui.heading("Developer Mode tools");
         ui.label("Developer Mode is enabled. It exposes development UX only. Artifact, drive, UART, shell, path, rollback, and physical-action safeguards remain mandatory.");
         ui.heading("NTP Time / Master Clock");
-        ui.label("Optional on-demand tool. NTP and any geolocation behavior are external network activity; this does not change Windows time.");
-        ui.weak("Studio never starts this tool automatically. Only a validated package-local tools/master-clock.exe is offered.");
+        ui.label("Optional on-demand tool. It may perform external NTP/geolocation and system activity; Windows time changes only if you explicitly use the tool's own control.");
+        ui.colored_label(colors.info, "Studio never starts this tool automatically. Only a validated package-local tools/master-clock.exe is offered.");
         if self.package_status.mode == distribution::DistributionMode::Developer {
             ui.horizontal(|ui| {
                 ui.label("Explicit developer path:");
@@ -8211,7 +8211,7 @@ impl StudioApp {
         let launch = ui.add_enabled(available, egui::Button::new("NTP Time / Master Clock"));
         if launch.clicked() {
             self.pending_confirm = Some((
-                "Launch Master Clock? It may contact NTP/geolocation services (external network activity). It will not change Windows time. Continue?".into(),
+                "Launch Master Clock? It may contact NTP/geolocation services and inspect system state. It can change Windows time only if you explicitly use the tool's own control. Continue?".into(),
                 ConfirmKind::LaunchMasterClock,
             ));
         }

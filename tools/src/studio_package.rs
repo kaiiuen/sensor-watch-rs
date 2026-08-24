@@ -16,6 +16,20 @@ const PACKAGE_SCHEMA: u32 = 1;
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 const STUDIO_VERSION: &str = env!("CARGO_PKG_VERSION");
 const LAUNCHER_ARTIFACT_NAMES: &[&str] = &["sensor-watch-studio-launcher"];
+const MASTER_CLOCK_PROJECT_DIR: &str = "master-clock";
+const MASTER_CLOCK_TARGET: &str = "x86_64-pc-windows-msvc";
+const MASTER_CLOCK_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MasterClockPackageOptions {
+    /// Build from the explicitly selected local project, or use the known
+    /// sibling `master-clock` project when this is `None`.
+    pub source_directory: Option<PathBuf>,
+    /// Use an already-built executable instead of invoking Cargo.
+    pub executable_override: Option<PathBuf>,
+    pub license: Option<String>,
+    pub provenance: Option<String>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StudioPackageResult {
@@ -33,12 +47,24 @@ struct PackageEntry {
 
 /// Builds the release launcher and Studio, then packages only the known distribution inputs.
 pub fn package_studio(output: Option<&Path>) -> ToolResult<StudioPackageResult> {
-    package_studio_with_launcher(output, None)
+    package_studio_with_options(output, None, MasterClockPackageOptions::default())
 }
 
 pub fn package_studio_with_launcher(
     output: Option<&Path>,
     launcher_override: Option<&Path>,
+) -> ToolResult<StudioPackageResult> {
+    package_studio_with_options(
+        output,
+        launcher_override,
+        MasterClockPackageOptions::default(),
+    )
+}
+
+pub fn package_studio_with_options(
+    output: Option<&Path>,
+    launcher_override: Option<&Path>,
+    master_clock: MasterClockPackageOptions,
 ) -> ToolResult<StudioPackageResult> {
     let root = crate::workspace_root()?;
     let target = target_directory(&root);
@@ -50,10 +76,111 @@ pub fn package_studio_with_launcher(
         .join("release")
         .join(format!("sensor-watch-studio{EXE_SUFFIX}"));
     let launcher = resolve_launcher_artifact(&target.join("release"), launcher_override)?;
-    package_studio_artifacts_with_launcher(&root, &executable, &launcher, output)
+    let tool = if master_clock.is_requested() {
+        Some(prepare_master_clock(&root, &master_clock)?)
+    } else {
+        None
+    };
+    package_studio_artifacts_with_launcher_and_master_clock(
+        &root,
+        &executable,
+        &launcher,
+        output,
+        tool,
+    )
+}
+
+impl MasterClockPackageOptions {
+    fn is_requested(&self) -> bool {
+        self.source_directory.is_some()
+            || self.executable_override.is_some()
+            || self.license.is_some()
+            || self.provenance.is_some()
+    }
 }
 
 const LAUNCHER_BUILD_TIMEOUT: Duration = Duration::from_secs(10 * 60);
+
+#[derive(Debug, Clone)]
+struct PreparedMasterClock {
+    executable: PathBuf,
+    sha256: String,
+    license: String,
+    provenance: String,
+}
+
+fn prepare_master_clock(
+    root: &Path,
+    options: &MasterClockPackageOptions,
+) -> ToolResult<PreparedMasterClock> {
+    let license = options
+        .license
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Master Clock was requested but license metadata is unavailable; provide --master-clock-license".to_string())?
+        .to_owned();
+    let provenance = options
+        .provenance
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| "Master Clock was requested but provenance metadata is unavailable; provide --master-clock-provenance".to_string())?
+        .to_owned();
+    let executable = if let Some(override_path) = options.executable_override.as_deref() {
+        validate_master_clock_executable(override_path)?
+    } else {
+        let source = options.source_directory.clone().unwrap_or_else(|| {
+            root.parent()
+                .and_then(Path::parent)
+                .unwrap_or(root)
+                .join(MASTER_CLOCK_PROJECT_DIR)
+        });
+        let source = source
+            .canonicalize()
+            .map_err(|e| format!("Master Clock source is unavailable at {}: {e}; provide --master-clock-exe or --master-clock-source", source.display()))?;
+        require_directory(&source, "Master Clock source directory")?;
+        regular_file(&source.join("Cargo.toml"), "Master Clock Cargo manifest")?;
+        require_directory(&source.join("src"), "Master Clock source tree")?;
+        let manifest = source.join("Cargo.toml");
+        let target_directory = source.join("target");
+        let mut command = Command::new("cargo");
+        command
+            .args(["build", "--manifest-path"])
+            .arg(manifest)
+            .args(["--target", MASTER_CLOCK_TARGET, "--release", "--target-dir"])
+            .arg(target_directory);
+        bounded_status(&mut command, "Master Clock", MASTER_CLOCK_BUILD_TIMEOUT)?;
+        validate_master_clock_executable(
+            &source
+                .join("target")
+                .join(MASTER_CLOCK_TARGET)
+                .join("release")
+                .join("master-clock.exe"),
+        )?
+    };
+    let bytes = fs::read(&executable)
+        .map_err(|e| format!("cannot read validated Master Clock executable: {e}"))?;
+    Ok(PreparedMasterClock {
+        executable,
+        sha256: digest(&bytes),
+        license,
+        provenance,
+    })
+}
+
+fn validate_master_clock_executable(path: &Path) -> ToolResult<PathBuf> {
+    let path = regular_file(path, "Master Clock executable override")?
+        .canonicalize()
+        .map_err(|e| format!("cannot resolve Master Clock executable: {e}"))?;
+    if path.file_name().and_then(|name| name.to_str()) != Some("master-clock.exe") {
+        return Err("Master Clock executable must be named master-clock.exe".into());
+    }
+    let metadata =
+        fs::metadata(&path).map_err(|e| format!("cannot inspect Master Clock executable: {e}"))?;
+    if metadata.len() == 0 || metadata.len() > MAX_FILE_BYTES {
+        return Err("Master Clock executable must be a non-empty regular file within the package file limit".into());
+    }
+    Ok(path)
+}
 
 fn build_release_artifact(root: &Path, package: &str, label: &str) -> ToolResult<()> {
     let mut command = Command::new("cargo");
@@ -129,6 +256,18 @@ pub fn package_studio_artifacts_with_launcher(
     launcher: &Path,
     output: Option<&Path>,
 ) -> ToolResult<StudioPackageResult> {
+    package_studio_artifacts_with_launcher_and_master_clock(
+        root, executable, launcher, output, None,
+    )
+}
+
+fn package_studio_artifacts_with_launcher_and_master_clock(
+    root: &Path,
+    executable: &Path,
+    launcher: &Path,
+    output: Option<&Path>,
+    master_clock: Option<PreparedMasterClock>,
+) -> ToolResult<StudioPackageResult> {
     let root = root
         .canonicalize()
         .map_err(|e| format!("cannot resolve workspace root: {e}"))?;
@@ -175,6 +314,12 @@ pub fn package_studio_artifacts_with_launcher(
         format!("{package_directory}/sensor-watch-studio-launcher{EXE_SUFFIX}"),
         launcher,
     ));
+    if let Some(tool) = master_clock.as_ref() {
+        files.push((
+            format!("{package_directory}/tools/master-clock.exe"),
+            tool.executable.clone(),
+        ));
+    }
     add_tree(
         &mut files,
         &resources,
@@ -214,10 +359,13 @@ pub fn package_studio_artifacts_with_launcher(
         "firmware_project_directory": "firmware",
         "tools_directory": "tools",
         "targets_directory": "targets",
-        // Deliberately absent: the unlicensed/untracked Master Clock source is
-        // never bundled by the package builder. A separately licensed artifact
-        // may be declared by a trusted package manifest.
-        "master_clock": null,
+        "master_clock": master_clock.as_ref().map(|tool| json!({
+            "path": "tools/master-clock.exe",
+            "sha256": tool.sha256,
+            "signature": null,
+            "license": tool.license,
+            "provenance": tool.provenance
+        })),
         "user_data_directory": "(platform user-data directory; not included)",
         "capability_manifest": "PACKAGE-CAPABILITIES.json",
         "update_policy": "updates/update-policy.json",
@@ -234,7 +382,16 @@ pub fn package_studio_artifacts_with_launcher(
             "launcher": { "available": true, "path": format!("sensor-watch-studio-launcher{EXE_SUFFIX}") },
             "versioned_app": { "available": true, "path": format!("{app_directory}/studio{EXE_SUFFIX}") },
             "resources": { "available": true, "path": "resources" },
-            "master_clock": { "available": false, "path": "tools/master-clock.exe", "reason": "not bundled; provenance and licensing required" },
+            "master_clock": master_clock.as_ref().map(|tool| json!({
+                "available": true,
+                "path": "tools/master-clock.exe",
+                "sha256": tool.sha256,
+                "validation": "hash-validated regular file before packaging",
+                "license": tool.license,
+                "provenance": tool.provenance,
+                "launch_policy": "on-demand; Advanced-only; package-local validated executable",
+                "external_activity": "may contact NTP/geolocation services and inspect system state; Windows time changes only through the tool's explicit control"
+            })).unwrap_or_else(|| json!({ "available": false, "path": "tools/master-clock.exe", "reason": "optional; not requested" })),
             "templates": { "available": true, "path": "templates" },
             "firmware_project": { "available": true, "path": "firmware" },
             "tools": { "available": false, "path": "tools", "reason": "not bundled by this builder" },
@@ -270,7 +427,11 @@ pub fn package_studio_artifacts_with_launcher(
             .unwrap();
     let previous_pointer = b"{\n  \"version\": null,\n  \"app_directory\": null\n}\n".to_vec();
     let generated_inputs_readme = b"Generated-input schemas and examples are package documentation only.\nRuntime-generated inputs and build outputs belong in user-data.\n";
-    let tools_readme = b"Optional tool capabilities are not bundled by this package.\n";
+    let tools_readme = if master_clock.is_some() {
+        b"Master Clock is optional, package-local, hash-validated, and launches only on explicit Advanced-mode request. It may perform external NTP/geolocation and system activity; it can change Windows time only through its own explicit control.\n".as_slice()
+    } else {
+        b"Optional tool capabilities are not bundled by this package.\n".as_slice()
+    };
     let targets_readme = b"Optional target capabilities are not bundled by this package.\n";
     let readme = format!(
         "Sensor-Watch Studio {version}\n\nCanonical package layout:\n  sensor-watch-studio-launcher{EXE_SUFFIX}\n  versions/{version}/studio{EXE_SUFFIX}\n  versions/current.json and versions/previous.json\n  firmware/, generated-inputs/, resources/, templates/, tools/, targets/\n  updates/ and release/\n\nThe launcher is the only supported entry point. It owns startup markers,\nverification, and current/previous version selection. Mutable settings,\nprojects, logs, and update state stay outside this ZIP in platform user data.\n\nSigned-release metadata is a placeholder and must be replaced before publishing.\nPACKAGE-MANIFEST.json covers every other packaged file; its own entry is excluded\nby the explicit self_entry rule.\n"
@@ -862,6 +1023,69 @@ mod tests {
         assert!(!names.iter().any(|name| name.contains("user-data")));
         assert!(!names.iter().any(|name| name.contains("out.zip")));
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn optional_master_clock_is_hash_manifested_and_packaged() {
+        let (root, executable) = fixture("master-clock-included");
+        let tool = root.join("master-clock.exe");
+        fs::write(&tool, b"master-clock-windows-release").unwrap();
+        let prepared = PreparedMasterClock {
+            executable: tool.clone(),
+            sha256: digest(b"master-clock-windows-release"),
+            license: "MIT OR Apache-2.0".into(),
+            provenance: "local master-clock project; explicit package request".into(),
+        };
+        let output = root.join("out.zip");
+        package_studio_artifacts_with_launcher_and_master_clock(
+            &root,
+            &executable,
+            &root.join("target/release/sensor-watch-studio-launcher.exe"),
+            Some(&output),
+            Some(prepared),
+        )
+        .unwrap();
+        let names = zip_names(&output);
+        assert!(
+            names
+                .iter()
+                .any(|name| name.ends_with("/tools/master-clock.exe"))
+        );
+        let manifest = zip_text(
+            &output,
+            "sensor-watch-studio-9.8.7/sensor-watch-package.json",
+        );
+        assert!(manifest.contains("tools/master-clock.exe"));
+        assert!(manifest.contains("local master-clock project"));
+        let capabilities = zip_text(
+            &output,
+            "sensor-watch-studio-9.8.7/PACKAGE-CAPABILITIES.json",
+        );
+        assert!(capabilities.contains("hash-validated"));
+        assert!(capabilities.contains("external_activity"));
+        let entries = zip_text(&output, "sensor-watch-studio-9.8.7/PACKAGE-MANIFEST.json");
+        assert!(entries.contains("tools/master-clock.exe"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn optional_master_clock_request_requires_provenance_and_license() {
+        let (root, _) = fixture("master-clock-metadata");
+        let error = prepare_master_clock(
+            &root,
+            &MasterClockPackageOptions {
+                executable_override: Some(root.join("target/release/sensor-watch-studio.exe")),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+        assert!(error.contains("license metadata"));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn optional_master_clock_omission_is_not_a_package_error() {
+        assert!(!MasterClockPackageOptions::default().is_requested());
     }
 
     #[test]
