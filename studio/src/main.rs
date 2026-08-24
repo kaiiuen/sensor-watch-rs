@@ -45,6 +45,7 @@ mod storage;
 mod sysstats;
 mod test_runtime;
 mod theme;
+pub mod trace;
 mod transport;
 pub mod update;
 mod watch_config;
@@ -155,6 +156,10 @@ struct StudioApp {
     shutting_down: bool,
     /// The handle to the background build thread.
     pending_build: Option<std::thread::JoinHandle<build::BuildResult>>,
+    /// Durable structured operation traces; Terminal remains intentionally separate.
+    trace_store: Option<trace::TraceStore>,
+    /// The operation currently rendered by Debug Output, when one exists.
+    selected_trace: Option<trace::LoadedTrace>,
     /// A pending explicit UF2 inspection worker.
     pending_inspection: Option<std::thread::JoinHandle<Result<build::ArtifactInspection, String>>>,
     /// A cached watch-drive detection result; detection never runs while rendering.
@@ -1177,6 +1182,8 @@ impl Default for StudioApp {
             faces_log: debug::DebugLog::new(),
             sim_log: debug::DebugLog::new(),
             catalog_search: String::new(),
+            trace_store: trace::TraceStore::new(test_runtime::active().root).ok(),
+            selected_trace: None,
             catalog_category: String::new(),
             file_browser: file_browser::FileBrowser::new(),
             board: Board::Green,
@@ -6388,6 +6395,33 @@ impl StudioApp {
     fn debug(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(tr(self.language, Key::DebugOutput));
+            if ui.button("Reload trace").clicked() {
+                self.selected_trace = self
+                    .trace_store
+                    .as_ref()
+                    .and_then(|store| store.list().ok())
+                    .and_then(|mut traces| traces.pop());
+            }
+            if let (Some(store), Some(selected)) = (&self.trace_store, &self.selected_trace) {
+                if ui.button("Export trace JSONL").clicked() {
+                    let destination = test_runtime::active().root.join("trace-export.jsonl");
+                    match store.export_jsonl(&selected.operation_id, &destination) {
+                        Ok(()) => {
+                            self.status = format!("Trace exported to {}", destination.display())
+                        }
+                        Err(error) => self.status = format!("Trace export failed: {error}"),
+                    }
+                }
+                if ui.button("Export trace text").clicked() {
+                    let destination = test_runtime::active().root.join("trace-export.txt");
+                    match store.export_text(&selected.operation_id, &destination) {
+                        Ok(()) => {
+                            self.status = format!("Trace exported to {}", destination.display())
+                        }
+                        Err(error) => self.status = format!("Trace export failed: {error}"),
+                    }
+                }
+            }
             ui.label("Ticks:");
             self.tick_filter_ui(ui, "debug_tick_filter");
             let log_response = ui.label("Debug log");
@@ -6428,6 +6462,49 @@ impl StudioApp {
                 }
             }
         });
+        if let Some(selected) = &self.selected_trace {
+            ui.label(format!(
+                "Structured trace {} ({} records)",
+                selected.operation_id,
+                selected.records.len()
+            ));
+            egui::ScrollArea::vertical()
+                .max_height(180.0)
+                .show(ui, |ui| {
+                    egui::Grid::new("structured_trace_grid")
+                        .striped(true)
+                        .spacing([8.0, 2.0])
+                        .num_columns(9)
+                        .show(ui, |ui| {
+                            for heading in [
+                                "Seq",
+                                "Timestamp",
+                                "Elapsed",
+                                "Kind",
+                                "Phase",
+                                "Severity",
+                                "Origin",
+                                "Source",
+                                "Message",
+                            ] {
+                                ui.strong(heading);
+                            }
+                            ui.end_row();
+                            for record in &selected.records {
+                                ui.monospace(record.sequence.to_string());
+                                ui.monospace(record.timestamp_ms.to_string());
+                                ui.monospace(format!("{} ms", record.elapsed_ms));
+                                ui.label(format!("{:?}", record.operation_kind));
+                                ui.label(format!("{:?}", record.phase));
+                                ui.label(format!("{:?}", record.severity));
+                                ui.label(record.origin.label());
+                                ui.monospace(&record.source);
+                                ui.monospace(&record.message);
+                                ui.end_row();
+                            }
+                        });
+                });
+        }
         ui.separator();
         egui::ScrollArea::vertical()
             .auto_shrink([false, false])
