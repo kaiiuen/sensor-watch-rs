@@ -70,6 +70,9 @@ use watch_sim::CasioF91W;
 
 /// The main application state.
 const SIM_WEEKDAY_NAMES: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SIMULATOR_CONTROLLER_LABEL: &str = "Controller";
+const SIMULATED_SENSOR_INPUTS_LABEL: &str = "Simulated sensor inputs";
+const SIMULATED_VALUES_WARNING: &str = "SIMULATED VALUES ONLY - not physical readings";
 
 fn clamp_sim_weekday(weekday: usize) -> usize {
     weekday.min(SIM_WEEKDAY_NAMES.len() - 1)
@@ -333,6 +336,10 @@ struct StudioApp {
     sim_face_idx: usize,
     /// Simulator date controller: year, month, day, hour, minute, weekday.
     sim_year: i32,
+    sim_voltage_mv: u16,
+    sim_voltage_enabled: bool,
+    sim_temperature_celsius: f32,
+    sim_temperature_enabled: bool,
     sim_month: u32,
     sim_day: u32,
     sim_hour: u32,
@@ -1110,6 +1117,10 @@ impl Default for StudioApp {
             sim_last_tick: std::time::Instant::now(),
             watch_renderer: watch_display::WatchRenderer::new(),
             sim_scale: 0.5,
+            sim_voltage_mv: 3000,
+            sim_voltage_enabled: false,
+            sim_temperature_celsius: 25.0,
+            sim_temperature_enabled: false,
             presets: PresetManager::new(),
             selected_face: None,
             selected_preset_face: None,
@@ -7150,6 +7161,13 @@ impl StudioApp {
         );
     }
 
+    fn reset_sim_sensor_inputs(&mut self) {
+        self.sim_voltage_mv = 3000;
+        self.sim_voltage_enabled = false;
+        self.sim_temperature_celsius = 25.0;
+        self.sim_temperature_enabled = false;
+    }
+
     /// The simulator panel: render the watch and handle its buttons.
     fn simulator(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
         ui.label(
@@ -7258,7 +7276,7 @@ impl StudioApp {
 
                 // Date/time controller: set the simulated display without tedious
                 // button mashing.
-                let date_response = ui.collapsing("Date / time controller (PC local)", |ui| {
+                let date_response = ui.collapsing(SIMULATOR_CONTROLLER_LABEL, |ui| {
                     ui.weak("Reset to now uses the host PC's local civil time. Apply date/time stays deterministic and is not timezone-converted.");
                     egui::Grid::new("sim_date_grid")
                         .spacing([12.0, 6.0])
@@ -7339,6 +7357,21 @@ impl StudioApp {
                         }
                     });
                     ui.separator();
+                    egui::CollapsingHeader::new(SIMULATED_SENSOR_INPUTS_LABEL)
+                        .default_open(false)
+                        .show(ui, |ui| {
+                            ui.colored_label(colors.warning, SIMULATED_VALUES_WARNING);
+                            ui.weak("These values affect only the host simulator seam. Firmware hardware behavior is unchanged.");
+                            ui.checkbox(&mut self.sim_voltage_enabled, "Enable battery voltage override");
+                            ui.add_enabled(self.sim_voltage_enabled, egui::DragValue::new(&mut self.sim_voltage_mv).clamp_range(0..=6000).suffix(" mV"));
+                            ui.checkbox(&mut self.sim_temperature_enabled, "Enable temperature override");
+                            ui.add_enabled(self.sim_temperature_enabled, egui::DragValue::new(&mut self.sim_temperature_celsius).clamp_range(-40.0..=125.0).speed(0.1).suffix(" C"));
+                            if ui.button("Reset sensor inputs").clicked() {
+                                self.reset_sim_sensor_inputs();
+                                self.sim_log.log("Reset simulated sensor inputs to defaults (disabled)".to_string());
+                            }
+                            ui.weak("Default: disabled; temperature is unavailable.");
+                        });
                 });
                 self.register_anchor(
                     Panel::Simulator,
@@ -7483,6 +7516,11 @@ impl StudioApp {
         // Pass the selected civil fields through unchanged. The firmware seam
         // validates its supported 2020-2083 RTC range and declines invalid edits.
         let real_result = self.real_face.as_mut().map(|real| {
+            real.set_sensor_overrides(
+                self.sim_voltage_enabled.then_some(self.sim_voltage_mv),
+                self.sim_temperature_enabled
+                    .then_some(self.sim_temperature_celsius),
+            );
             let valid_time =
                 real.set_time(t_year as u32, t_month, t_day, t_hour, t_minute, t_second);
             let face_name = real.face_name().to_string();
@@ -11876,6 +11914,40 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn simulator_controller_labels_and_warning_are_explicit() {
+        assert_eq!(super::SIMULATOR_CONTROLLER_LABEL, "Controller");
+        assert_eq!(
+            super::SIMULATED_SENSOR_INPUTS_LABEL,
+            "Simulated sensor inputs"
+        );
+        assert!(super::SIMULATED_VALUES_WARNING.contains("SIMULATED VALUES ONLY"));
+        assert!(super::SIMULATED_VALUES_WARNING.contains("not physical readings"));
+    }
+
+    #[test]
+    fn simulator_sensor_overrides_default_disabled_and_reset() {
+        let mut app = super::StudioApp::default();
+        assert!(!app.sim_voltage_enabled);
+        assert!(!app.sim_temperature_enabled);
+        app.sim_voltage_enabled = true;
+        app.sim_voltage_mv = 1800;
+        app.sim_temperature_enabled = true;
+        app.sim_temperature_celsius = -10.0;
+        app.reset_sim_sensor_inputs();
+        assert_eq!(app.sim_voltage_mv, 3000);
+        assert!(!app.sim_voltage_enabled);
+        assert_eq!(app.sim_temperature_celsius, 25.0);
+        assert!(!app.sim_temperature_enabled);
+    }
+
+    #[test]
+    fn diagnostics_mode_remains_simulated() {
+        let mut diagnostics = super::diagnostics::DiagnosticsState::new();
+        diagnostics.finish("simulated");
+        assert!(diagnostics.last_report.contains("Mode: simulated"));
+    }
+
     #[test]
     fn startup_face_count_wording_is_truthful() {
         let faces = vec![

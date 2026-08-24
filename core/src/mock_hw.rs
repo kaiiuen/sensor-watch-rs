@@ -115,6 +115,9 @@ pub trait Hw {
     }
     /// Returns an approximate VCC in millivolts (`watch::adc::get_vcc_voltage`).
     fn get_vcc_voltage(&mut self) -> u16;
+    fn get_thermistor_temperature_celsius(&mut self) -> Option<f32> {
+        None
+    }
     fn get_analog_pin_level(&mut self, _pin: (u8, u8)) -> u16 {
         0
     }
@@ -210,6 +213,7 @@ pub struct MockHw {
     pub opt3001_result: Option<u16>,
     /// Raw 16-bit thermistor ADC sample; zero means no sensor.
     pub thermistor_raw: u16,
+    pub thermistor_temperature_celsius: Option<f32>,
     /// Per-backend host scheduler state.
     pub background_tasks: BackgroundTaskRegistry,
 }
@@ -239,6 +243,7 @@ impl Default for MockHw {
             led_color: (0, 0),
             opt3001_result: None,
             thermistor_raw: 0,
+            thermistor_temperature_celsius: None,
             background_tasks: BackgroundTaskRegistry::new(),
         }
     }
@@ -349,6 +354,9 @@ impl Hw for MockHw {
     }
     fn get_vcc_voltage(&mut self) -> u16 {
         self.vcc_mv
+    }
+    fn get_thermistor_temperature_celsius(&mut self) -> Option<f32> {
+        self.thermistor_temperature_celsius
     }
     fn schedule_background_task_for_face(&mut self, face_index: usize, date_time: DateTime) {
         self.background_tasks

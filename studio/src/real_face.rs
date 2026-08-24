@@ -495,6 +495,16 @@ impl RealFace {
         })
     }
 
+    /// Applies simulator-only sensor values to the host mock.
+    pub fn set_sensor_overrides(
+        &mut self,
+        voltage_mv: Option<u16>,
+        temperature_celsius: Option<f32>,
+    ) {
+        self.mock.vcc_mv = voltage_mv.unwrap_or(3000);
+        self.mock.thermistor_temperature_celsius = temperature_celsius;
+    }
+
     /// Sets the mock's RTC clock to the given wall-clock date/time.
     pub fn set_time(
         &mut self,
@@ -1138,6 +1148,12 @@ pub struct RealFace {
 impl RealFace {
     pub fn new(_face_name: &str) -> Option<RealFace> {
         None
+    }
+    pub fn set_sensor_overrides(
+        &mut self,
+        _voltage_mv: Option<u16>,
+        _temperature_celsius: Option<f32>,
+    ) {
     }
     pub fn set_time(&mut self, _y: u32, _mo: u32, _d: u32, _h: u32, _mi: u32, _s: u32) -> bool {
         false
