@@ -7,6 +7,16 @@ pub const REAL_FACE_COUNT: usize = 108;
 #[allow(dead_code)]
 pub const APPROXIMATION_FACE_COUNT: usize = 3;
 
+/// The compact summary remains visible when the details are collapsed.
+#[cfg(feature = "real-faces")]
+pub const SUMMARY: &str = "108 real faces, 3 approximated faces";
+
+#[cfg(not(feature = "real-faces"))]
+pub const SUMMARY: &str = "0 real faces, 111 approximated faces";
+
+/// Keep this closed so provenance does not consume simulator viewport space.
+pub const DEFAULT_OPEN: bool = false;
+
 #[cfg(feature = "real-faces")]
 pub const STATUS: &str = "Simulation provenance: default real-faces runs 108 of 111 faces from the actual firmware face source files through translated host movement and HAL seams with MockHw. The other 3 faces use the separate face_sim approximation.";
 

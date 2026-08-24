@@ -182,8 +182,8 @@ struct StudioApp {
     flash_worker_state: flash::WorkerState,
     /// The last build result message.
     build_message: String,
-    /// Whether the post-build UF2 guidance banner is visible.
-    build_success_notice: bool,
+    /// Durable visibility state for the current verified build artifact.
+    build_success_notice: BuildSuccessNotice,
     /// Whether the UF2 flashing explanation dialog is open.
     uf2_info_open: bool,
     /// The explicitly approved artifact and the metadata verified at approval time.
@@ -1089,7 +1089,7 @@ impl Default for StudioApp {
             next_operation_id: 1,
             flash_worker_state: flash::WorkerState::Idle,
             build_message: String::new(),
-            build_success_notice: false,
+            build_success_notice: BuildSuccessNotice::default(),
             uf2_info_open: false,
             approved_artifact: initial_flashable_uf2(),
             artifact_path_input: String::new(),
@@ -1471,6 +1471,7 @@ impl eframe::App for StudioApp {
                             } else {
                                 match verified_artifact_after_build(&result) {
                                     Ok(inspection) => {
+                                        let artifact_sha256 = inspection.sha256.clone();
                                         set_verified_artifact_state(
                                             &mut self.status,
                                             &mut self.build_message,
@@ -1482,8 +1483,7 @@ impl eframe::App for StudioApp {
                                         self.pending_artifact_fingerprint =
                                             Some(current_fingerprint);
                                         self.build_estimator_state = BuildEstimatorState::Verified;
-                                        self.build_success_notice =
-                                            should_show_build_success_notice(true, true);
+                                        self.build_success_notice.verified(&artifact_sha256);
                                         self.last_build_time = Some(
                                             std::time::SystemTime::now()
                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -1527,7 +1527,7 @@ impl eframe::App for StudioApp {
                                 }
                             }
                         } else {
-                            self.build_success_notice = false;
+                            self.build_success_notice.reset();
                             self.status = format!("Build failed:\n{}", result.message);
                             self.build_estimator_state =
                                 BuildEstimatorState::Failed(result.message.clone());
@@ -1543,7 +1543,7 @@ impl eframe::App for StudioApp {
                         }
                     }
                     Err(_) => {
-                        self.build_success_notice = false;
+                        self.build_success_notice.reset();
                         self.building = false;
                         self.build_message =
                             tr(self.language, Key::BuildThreadPanicked).to_string();
@@ -3427,7 +3427,7 @@ impl StudioApp {
                 return;
             }
         };
-        self.build_success_notice = false;
+        self.build_success_notice.reset();
         self.log.log("Starting firmware build");
         self.push_terminal("Output write: starting firmware build");
         if self.reset_test_session_on_compile {
@@ -4832,7 +4832,7 @@ impl StudioApp {
             .show(ui, |ui| {
                 let colors = semantic(ui);
                 ui.heading("Build & Flash");
-                if self.build_success_notice {
+                if self.build_success_notice.is_visible() {
                     egui::Frame::group(ui.style())
                         .fill(colors.surface)
                         .stroke(egui::Stroke::new(1.0_f32, colors.success))
@@ -4844,7 +4844,7 @@ impl StudioApp {
                                     open_uf2_info(&mut self.uf2_info_open);
                                 }
                                 if ui.button("Dismiss").clicked() {
-                                    dismiss_build_success_notice(&mut self.build_success_notice);
+                                    self.build_success_notice.dismiss();
                                 }
                             });
                         });
@@ -7150,10 +7150,6 @@ impl StudioApp {
              settings configured in the Watch Faces tab.",
         );
         ui.separator();
-        ui.heading("Simulation provenance");
-        ui.label(sim_provenance::STATUS);
-        ui.weak(sim_provenance::LIMITATIONS);
-        ui.separator();
 
         // The simulator body can be taller than the window (especially with the
         // date controller, debug log, and a large watch rendering all expanded),
@@ -7163,6 +7159,15 @@ impl StudioApp {
         egui::ScrollArea::both()
             .auto_shrink([false, false])
             .show(ui, |ui| {
+                let colors = semantic(ui);
+                egui::CollapsingHeader::new("Simulation provenance")
+                    .default_open(sim_provenance::DEFAULT_OPEN)
+                    .show(ui, |ui| {
+                        ui.colored_label(colors.info, sim_provenance::SUMMARY);
+                        ui.colored_label(colors.secondary_text, sim_provenance::STATUS);
+                        ui.colored_label(colors.warning, sim_provenance::LIMITATIONS);
+                    });
+                ui.separator();
                 let watch_response = ui.label("Watch preview");
                 self.register_anchor(Panel::Simulator, AnchorId::SimulatorWatch, &watch_response);
                 ui.horizontal(|ui| {
@@ -11398,12 +11403,32 @@ fn verified_artifact_after_build(
 
 const UF2_FLASHING_INFO: &str = "A UF2 has two sizes: the logical payload is the firmware bytes written to flash, while the UF2 container is larger because each 256-byte payload is wrapped in a 512-byte block with headers, padding, and an end marker.\n\nThe SAM L22J18A has 256 KiB of flash: the bootloader uses 0x00000000..0x00002000, the application uses 0x00002000..0x0003C000 (232 KiB), and RWW EEPROM emulation uses 0x0003C000..0x00040000. The application must fit in its region; the remaining margin is payload headroom, not UF2 file headroom.\n\nThe watch exposes a virtual UF2 bootloader drive over USB. Its reported capacity is mass-storage geometry, not the SAM L22 flash capacity. Copy the intended .uf2 to that drive and eject normally.\n\nThe .uf2.json manifest and .json.sig sidecar stay on the host. They record local metadata and digests for Studio and host tools; they are not part of the UF2 stream and are not copied to flash.\n\nCopy and host-side verification establish artifact consistency only. They are not hardware validation and do not prove that the watch was programmed, that its bootloader is healthy, or that the firmware works on the device.";
 
-fn should_show_build_success_notice(build_succeeded: bool, artifact_verified: bool) -> bool {
-    build_succeeded && artifact_verified
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct BuildSuccessNotice {
+    artifact_sha256: Option<String>,
+    dismissed: bool,
 }
 
-fn dismiss_build_success_notice(notice: &mut bool) {
-    *notice = false;
+impl BuildSuccessNotice {
+    fn reset(&mut self) {
+        self.artifact_sha256 = None;
+        self.dismissed = false;
+    }
+
+    fn verified(&mut self, artifact_sha256: &str) {
+        if self.artifact_sha256.as_deref() != Some(artifact_sha256) {
+            self.artifact_sha256 = Some(artifact_sha256.to_string());
+            self.dismissed = false;
+        }
+    }
+
+    fn is_visible(&self) -> bool {
+        self.artifact_sha256.is_some() && !self.dismissed
+    }
+
+    fn dismiss(&mut self) {
+        self.dismissed = true;
+    }
 }
 
 fn open_uf2_info(info_open: &mut bool) {
@@ -13215,21 +13240,50 @@ mod tests {
     }
 
     #[test]
-    fn successful_build_shows_notice_but_failure_does_not() {
-        assert!(super::should_show_build_success_notice(true, true));
-        assert!(!super::should_show_build_success_notice(false, true));
-        assert!(!super::should_show_build_success_notice(true, false));
+    fn build_notice_is_hidden_until_verified_and_dismissal_is_durable() {
+        let mut notice = super::BuildSuccessNotice::default();
+        assert!(!notice.is_visible());
+
+        notice.verified("artifact-a");
+        assert!(notice.is_visible());
+        notice.dismiss();
+        assert!(!notice.is_visible());
+        assert!(!notice.is_visible());
     }
 
     #[test]
-    fn build_notice_can_be_dismissed_and_info_can_be_reopened() {
-        let mut notice = true;
-        super::dismiss_build_success_notice(&mut notice);
-        assert!(!notice);
+    fn build_notice_resets_for_new_build_or_new_artifact() {
+        let mut notice = super::BuildSuccessNotice::default();
+        notice.verified("artifact-a");
+        notice.dismiss();
+        notice.verified("artifact-a");
+        assert!(!notice.is_visible());
 
+        notice.verified("artifact-b");
+        assert!(notice.is_visible());
+        notice.dismiss();
+        notice.reset();
+        assert!(!notice.is_visible());
+        notice.verified("artifact-c");
+        assert!(notice.is_visible());
+    }
+
+    #[test]
+    fn uf2_info_dialog_can_be_reopened_after_closing() {
         let mut info_open = false;
         super::open_uf2_info(&mut info_open);
         assert!(info_open);
+        info_open = false;
+        super::open_uf2_info(&mut info_open);
+        assert!(info_open);
+    }
+
+    #[test]
+    fn provenance_header_is_closed_by_default_and_expands_details() {
+        assert!(!super::sim_provenance::DEFAULT_OPEN);
+        assert!(super::sim_provenance::SUMMARY.contains("faces"));
+        assert!(super::sim_provenance::STATUS.contains("Simulation provenance"));
+        assert!(super::sim_provenance::LIMITATIONS.contains("not full ARM"));
     }
 
     #[test]
