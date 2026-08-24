@@ -15,6 +15,7 @@ rewrite in Rust.
 | [COVERAGE_AUDIT.md](COVERAGE_AUDIT.md) | Current host test counts, feature-gate combinations, integration failures, and unvalidated boundaries. |
 | [BACKBURNER.md](BACKBURNER.md) | Unfinished work reserved for future implementation. |
 | [HARDWARE_ACCESS.md](HARDWARE_ACCESS.md) | How to talk to the board: the USB-is-file-transfer-only constraint, the ROM UF2 bootloader, the UART jig, and the SWD probe. |
+| [FIRMWARE_BUILD_AND_UF2.md](FIRMWARE_BUILD_AND_UF2.md) | Complete firmware build, flash layout, UF2 structure, virtual bootloader drive, and validation limits. |
 | [DEVELOPER_DEBUGGING.md](DEVELOPER_DEBUGGING.md) | Optional on-silicon debugging via SWD / probe-rs for developers with bench hardware. |
 | [USB_CDC.md](USB_CDC.md) | Native CDC status: feasible in principle, but currently scaffolding only. |
 | [RECOVERY.md](RECOVERY.md) | Host-side UF2 validation, backup, and rollback staging, no device-side dual boot. |
