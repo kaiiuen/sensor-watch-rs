@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::path::{Component, Path, PathBuf};
 
 pub const MAX_TEXT_BYTES: u64 = 512 * 1024;
+pub const MAX_MARKDOWN_BYTES: u64 = 512 * 1024;
 pub const MAX_SEARCH_DEPTH: usize = 12;
 pub const MAX_SEARCH_ENTRIES: usize = 4096;
 
@@ -281,6 +282,39 @@ impl Policy {
                 .any(|root| same_or_below(path, root))
     }
 
+    pub fn read_markdown(&self, kind: RootKind, relative: &Path) -> Result<String, PolicyError> {
+        if relative
+            .extension()
+            .is_none_or(|extension| extension != "md")
+        {
+            return Err(PolicyError::NotText);
+        }
+        let source = self.read_text(kind, relative)?;
+        if source.len() as u64 > MAX_MARKDOWN_BYTES {
+            return Err(PolicyError::TooLarge);
+        }
+        Ok(source)
+    }
+
+    pub fn write_markdown(
+        &self,
+        kind: RootKind,
+        relative: &Path,
+        contents: &str,
+        expected: Option<&str>,
+    ) -> Result<(), PolicyError> {
+        if relative
+            .extension()
+            .is_none_or(|extension| extension != "md")
+        {
+            return Err(PolicyError::NotText);
+        }
+        if contents.len() as u64 > MAX_MARKDOWN_BYTES {
+            return Err(PolicyError::TooLarge);
+        }
+        self.write_text(kind, relative, contents, expected)
+    }
+
     pub fn read_text(&self, kind: RootKind, relative: &Path) -> Result<String, PolicyError> {
         let path = self.resolve_existing(kind, relative, false)?;
         let meta = fs::symlink_metadata(&path)?;
@@ -523,6 +557,7 @@ fn is_reparse(_: &fs::Metadata) -> bool {
 
 fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let temp = path.with_extension("studio-writing");
+    let backup = path.with_extension("studio-previous");
     let mut file = fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -530,7 +565,23 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     file.write_all(bytes)?;
     file.sync_all()?;
     drop(file);
-    fs::rename(temp, path)
+    if path.exists() {
+        if backup.exists() {
+            fs::remove_file(&backup)?;
+        }
+        fs::rename(path, &backup)?;
+    }
+    if let Err(error) = fs::rename(&temp, path) {
+        if backup.exists() {
+            let _ = fs::rename(&backup, path);
+        }
+        let _ = fs::remove_file(&temp);
+        return Err(error);
+    }
+    if backup.exists() {
+        fs::remove_file(backup)?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

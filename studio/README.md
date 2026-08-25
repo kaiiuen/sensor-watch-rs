@@ -25,7 +25,8 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   preview / view code / test-before-adding actions. The catalog and active
   preset are stacked on the left and watch settings on the right, panel sizes
   are persisted and reset proportionally when the window is resized.
-- **File Browser** - a bounded browser for the app-local data root and active mutable project. It supports explicit root selection, parent and breadcrumb navigation, bounded recursive search, sorting, safe UTF-8 editor opening, and confirmation-gated CRUD. Package references, generated outputs, secrets, links, traversal, oversized files, and root mutations are rejected.
+- **Explorer** - a bounded browser for the app-local data root and active mutable project. It never exposes package/version resources, bundled templates, generated outputs, or secrets.
+- **Notepad** - Markdown notes kept under `<app data root>/notes`, categorized as Project, Hardware, Firmware, Build, Testing, Ideas, or Archive. Notes support bounded source editing, optional plain preview, search/category filters, tabs, atomic saves, external-change conflict detection, and confirmation-gated deletion. Note paths are policy-checked and never leave the app-local root.
 - **Editor** - a self-IDE for creating, editing, or deleting watch faces from
   templates, with a collapsible "How to make a watch face" guide and a
   **description** field that shows up in the catalog. The beginner-safe
@@ -74,7 +75,7 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   connected UART is shown separately, but the diagnostic report does not query
   physical hardware automatically. Use the explicit UART Jig path for shell
   observations and an SWD probe for silicon-level debugging.
-- **Debug** - background activity log with Copy All / Export / Clear. Logs
+- **Debug Output** - read-only background activity log with Copy All / Export / Clear. It remains visible in Normal mode. Logs
   auto-scroll to the bottom and honor a configurable line limit.
 - **Bugs** - dedicated error/warning log, plus a **Generate bug report** button
   that copies a structured report (app state + recent errors/activity) to the
@@ -112,6 +113,8 @@ build before filesystem, Cargo, or UF2 side effects. No pin assignments are
 inferred or claimed by the current UI.
 
 ## Advanced and Probe/Test safety
+
+Normal mode presents Dashboard, Explorer, Watch Faces, Notepad, Editor, Simulator, Build & Flash, Settings, and read-only Debug Output. Advanced mode adds Calibration, Modules, Diagnostics, Bugs, and detailed artifact tools. Developer mode is a separate explicit opt-in for Shell, Probe / Test, Terminal, Master Clock, and raw experimental tools. These presentation modes never weaken a hard safeguard.
 
 Studio's normal mode is beginner-safe in the sense that it uses the simulator,
 Blocks editor, and normal UF2 workflow. It does not claim that simulated output
@@ -172,8 +175,9 @@ are `time`, `settime YYMMDDHHMMSS`, `drift N`, `optical`, `panic`, `events`,
 A packaged launch is identified by `sensor-watch-package.json`, whether Studio is
 started by the launcher or directly from `versions/<version>`. Its mutable root
 is exactly `<package root>/data`: settings, runtime preferences, restore
-points, the mutable project, logs and exports, update state, startup markers, and
-launcher state stay below that directory. Firmware build output is separate at
+points, the mutable project, notes, logs and exports, update state, startup markers,
+and launcher state stay below that directory. Notepad uses `<package root>/data/notes`
+with category metadata for each supported category. Firmware build output is separate at
 `<package root>/data/sensor-watch-studio-artifacts/<board>/<revision>/<profile>/latest`.
 Recovery generations are under that artifact root. Immutable version directories
 and bundled templates are never used for mutable writes. Packaged builds copy and

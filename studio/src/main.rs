@@ -29,6 +29,7 @@ mod i18n;
 mod integrity;
 mod master_clock;
 mod modules;
+mod notepad;
 mod ntp;
 mod ntp_catalog;
 mod optical;
@@ -329,6 +330,8 @@ struct StudioApp {
     catalog_category: String,
     /// The read-only workspace file browser.
     file_browser: file_browser::FileBrowser,
+    /// Markdown notes stored below the app-local data root.
+    notepad: notepad::Notepad,
     /// The target board revision (green, red/lite, blue, pro).
     board: Board,
     /// Named hardware component profiles and the editable active draft.
@@ -498,8 +501,10 @@ struct StudioApp {
     restore_store: restore::RestoreStore,
     /// Name input for a manually created restore point.
     restore_name: String,
-    /// Whether Developer Mode tools are visible.
+    /// Whether Advanced mode panels are visible.
     advanced_mode: bool,
+    /// Whether Developer mode tools are visible.
+    developer_mode: bool,
     /// Persisted presentation-only preferences keyed by stable panel name.
     panel_ux_overrides: std::collections::BTreeMap<String, settings::PanelUxOverrides>,
     /// Panel selected in the compact UX override editor.
@@ -663,6 +668,7 @@ enum Panel {
     Debug,
     Bugs,
     FileBrowser,
+    Notepad,
     Wiki,
     Tutorials,
     Settings,
@@ -721,6 +727,7 @@ fn panel_for_help_id(id: HelpId) -> Option<Panel> {
         Panel::Debug,
         Panel::Bugs,
         Panel::FileBrowser,
+        Panel::Notepad,
         Panel::Tutorials,
         Panel::Wiki,
         Panel::Settings,
@@ -731,7 +738,25 @@ fn panel_for_help_id(id: HelpId) -> Option<Panel> {
 }
 
 impl Panel {
-    const ALL: [Self; 16] = [
+    /// Panels are deliberately grouped by user intent. Developer mode is an
+    /// additional opt-in and does not weaken any operation safeguard.
+    fn visible_in(self, advanced: bool, developer: bool) -> bool {
+        match self {
+            Self::Dashboard
+            | Self::FileBrowser
+            | Self::Faces
+            | Self::Notepad
+            | Self::Editor
+            | Self::Simulator
+            | Self::BuildFlash
+            | Self::Settings
+            | Self::Debug => true,
+            Self::Calibration | Self::Modules | Self::Diagnostics | Self::Bugs => advanced,
+            Self::Shell | Self::Probe | Self::Tutorials | Self::Wiki => developer,
+        }
+    }
+
+    const ALL: [Self; 17] = [
         Self::Dashboard,
         Self::Faces,
         Self::Editor,
@@ -744,6 +769,7 @@ impl Panel {
         Self::Debug,
         Self::Bugs,
         Self::FileBrowser,
+        Self::Notepad,
         Self::Tutorials,
         Self::Wiki,
         Self::Settings,
@@ -764,6 +790,7 @@ impl Panel {
             Self::Debug => "debug",
             Self::Bugs => "bugs",
             Self::FileBrowser => "file_browser",
+            Self::Notepad => "notepad",
             Self::Tutorials => "tutorials",
             Self::Wiki => "wiki",
             Self::Settings => "settings",
@@ -785,6 +812,7 @@ impl Panel {
             Panel::Debug => HelpId::DebugOutput,
             Panel::Bugs => HelpId::Bugs,
             Panel::FileBrowser => HelpId::FileBrowser,
+            Panel::Notepad => HelpId::FileBrowser,
             Panel::Tutorials => HelpId::Tutorials,
             Panel::Wiki => HelpId::Wiki,
             Panel::Settings => HelpId::Settings,
@@ -805,7 +833,8 @@ impl Panel {
             Panel::Diagnostics => "Diagnostics",
             Panel::Debug => tr(lang, Key::DebugOutput),
             Panel::Bugs => "Bugs",
-            Panel::FileBrowser => "File Browser",
+            Panel::FileBrowser => "Explorer",
+            Panel::Notepad => "Notepad",
             Panel::Tutorials => tr(lang, Key::Tutorials),
             Panel::Wiki => "Wiki",
             Panel::Settings => tr(lang, Key::Settings),
@@ -1212,6 +1241,7 @@ impl Default for StudioApp {
             selected_trace: None,
             catalog_category: String::new(),
             file_browser: file_browser::FileBrowser::new(),
+            notepad: notepad::Notepad::new(),
             board: Board::Green,
             component_profiles: components::default_profiles(),
             component_profile: 0,
@@ -1280,6 +1310,7 @@ impl Default for StudioApp {
             restore_store: restore::RestoreStore::load(),
             restore_name: String::new(),
             advanced_mode: false,
+            developer_mode: false,
             panel_ux_overrides: std::collections::BTreeMap::new(),
             ux_override_panel: 0,
             advanced_mode_confirm: false,
@@ -1689,6 +1720,7 @@ impl eframe::App for StudioApp {
                         .on_hover_text("Advanced developer controls are visible");
                     if ui.small_button("Normal mode").clicked() {
                         self.advanced_mode = false;
+                        self.developer_mode = false;
                         self.current_panel = Panel::Dashboard;
                         self.save_settings_internal();
                     }
@@ -1818,7 +1850,7 @@ impl eframe::App for StudioApp {
 
         // Terminal panel (collapsible) above the footer. It is intentionally
         // hidden in Normal mode because it exposes protocol and transport tools.
-        if self.advanced_mode && self.panel_ux(self.current_panel).developer_tool_visibility {
+        if self.developer_mode && self.panel_ux(self.current_panel).developer_tool_visibility {
             egui::TopBottomPanel::bottom("terminal")
                 .resizable(true)
                 .default_height(140.0)
@@ -1910,17 +1942,9 @@ impl eframe::App for StudioApp {
 
         // Keep a hidden advanced panel from remaining selected after returning
         // to Normal mode.
-        if !self.advanced_mode
-            && matches!(
-                self.current_panel,
-                Panel::Modules
-                    | Panel::Shell
-                    | Panel::Diagnostics
-                    | Panel::Debug
-                    | Panel::Bugs
-                    | Panel::FileBrowser
-                    | Panel::Probe
-            )
+        if !self
+            .current_panel
+            .visible_in(self.advanced_mode, self.developer_mode)
         {
             self.current_panel = Panel::Dashboard;
         }
@@ -1950,6 +1974,7 @@ impl eframe::App for StudioApp {
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
             Panel::FileBrowser => self.file_browser(ui),
+            Panel::Notepad => self.notepad.ui(ui),
             Panel::Tutorials => self.tutorials(ui),
             Panel::Wiki => self.wiki(ui),
             Panel::Settings => self.settings(ui),
@@ -1987,6 +2012,7 @@ impl eframe::App for StudioApp {
                     ui.horizontal(|ui| {
                         if ui.button("Enable Developer Mode").clicked() {
                             self.advanced_mode = true;
+                            self.developer_mode = true;
                             self.advanced_mode_confirm = false;
                             self.open_tutorial(HelpId::Advanced, false);
                             self.save_settings_internal();
@@ -2161,8 +2187,8 @@ impl eframe::App for StudioApp {
                         }
                     }
                     ConfirmKind::LaunchMasterClock => {
-                        if !self.advanced_mode {
-                            self.status = "Master Clock requires Advanced mode".into();
+                        if !self.developer_mode {
+                            self.status = "Master Clock requires Developer mode".into();
                         } else if self.master_clock_process.is_some() {
                             self.status = "Master Clock is already running".into();
                         } else if let Some(path) = self.master_clock_executable() {
@@ -2180,7 +2206,7 @@ impl eframe::App for StudioApp {
                         }
                     }
                     ConfirmKind::RunPhysicalProbe => {
-                        if self.advanced_mode && self.pending_probe.is_none() {
+                        if self.developer_mode && self.pending_probe.is_none() {
                             let artifact = self
                                 .approved_artifact
                                 .as_ref()
@@ -2748,37 +2774,26 @@ impl StudioApp {
     fn tab_bar(&mut self, ui: &mut egui::Ui) {
         let panels = [
             Panel::Dashboard,
+            Panel::FileBrowser,
             Panel::Faces,
+            Panel::Notepad,
             Panel::Editor,
             Panel::Simulator,
             Panel::BuildFlash,
+            Panel::Settings,
+            Panel::Debug,
             Panel::Calibration,
             Panel::Modules,
-            Panel::Shell,
             Panel::Diagnostics,
-            Panel::Debug,
             Panel::Bugs,
-            Panel::FileBrowser,
+            Panel::Shell,
+            Panel::Probe,
             Panel::Tutorials,
             Panel::Wiki,
-            Panel::Settings,
-            Panel::Probe,
         ];
         let visible: Vec<Panel> = panels
             .into_iter()
-            .filter(|panel| {
-                (self.advanced_mode && self.panel_ux(*panel).advanced_tab_visibility)
-                    || !matches!(
-                        panel,
-                        Panel::Modules
-                            | Panel::Shell
-                            | Panel::Diagnostics
-                            | Panel::Debug
-                            | Panel::Bugs
-                            | Panel::FileBrowser
-                            | Panel::Probe
-                    )
-            })
+            .filter(|panel| panel.visible_in(self.advanced_mode, self.developer_mode))
             .collect();
 
         let labels: Vec<String> = visible
@@ -6183,7 +6198,7 @@ impl StudioApp {
             }
         });
         ui.horizontal(|ui| {
-            let enabled = self.advanced_mode && self.pending_probe.is_none();
+            let enabled = self.developer_mode && self.pending_probe.is_none();
             let run_response = ui.add_enabled(enabled, egui::Button::new("Run physical probe"));
             self.register_anchor(Panel::Probe, AnchorId::ProbeRun, &run_response);
             if run_response
@@ -8313,6 +8328,15 @@ impl StudioApp {
         let colors = semantic(ui);
         ui.label(tr(self.language, Key::ConfigureApp));
         ui.add_space(8.0);
+        ui.group(|ui| {
+            ui.strong("Studio modes and storage");
+            ui.label("Normal: Dashboard, Explorer, Watch Faces, Notepad, Editor, Simulator, Build & Flash, Settings, and read-only Debug Output.");
+            ui.label("Advanced: Calibration, Modules, Diagnostics, Bugs, and detailed artifact tools.");
+            ui.label("Developer: Shell, Probe / Test, Terminal, Master Clock, and raw experimental tools.");
+            ui.label(format!("Notepad root: {}/notes", self.pending_data_folder));
+            ui.weak("Modes change visibility only. They never bypass path, artifact, transport, physical, or consent safeguards.");
+        });
+        ui.add_space(8.0);
 
         // Spreadsheet-style layout: label on the left, config on the right.
         egui::Grid::new("settings_grid")
@@ -9275,7 +9299,7 @@ impl StudioApp {
             self.fresh_test_executable_profile,
         )
         .with_board(self.board.label())
-        .with_developer_mode(self.advanced_mode)
+        .with_developer_mode(self.developer_mode)
         .with_panel_ux_overrides(self.panel_ux_overrides.clone())
         .with_data_folder(self.pending_data_folder.clone());
         // Use the same atomic, validated writer as automatic persistence.
@@ -9698,6 +9722,7 @@ impl StudioApp {
             s.data_folder
         };
         self.advanced_mode = s.developer_mode;
+        self.developer_mode = s.developer_mode;
         self.panel_ux_overrides = s.panel_ux_overrides;
         self.advanced_mode_confirm = false;
         self.drift_session.ppm = s.drift_ppm;
@@ -12038,6 +12063,36 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::Panel;
+
+    #[test]
+    fn normal_mode_shows_reordered_safe_panels_and_debug_output() {
+        let normal = [
+            Panel::Dashboard,
+            Panel::FileBrowser,
+            Panel::Faces,
+            Panel::Notepad,
+            Panel::Editor,
+            Panel::Simulator,
+            Panel::BuildFlash,
+            Panel::Settings,
+            Panel::Debug,
+        ];
+        assert!(normal.iter().all(|panel| panel.visible_in(false, false)));
+        assert!(Panel::Debug.visible_in(false, false));
+        assert!(!Panel::Calibration.visible_in(false, false));
+        assert!(!Panel::Shell.visible_in(false, false));
+    }
+
+    #[test]
+    fn advanced_and_developer_visibility_are_separate() {
+        assert!(Panel::Calibration.visible_in(true, false));
+        assert!(Panel::Bugs.visible_in(true, false));
+        assert!(!Panel::Shell.visible_in(true, false));
+        assert!(Panel::Shell.visible_in(true, true));
+        assert!(Panel::Probe.visible_in(true, true));
+    }
+
     #[test]
     fn simulator_controller_labels_and_warning_are_explicit() {
         assert_eq!(super::SIMULATOR_CONTROLLER_LABEL, "Controller");

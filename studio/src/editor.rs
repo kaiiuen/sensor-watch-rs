@@ -331,6 +331,17 @@ impl DocumentTab {
         self.contents = contents;
     }
 
+    pub fn original_contents(&self) -> &str {
+        &self.original_contents
+    }
+
+    pub fn mark_saved(&mut self) {
+        self.original_hash = Self::hash(&self.contents);
+        self.original_contents = self.contents.clone();
+        self.dirty = false;
+        self.external_conflict = false;
+    }
+
     pub fn check_external_change(&mut self, browser: &FileBrowser) -> bool {
         let changed = browser
             .read_text_path(&self.path)
