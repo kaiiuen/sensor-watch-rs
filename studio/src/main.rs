@@ -6252,7 +6252,7 @@ impl StudioApp {
                 && self.unsafe_action_allowed()
             {
                 self.pending_confirm = Some((
-                    "Run the physical probe? It will inspect removable drives and send only the read-only commands help, time, events, panic, and optical to the already connected selected UART port.".into(),
+                    "Run the physical probe? It will inspect removable drives and send only the read-only commands help, time, identity, events, panic, and optical to the already connected selected UART port.".into(),
                     ConfirmKind::RunPhysicalProbe,
                 ));
             }

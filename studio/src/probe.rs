@@ -511,19 +511,19 @@ mod tests {
                 .iter()
                 .filter(|test| test.name.starts_with("UART read-only command:"))
                 .count(),
-            5
+            COMMAND_COUNT
         );
     }
 
     #[test]
     fn progress_total_is_drive_count_plus_six_commands() {
-        assert_eq!(progress_total(0), 6);
-        assert_eq!(progress_total(1), 7);
-        assert_eq!(progress_total(3), 8);
+        assert_eq!(progress_total(0), COMMAND_COUNT);
+        assert_eq!(progress_total(1), 1 + COMMAND_COUNT);
+        assert_eq!(progress_total(3), 3 + COMMAND_COUNT);
     }
 
     #[test]
-    fn five_commands_report_the_actual_total_without_uart() {
+    fn six_commands_report_the_actual_total_without_uart() {
         let mut progress = Vec::new();
         let result = run_with_transport(None, &[], None, None::<BlockingTransport>, |event| {
             progress.push(event);
@@ -536,7 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn five_commands_are_reported_with_a_connected_transport() {
+    fn six_commands_are_reported_with_a_connected_transport() {
         let release = Arc::new(AtomicBool::new(true));
         let (started_tx, _started_rx) = mpsc::channel();
         let mut progress = Vec::new();

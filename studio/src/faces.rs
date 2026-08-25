@@ -45,6 +45,7 @@ const INFRASTRUCTURE_MODULES: &[&str] = &[
     "shell_auth",
     "stats",
     "types",
+    "uart_policy",
 ];
 
 fn is_infrastructure_module(name: &str) -> bool {
