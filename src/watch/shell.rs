@@ -154,9 +154,10 @@ impl Shell {
             }
             b"help" => {
                 transport_puts(
-                    "CMDS: time, settime YYMMDDHHMMSS, drift [N], panic, events [clear], help\r\n",
+                    "CMDS: time, identity (read-only), settime YYMMDDHHMMSS, drift [N], panic, events [clear], help\r\n",
                 );
             }
+            b"identity" | b"id" => dump_identity(),
             #[cfg(feature = "optical")]
             b"optical" => {
                 transport_puts(crate::watch::optical::status_text());
@@ -232,6 +233,20 @@ impl Shell {
 }
 
 /// Dumps the retained structured events in a stable, machine-readable form.
+fn dump_identity() {
+    let identity = crate::watch::identity::read();
+    let fingerprint = sensor_watch_core::identity::masked_fingerprint(&identity.uid);
+    transport_puts("ID UID=");
+    for byte in fingerprint {
+        put_hex(byte as u32, 2);
+    }
+    transport_puts(" SOURCE=");
+    transport_puts(identity.source.label());
+    transport_puts(" BOARD=unknown REV=unknown CONF=");
+    transport_puts(identity.confidence.label());
+    transport_puts(" NOTE=identifier-not-authentication\\r\\n");
+}
+
 fn dump_events() {
     event_log::for_each(|event| {
         transport_puts("EV ");

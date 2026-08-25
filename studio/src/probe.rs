@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 const MAX_INFO_BYTES: usize = 4096;
 
-const COMMANDS: [&str; 5] = ["help", "time", "events", "panic", "optical"];
+const COMMANDS: [&str; 6] = ["help", "time", "identity", "events", "panic", "optical"];
 pub(crate) const COMMAND_COUNT: usize = COMMANDS.len();
 const MAX_LOG_LINES: usize = 300;
 
@@ -45,6 +45,7 @@ pub struct ProbeReport {
     pub tests: Vec<TestResult>,
     pub log: Vec<String>,
     pub generated_at: String,
+    pub identity: Option<crate::device_identity::DeviceIdentity>,
 }
 
 impl ProbeReport {
@@ -273,6 +274,23 @@ pub fn run_with_transport<T: ProbeTransport>(
             match serial.command(command) {
                 Ok(reply) => {
                     report.log(format!("< {reply}"));
+                    if command == "identity" {
+                        match crate::device_identity::parse_reply(&reply) {
+                            Ok(identity) => {
+                                report.identity = Some(identity);
+                                report.add(
+                                    "UART device identity",
+                                    TestStatus::Pass,
+                                    "masked fingerprint received; not authentication",
+                                );
+                            }
+                            Err(error) => report.add(
+                                "UART device identity",
+                                TestStatus::Fail,
+                                format!("identity reply rejected: {error:?}"),
+                            ),
+                        }
+                    }
                     let (status, reason) = classify_command_reply(command, &reply);
                     report.add(format!("UART read-only command: {command}"), status, reason);
                 }
@@ -310,6 +328,12 @@ pub fn run_with_transport<T: ProbeTransport>(
 }
 
 fn classify_command_reply(command: &str, reply: &str) -> (TestStatus, &'static str) {
+    if command == "identity" {
+        return (
+            TestStatus::Pass,
+            "reply parsed separately; masked fingerprint only",
+        );
+    }
     if command == "optical" && reply.trim() == "?" {
         return (
             TestStatus::NotAvailable,
@@ -492,9 +516,9 @@ mod tests {
     }
 
     #[test]
-    fn progress_total_is_drive_count_plus_five_commands() {
-        assert_eq!(progress_total(0), 5);
-        assert_eq!(progress_total(1), 6);
+    fn progress_total_is_drive_count_plus_six_commands() {
+        assert_eq!(progress_total(0), 6);
+        assert_eq!(progress_total(1), 7);
         assert_eq!(progress_total(3), 8);
     }
 

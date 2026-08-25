@@ -12,6 +12,7 @@ mod compare;
 mod components;
 mod data_dir;
 mod debug;
+mod device_identity;
 mod diagnostics;
 mod distribution;
 mod drift;
@@ -6294,6 +6295,14 @@ impl StudioApp {
                             color,
                             format!("[{}] {} - {}", test.status.label(), test.name, test.reason),
                         );
+                    }
+                    if let Some(identity) = &report.identity {
+                        ui.separator();
+                        ui.strong("Device profile identity");
+                        ui.label(format!("Fingerprint: {}", identity.fingerprint.as_deref().unwrap_or("unknown")));
+                        ui.label(format!("Source: {}  Confidence: {}", identity.source, identity.confidence));
+                        ui.label(format!("Board/revision: {}/{}", identity.board.as_deref().unwrap_or("unknown"), identity.revision.as_deref().unwrap_or("unknown")));
+                        ui.colored_label(egui::Color32::from_rgb(220, 180, 80), "Profile matching requires UID + board/revision; mismatches require explicit confirmation. Identity is not authentication.");
                     }
                     ui.separator();
                     ui.strong("Bounded probe log (latest entries)");

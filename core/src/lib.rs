@@ -15,6 +15,7 @@ pub mod background_tasks;
 pub mod datetime;
 pub mod ecc;
 pub mod event_log;
+pub mod identity;
 // The hardware seam: the `Hw` trait, reference mock, and the reusable
 // `Event`/`Button`/`Indicator` types used by face logic.
 #[cfg(not(target_arch = "arm"))]
