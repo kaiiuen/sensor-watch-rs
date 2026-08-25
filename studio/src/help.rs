@@ -360,6 +360,7 @@ pub enum HelpId {
     Startup,
     /// The explicit Advanced-mode safety and transport tour.
     Advanced,
+    Compare,
     Dashboard,
     WatchFaces,
     Editor,
@@ -372,6 +373,7 @@ pub enum HelpId {
     DebugOutput,
     Bugs,
     FileBrowser,
+    Notepad,
     Tutorials,
     Wiki,
     Settings,
@@ -427,6 +429,9 @@ pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
             None,
         ][index.min(7)];
     }
+    if matches!(id, HelpId::Compare | HelpId::Notepad) {
+        return None;
+    }
     if id == HelpId::BuildFlash {
         return [
             Some(BuildUnavailable),
@@ -449,6 +454,7 @@ pub fn anchor_for_step(id: HelpId, index: usize) -> Option<AnchorId> {
         // BuildFlash returns above because some steps are informational.
         HelpId::BuildFlash => unreachable!(),
         HelpId::Startup | HelpId::Advanced => unreachable!(),
+        HelpId::Compare | HelpId::Notepad => unreachable!(),
         HelpId::Dashboard => [DashboardBoard, DashboardNtpFetch, PanelHelp][index.min(2)],
         HelpId::WatchFaces => [FacesSearch, FacesPreset, FacesAdd][index.min(2)],
         // Start enters Blocks mode. The final step is Save after Load into Rust
@@ -700,6 +706,22 @@ const TUTORIALS: &[Tutorial] = &[
          "Safety and limits" => "Deleting or clearing evidence can make troubleshooting harder. A warning may describe an intentional safety gate. Do not disable fail-closed build or approval checks to hide an error."),
     },
     Tutorial {
+        id: HelpId::Compare,
+        stable_key: "compare",
+        title: "Compare tutorial",
+        steps: steps!
+        ("Compare source safely" => "Compare is a read-only view for reviewing two source documents side by side or top to bottom. It does not save, apply, or mutate either document.",
+         "Review the evidence" => "Check the source paths, roles, face IDs, and SHA-256 values before interpreting a difference. Comparison is host-side evidence, not hardware validation."),
+    },
+    Tutorial {
+        id: HelpId::Notepad,
+        stable_key: "notepad",
+        title: "Notepad tutorial",
+        steps: steps!
+        ("Keep notes local" => "Notepad stores local notes for planning and troubleshooting. Use clear categories and record the target, inputs, and observed results.",
+         "Record evidence carefully" => "Notes describe what you intended and observed; they do not validate firmware, hardware, or a calibration result. Keep sensitive details private."),
+    },
+    Tutorial {
         id: HelpId::FileBrowser,
         stable_key: "file-browser",
         title: "File Browser tutorial",
@@ -747,9 +769,10 @@ const TUTORIALS: &[Tutorial] = &[
 ];
 
 impl HelpId {
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 20] = [
         Self::Startup,
         Self::Advanced,
+        Self::Compare,
         Self::Dashboard,
         Self::WatchFaces,
         Self::Editor,
@@ -762,6 +785,7 @@ impl HelpId {
         Self::DebugOutput,
         Self::Bugs,
         Self::FileBrowser,
+        Self::Notepad,
         Self::Tutorials,
         Self::Wiki,
         Self::Settings,
@@ -1109,7 +1133,7 @@ mod tests {
 
     #[test]
     fn panel_coverage_is_explicit() {
-        assert_eq!(HelpId::ALL.len(), 18);
+        assert_eq!(HelpId::ALL.len(), 20);
         assert!(HelpId::ALL
             .iter()
             .all(|id| all().iter().any(|t| t.id == *id)));

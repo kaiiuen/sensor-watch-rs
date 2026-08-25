@@ -611,7 +611,7 @@ fn country_label(index: u8) -> &'static str {
 const MAX_CUSTOM_NTP_SERVERS: usize = 64;
 
 const FIRST_RUN_STEPS: [&str; 5] = [
-    "1. Choose Normal mode for the safe beginner path",
+    "1. Click Start beginner tour for the safe beginner path",
     "2. Review Dashboard, Watch Faces, and the stock/default preset",
     "3. Use Editor Blocks, then try the result in Simulator",
     "4. Review LCD, target board, profile, and compatibility safeguards",
@@ -821,8 +821,8 @@ impl Panel {
             Panel::Debug => HelpId::DebugOutput,
             Panel::Bugs => HelpId::Bugs,
             Panel::FileBrowser => HelpId::FileBrowser,
-            Panel::Compare => HelpId::FileBrowser,
-            Panel::Notepad => HelpId::FileBrowser,
+            Panel::Compare => HelpId::Compare,
+            Panel::Notepad => HelpId::Notepad,
             Panel::Tutorials => HelpId::Tutorials,
             Panel::Wiki => HelpId::Wiki,
             Panel::Settings => HelpId::Settings,
@@ -12135,6 +12135,17 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 #[cfg(test)]
 mod tests {
     use super::Panel;
+    use crate::help::{tutorial, HelpId};
+
+    #[test]
+    fn compare_and_notepad_use_their_own_help_ids() {
+        assert_eq!(Panel::Compare.help_id(), HelpId::Compare);
+        assert_eq!(Panel::Notepad.help_id(), HelpId::Notepad);
+        assert_ne!(Panel::Compare.help_id(), HelpId::FileBrowser);
+        assert_ne!(Panel::Notepad.help_id(), HelpId::FileBrowser);
+        assert_eq!(tutorial(HelpId::Compare).stable_key, "compare");
+        assert_eq!(tutorial(HelpId::Notepad).stable_key, "notepad");
+    }
 
     #[test]
     fn normal_mode_shows_reordered_safe_panels_and_debug_output() {
@@ -14058,7 +14069,8 @@ mod tests {
     #[test]
     fn first_run_steps_describe_a_non_build_beginner_path() {
         let steps = FIRST_RUN_STEPS.join(" ");
-        assert!(steps.contains("Normal mode"));
+        assert!(steps.contains("Click Start beginner tour"));
+        assert!(!steps.contains("Choose Normal mode"));
         assert!(steps.contains("Simulator"));
         assert!(steps.contains("Build & Flash"));
         assert!(!steps.contains("Build UF2"));
