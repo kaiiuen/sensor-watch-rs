@@ -30,13 +30,13 @@ impl SettingsFace {
     /// A const constructor for use in a static initializer.
     pub const fn new_static() -> Self {
         // Baseline of 6 settings (clock, beep, signal, alarm, timeout, LED
-        // duration), plus the low-energy setting and the red/green LED color
-        // settings (both channels present on this board).
+        // duration), plus low-energy, the UART shell, and the red/green LED
+        // color settings (both channels present on this board).
         SettingsFace {
             current_page: 0,
-            num_settings: 6 + 1 + 2,
-            led_color_start: 7,
-            led_color_end: 9,
+            num_settings: 6 + 1 + 1 + 2,
+            led_color_start: 8,
+            led_color_end: 10,
         }
     }
 
@@ -194,6 +194,18 @@ impl SettingsFace {
         }
     }
 
+    fn uart_setting_display(&self) {
+        slcd::display_string("UA", 0);
+        slcd::display_string(
+            if movement::uart_shell_enabled() {
+                "UART ON"
+            } else {
+                "UART OFF"
+            },
+            4,
+        );
+    }
+
     fn led_duration_setting_advance() {
         movement::set_backlight_dwell(movement::get_backlight_dwell() + 1);
         if movement::get_backlight_dwell() > 3 {
@@ -242,14 +254,15 @@ impl SettingsFace {
             4 => self.timeout_setting_display(),
             5 => self.low_energy_setting_display(),
             6 => self.led_duration_setting_display(),
-            7 => self.red_led_setting_display(),
-            8 => self.green_led_setting_display(),
+            7 => self.uart_setting_display(),
+            8 => self.red_led_setting_display(),
+            9 => self.green_led_setting_display(),
             _ => {}
         }
     }
 
     /// Advances the value of the current settings page.
-    fn advance_page(&self) {
+    fn advance_page(&self, settings: &mut Settings) {
         match self.current_page {
             0 => Self::clock_setting_advance(),
             1 => Self::beep_setting_advance(),
@@ -258,8 +271,15 @@ impl SettingsFace {
             4 => Self::timeout_setting_advance(),
             5 => Self::low_energy_setting_advance(),
             6 => Self::led_duration_setting_advance(),
-            7 => Self::red_led_setting_advance(),
-            8 => Self::green_led_setting_advance(),
+            7 => {
+                if settings.uart_shell_enabled() {
+                    movement::disable_uart_from_face(settings);
+                } else {
+                    movement::enable_uart_from_face(settings);
+                }
+            }
+            8 => Self::red_led_setting_advance(),
+            9 => Self::green_led_setting_advance(),
             _ => {}
         }
     }
@@ -273,7 +293,7 @@ impl WatchFace for SettingsFace {
         movement::request_tick_frequency(4); // we need to manually blink some pixels
     }
 
-    fn loop_(&mut self, event: Event, _settings: &mut Settings) {
+    fn loop_(&mut self, event: Event, settings: &mut Settings) {
         match event {
             Event::Button(Button::Light, ButtonEvent::Down) => {
                 self.current_page = (self.current_page + 1) % self.num_settings;
@@ -289,13 +309,13 @@ impl WatchFace for SettingsFace {
                 return;
             }
             Event::Button(Button::Alarm, ButtonEvent::Up) => {
-                self.advance_page();
+                self.advance_page(settings);
             }
             Event::BackgroundTask => {
                 movement::move_to_face(0);
             }
             _ => {
-                movement::default_loop_handler(event, _settings);
+                movement::default_loop_handler(event, settings);
                 return;
             }
         }

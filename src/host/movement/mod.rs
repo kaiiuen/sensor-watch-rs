@@ -25,6 +25,10 @@
 #[path = "../../movement/shell_auth.rs"]
 pub mod shell_auth;
 
+/// The same bounded UART policy used by firmware, without MMIO on host.
+#[path = "../../movement/uart_policy.rs"]
+pub mod uart_policy;
+
 /// Pure diagnostics support reused from the firmware implementation. Its
 /// persistence is routed through the host backup-register seam.
 #[path = "../../movement/battery.rs"]
@@ -893,6 +897,20 @@ pub mod wyoscan {
 
 use crate::watch;
 use types::{Event, Settings};
+
+static mut UART_POLICY: uart_policy::UartRuntimePolicy = uart_policy::UartRuntimePolicy::new();
+
+pub fn uart_shell_enabled() -> bool {
+    unsafe { UART_POLICY.enabled() }
+}
+
+pub fn enable_uart_from_face(settings: &mut Settings) {
+    unsafe { UART_POLICY.enable(settings, 0) };
+}
+
+pub fn disable_uart_from_face(settings: &mut Settings) {
+    unsafe { UART_POLICY.disable(settings) };
+}
 
 /// Sets the wake rate based on whether seconds are shown. Host forwards to the
 /// `Hw::set_tick_rate` hook.

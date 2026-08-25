@@ -247,6 +247,19 @@ impl DiagnosticsFace {
                     buf[6 + i] = c;
                 }
             }
+            3 => {
+                let s = if movement::uart_shell_enabled() {
+                    "UART ON"
+                } else {
+                    "UART OFF"
+                };
+                for (i, &c) in b"UART   ".iter().enumerate() {
+                    buf[i] = c;
+                }
+                for (i, &c) in s.as_bytes().iter().take(5).enumerate() {
+                    buf[6 + i] = c;
+                }
+            }
             _ => {}
         }
         slcd::display_string(core::str::from_utf8(&buf[..]).unwrap_or(""), 0);
@@ -618,7 +631,13 @@ impl WatchFace for DiagnosticsFace {
                     || self.screen == 9
                 {
                     // Inside settings/stats/battery/test, scroll through submenu rows.
-                    let max = if self.screen == 9 { TEST_ROWS.len() } else { 3 };
+                    let max = if self.screen == 9 {
+                        TEST_ROWS.len()
+                    } else if self.screen == 6 {
+                        4
+                    } else {
+                        3
+                    };
                     self.subrow = (self.subrow + 1) % max as u8;
                 }
                 self.draw();
@@ -652,6 +671,14 @@ impl WatchFace for DiagnosticsFace {
                             // Power off: save settings, then enter BACKUP mode.
                             crate::movement::save_settings();
                             crate::watch::deepsleep::enter_backup_mode();
+                        }
+                        3 => {
+                            // This button press is the deliberate physical consent.
+                            if crate::movement::uart_shell_enabled() {
+                                crate::movement::disable_uart_from_face(settings);
+                            } else {
+                                crate::movement::enable_uart_from_face(settings);
+                            }
                         }
                         _ => {}
                     }

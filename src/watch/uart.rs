@@ -277,10 +277,17 @@ pub fn enable_uart(tx_pin: Option<Pin>, rx_pin: Option<Pin>, baud: u32) {
     sync();
 }
 
-/// Transmits a string of bytes on the UART's TX pin.
+/// Disables SERCOM3 and returns any debug-UART pins to high-impedance.
+///
+/// A2/A3 are the shell's selected pins. They are deliberately not A4, which
+/// remains available for the accelerometer/connector function.
 pub fn disable_uart() {
     usart().ctrla().modify(|_, w| w.enable().clear_bit());
     mclk().apbcmask().modify(|_, w| w.sercom3_().clear_bit());
+    for pin in [A2, A3] {
+        gpio::set_pin_function(pin, Function::Off);
+        gpio::set_pin_direction(pin, Direction::Off);
+    }
 }
 
 pub fn puts(s: &str) {

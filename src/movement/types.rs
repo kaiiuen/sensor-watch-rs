@@ -34,6 +34,8 @@ pub const MOVEMENT_REALLY_LONG_PRESS_TICKS: u16 = 192;
 #[repr(C, align(4))]
 pub struct Settings {
     pub reg: u32,
+    /// Persisted preference for the debug UART shell. It is not live consent.
+    pub uart_shell_enabled: bool,
 }
 
 impl Settings {
@@ -88,6 +90,14 @@ impl Settings {
     /// Whether the clock shows seconds (false = power-saving, wake once/min).
     pub fn show_seconds(self) -> bool {
         (self.reg >> 28) & 0x1 != 0
+    }
+
+    pub fn uart_shell_enabled(self) -> bool {
+        self.uart_shell_enabled
+    }
+
+    pub fn set_uart_shell_enabled(&mut self, v: bool) {
+        self.uart_shell_enabled = v;
     }
 
     pub fn set_show_seconds(&mut self, v: bool) {
@@ -264,7 +274,10 @@ impl MovementState {
     /// A const constructor for use in a static initializer.
     pub const fn new_static() -> Self {
         MovementState {
-            settings: Settings { reg: 0 },
+            settings: Settings {
+                reg: 0,
+                uart_shell_enabled: false,
+            },
             current_face_idx: 0,
             next_face_idx: 0,
             watch_face_changed: false,

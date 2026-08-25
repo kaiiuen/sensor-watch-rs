@@ -57,11 +57,28 @@ key) before enabling writes. CRC detects corruption, it is not authentication.
 
 ## UART integration boundary
 
-`src/watch/uart.rs` remains a byte transport only. A future command loop may call
-`try_getc`, collect exactly 256 bytes, and pass them to `Receiver::receive`.
-It must enforce an idle timeout and clear the receiver on reset. No firmware
-flashing command should be added to this loop, firmware updates remain on the
-existing bootloader/SWD path.
+The debug UART shell is **disabled by default**. Settings or Diagnostics must
+receive a deliberate physical button confirmation before enabling it. The
+preference is persisted, but boot never treats that preference as consent; a
+new physical confirmation is required after reset. The live session is bounded
+by five minutes of UART inactivity and can also be explicitly disabled.
+
+The shell's mutation authorization is a separate physical-presence gate. UART
+being enabled never authorizes `settime`, drift changes, or event clearing.
+
+The current pin assignment is SERCOM3 TX=A2 and RX=A3. A4 is intentionally not
+claimed because it remains an accelerometer/connector pin; other connector
+functions must not be silently remapped by the UART policy. When disabled,
+`release_peripherals()` disables SERCOM3 and returns A2/A3 to the safe GPIO
+state.
+
+Polling remains bounded (16 shell bytes and 64 RX bytes per wake). UART traffic
+does **not** wake the watch: there is no SERCOM RX interrupt path yet. Adding
+that interrupt path is required before claiming wake-on-UART behavior. USB CDC
+is unsupported and is not a fallback transport.
+
+No firmware flashing command should be added to this loop; firmware updates
+remain on the existing bootloader/SWD path.
 
 There is no hardware test in this change. The protocol codec and receiver are
 covered by host tests in the core crate.

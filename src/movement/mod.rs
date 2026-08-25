@@ -116,6 +116,7 @@ pub mod totp;
 pub mod totp_lfs;
 pub mod tuning_tones;
 pub mod types;
+pub mod uart_policy;
 pub mod voltage;
 pub mod wake;
 pub mod wareki;
@@ -818,6 +819,23 @@ fn take_background_task_request() -> bool {
 /// read when it wakes the CPU, so `release_peripherals` must not disable I2C.
 pub static mut TAP_DETECTION_ACTIVE: bool = false;
 
+/// Live UART state; false at boot regardless of the persisted preference.
+pub static mut UART_POLICY: uart_policy::UartRuntimePolicy = uart_policy::UartRuntimePolicy::new();
+
+/// Enable the UART only after a physical Settings/Diagnostics consent action.
+pub fn enable_uart_from_face(settings: &mut types::Settings) {
+    unsafe {
+        UART_POLICY.enable(settings, FAST_TICKS as u32);
+        watch::uart::enable_uart(Some(watch::extint::A2), Some(watch::extint::A3), 9600);
+    }
+}
+
+/// Explicitly disable the shell and release its pins on the next lifecycle pass.
+pub fn disable_uart_from_face(settings: &mut types::Settings) {
+    unsafe { UART_POLICY.disable(settings) };
+    watch::uart::disable_uart();
+}
+
 /// The physical-presence window for mutating shell commands.
 #[cfg(feature = "shell-auth")]
 pub static mut SHELL_AUTH: shell_auth::ShellAuthorization = shell_auth::ShellAuthorization::new();
@@ -936,10 +954,11 @@ pub fn default_loop_handler(event: Event, _settings: &Settings) {
 pub fn save_settings() {
     unsafe {
         let reg = MOVEMENT_STATE.settings.reg;
+        let key = reg ^ (MOVEMENT_STATE.settings.uart_shell_enabled() as u32);
         // Only hit flash when settings actually changed. This avoids wearing
         // out the EEPROM area by rewriting identical settings on every wake.
-        if reg != MOVEMENT_STATE.last_saved_settings_reg {
-            MOVEMENT_STATE.last_saved_settings_reg = reg;
+        if key != MOVEMENT_STATE.last_saved_settings_reg {
+            MOVEMENT_STATE.last_saved_settings_reg = key;
             persist::save(&MOVEMENT_STATE.settings);
         }
     }
@@ -1209,6 +1228,11 @@ pub fn clock_mode_24h() -> ClockMode {
 }
 
 /// Sets the clock mode from a 12H/24H/024H enum.
+/// Returns the persisted UART preference for the active settings state.
+pub fn uart_shell_enabled() -> bool {
+    unsafe { MOVEMENT_STATE.settings.uart_shell_enabled() }
+}
+
 pub fn set_clock_mode_24h(mode: ClockMode) {
     unsafe {
         let (h24, leading_zero) = match mode {
@@ -1585,7 +1609,8 @@ pub fn app_init() {
         }
         // Remember what we loaded so the dirty-check in save_settings doesn't
         // rewrite identical settings on the first wake.
-        MOVEMENT_STATE.last_saved_settings_reg = MOVEMENT_STATE.settings.reg;
+        MOVEMENT_STATE.last_saved_settings_reg =
+            MOVEMENT_STATE.settings.reg ^ (MOVEMENT_STATE.settings.uart_shell_enabled() as u32);
     }
 }
 
@@ -1693,8 +1718,10 @@ pub fn app_setup() {
 
         watch::slcd::enable_display();
 
-        // Enable the debug UART for the serial shell (TX on A4, RX on A2).
-        watch::uart::enable_uart(Some(watch::extint::A4), Some(watch::extint::A2), 9600);
+        // Boot is always UART-off. A saved preference is informational only;
+        // Settings or Diagnostics must provide fresh physical consent.
+        UART_POLICY.boot();
+        watch::uart::disable_uart();
 
         // Detect an optional accelerometer on the 9-pin connector. If present,
         // tap detection and wake-on-motion are available to faces.
@@ -1882,8 +1909,18 @@ pub fn app_loop() {
         #[cfg(feature = "pro-irda-rx")]
         watch::optical::poll_at(FAST_TICKS as u32 * 8);
 
-        // Poll the serial shell for incoming commands.
-        SHELL.poll();
+        // Poll only during an explicitly enabled, bounded UART session. UART
+        // RX is polling-only today; traffic cannot wake standby until a real
+        // SERCOM RX interrupt path exists.
+        if UART_POLICY.enabled() {
+            let had_input = SHELL.poll();
+            if !UART_POLICY.observe_poll(FAST_TICKS as u32, had_input) {
+                // Timeout is a real disable, not merely a transport shutdown;
+                // persist the safe state so the UI cannot report stale consent.
+                MOVEMENT_STATE.settings.set_uart_shell_enabled(false);
+                watch::uart::disable_uart();
+            }
+        }
 
         // Persist any settings a face may have changed.
         save_settings();
@@ -1912,6 +1949,9 @@ fn release_peripherals() {
         watch::i2c::pins_to_floating_before_sleep();
     }
     watch::spi::disable_spi();
+    if unsafe { !UART_POLICY.enabled() } {
+        watch::uart::disable_uart();
+    }
 }
 
 // --- Interrupt callbacks ---
