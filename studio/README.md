@@ -27,6 +27,16 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
   are persisted and reset proportionally when the window is resized.
 - **Explorer** - a bounded browser for the app-local data root and active mutable project. It never exposes package/version resources, bundled templates, generated outputs, or secrets.
 - **Notepad** - Markdown notes kept under `<app data root>/notes`, categorized as Project, Hardware, Firmware, Build, Testing, Ideas, or Archive. Notes support bounded source editing, optional plain preview, search/category filters, tabs, atomic saves, external-change conflict detection, and confirmation-gated deletion. Note paths are policy-checked and never leave the app-local root.
+- **Compare** - a read-only source comparison view opened from the Editor,
+  Watch Faces, or Explorer. It shows immutable stock/modified documents with
+  path, role, face identity, and SHA-256 headers, bounded line diff hunks with
+  added/removed/changed markers, previous/next navigation, side-by-side or
+  top-bottom layout, and optional synchronized scrolling. Reads use the same
+  filesystem policy as Explorer; secrets, binaries, oversized files, links,
+  reparse points, unsafe roots, and missing sources are rejected. Comparison
+  never saves, applies, or mutates either document. Face comparisons pair only
+  matching `faces::face_identity` IDs by default; unrelated files require the
+  explicit opt-in.
 - **Editor** - a self-IDE for creating, editing, or deleting watch faces from
   templates, with a collapsible "How to make a watch face" guide and a
   **description** field that shows up in the catalog. The beginner-safe

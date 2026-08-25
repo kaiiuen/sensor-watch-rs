@@ -8,6 +8,7 @@
 mod block_editor;
 mod build;
 pub mod build_snapshot;
+mod compare;
 mod components;
 mod data_dir;
 mod debug;
@@ -330,6 +331,8 @@ struct StudioApp {
     catalog_category: String,
     /// The read-only workspace file browser.
     file_browser: file_browser::FileBrowser,
+    /// Read-only source comparison view.
+    compare: compare::CompareView,
     /// Markdown notes stored below the app-local data root.
     notepad: notepad::Notepad,
     /// The target board revision (green, red/lite, blue, pro).
@@ -668,6 +671,7 @@ enum Panel {
     Debug,
     Bugs,
     FileBrowser,
+    Compare,
     Notepad,
     Wiki,
     Tutorials,
@@ -727,6 +731,7 @@ fn panel_for_help_id(id: HelpId) -> Option<Panel> {
         Panel::Debug,
         Panel::Bugs,
         Panel::FileBrowser,
+        Panel::Compare,
         Panel::Notepad,
         Panel::Tutorials,
         Panel::Wiki,
@@ -744,6 +749,7 @@ impl Panel {
         match self {
             Self::Dashboard
             | Self::FileBrowser
+            | Self::Compare
             | Self::Faces
             | Self::Notepad
             | Self::Editor
@@ -756,7 +762,7 @@ impl Panel {
         }
     }
 
-    const ALL: [Self; 17] = [
+    const ALL: [Self; 18] = [
         Self::Dashboard,
         Self::Faces,
         Self::Editor,
@@ -769,6 +775,7 @@ impl Panel {
         Self::Debug,
         Self::Bugs,
         Self::FileBrowser,
+        Self::Compare,
         Self::Notepad,
         Self::Tutorials,
         Self::Wiki,
@@ -790,6 +797,7 @@ impl Panel {
             Self::Debug => "debug",
             Self::Bugs => "bugs",
             Self::FileBrowser => "file_browser",
+            Self::Compare => "compare",
             Self::Notepad => "notepad",
             Self::Tutorials => "tutorials",
             Self::Wiki => "wiki",
@@ -812,6 +820,7 @@ impl Panel {
             Panel::Debug => HelpId::DebugOutput,
             Panel::Bugs => HelpId::Bugs,
             Panel::FileBrowser => HelpId::FileBrowser,
+            Panel::Compare => HelpId::FileBrowser,
             Panel::Notepad => HelpId::FileBrowser,
             Panel::Tutorials => HelpId::Tutorials,
             Panel::Wiki => HelpId::Wiki,
@@ -834,6 +843,7 @@ impl Panel {
             Panel::Debug => tr(lang, Key::DebugOutput),
             Panel::Bugs => "Bugs",
             Panel::FileBrowser => "Explorer",
+            Panel::Compare => "Compare",
             Panel::Notepad => "Notepad",
             Panel::Tutorials => tr(lang, Key::Tutorials),
             Panel::Wiki => "Wiki",
@@ -1241,6 +1251,7 @@ impl Default for StudioApp {
             selected_trace: None,
             catalog_category: String::new(),
             file_browser: file_browser::FileBrowser::new(),
+            compare: compare::CompareView::default(),
             notepad: notepad::Notepad::new(),
             board: Board::Green,
             component_profiles: components::default_profiles(),
@@ -1974,6 +1985,7 @@ impl eframe::App for StudioApp {
             Panel::Debug => self.debug(ui),
             Panel::Bugs => self.bugs(ui),
             Panel::FileBrowser => self.file_browser(ui),
+            Panel::Compare => self.compare.ui(ui),
             Panel::Notepad => self.notepad.ui(ui),
             Panel::Tutorials => self.tutorials(ui),
             Panel::Wiki => self.wiki(ui),
@@ -2775,6 +2787,7 @@ impl StudioApp {
         let panels = [
             Panel::Dashboard,
             Panel::FileBrowser,
+            Panel::Compare,
             Panel::Faces,
             Panel::Notepad,
             Panel::Editor,
@@ -3968,6 +3981,18 @@ impl StudioApp {
                                                     ));
                                                     ui.close_menu();
                                                 }
+                                                if ui.button("Compare with stock").clicked() {
+                                                    let modified = editor::face_path(&face_name);
+                                                    if let Some(stock_root) = distribution::active().firmware_project_dir() {
+                                                        let stock = stock_root.join("src/movement").join(format!("{face_name}.rs"));
+                                                        let id = Some(face_name.as_str());
+                                                        match self.compare.open_paths(&self.file_browser, (&stock, "stock", id), (&modified, "modified", id)) {
+                                                            Ok(()) => { self.current_panel = Panel::Compare; self.status = "Opened read-only face comparison".into(); }
+                                                            Err(error) => self.status = format!("Compare failed: {error}"),
+                                                        }
+                                                    }
+                                                    ui.close_menu();
+                                                }
                                                 if ui.button("View code").clicked() {
                                                     self.code_view = Some((
                                                         face_name.clone(),
@@ -4724,6 +4749,25 @@ impl StudioApp {
                                 Err(error) => self.status = format!("Reload failed: {error}"),
                             }
                         }
+                    }
+                }
+                if ui.button("Compare with stock").clicked() {
+                    if let Some(stock) = self.file_browser.comparison_stock_path(&path) {
+                        let id = path.file_stem().and_then(|n| n.to_str());
+                        match self.compare.open_paths(
+                            &self.file_browser,
+                            (&stock, "stock", id),
+                            (&path, "modified", id),
+                        ) {
+                            Ok(()) => {
+                                self.current_panel = Panel::Compare;
+                                self.status =
+                                    "Opened read-only stock versus modified comparison".into();
+                            }
+                            Err(error) => self.status = format!("Compare failed: {error}"),
+                        }
+                    } else {
+                        self.status = "No stock source corresponds to this file".into();
                     }
                 }
                 if ui.button("Close text file").clicked() {
@@ -6883,6 +6927,24 @@ impl StudioApp {
         }
         if let Some(message) = message {
             self.status = message;
+        }
+        if let Some(path) = self.file_browser.take_compare_request() {
+            if let Some(stock) = self.file_browser.comparison_stock_path(&path) {
+                let id = path.file_stem().and_then(|n| n.to_str());
+                match self.compare.open_paths(
+                    &self.file_browser,
+                    (&stock, "stock", id),
+                    (&path, "modified", id),
+                ) {
+                    Ok(()) => {
+                        self.current_panel = Panel::Compare;
+                        self.status = "Opened read-only stock versus modified comparison".into();
+                    }
+                    Err(error) => self.status = format!("Compare failed: {error}"),
+                }
+            } else {
+                self.status = "No stock source corresponds to this file".into();
+            }
         }
         if let Some(path) = self.file_browser.take_open_request() {
             match self.file_browser.read_text_path(&path) {

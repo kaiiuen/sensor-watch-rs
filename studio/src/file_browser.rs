@@ -36,6 +36,7 @@ pub enum SortMode {
 enum ContextAction {
     Open,
     Editor,
+    Compare,
     Explorer,
     NewFile,
     NewFolder,
@@ -84,6 +85,7 @@ pub struct FileBrowser {
     pub active_tab: usize,
     message: String,
     open_request: Option<PathBuf>,
+    compare_request: Option<PathBuf>,
     new_name: String,
     rename_name: String,
     pending_delete: Option<PathBuf>,
@@ -99,6 +101,7 @@ impl Default for FileBrowser {
             active_tab: 0,
             message: String::new(),
             open_request: None,
+            compare_request: None,
             new_name: String::new(),
             rename_name: String::new(),
             pending_delete: None,
@@ -321,6 +324,39 @@ impl FileBrowser {
         self.open_request.take()
     }
 
+    pub fn take_compare_request(&mut self) -> Option<PathBuf> {
+        self.compare_request.take()
+    }
+
+    /// Returns the immutable stock source corresponding to an active project file.
+    pub fn comparison_stock_path(&self, path: &Path) -> Option<PathBuf> {
+        let root = crate::distribution::active().active_project_dir()?;
+        let relative = path.strip_prefix(root).ok()?;
+        Some(
+            crate::distribution::active()
+                .firmware_project_dir()?
+                .join(relative),
+        )
+    }
+
+    /// Reads a comparison source through fs_policy. The bundled firmware root is
+    /// allowed here only as an immutable comparison input; it is never writable.
+    pub fn read_comparison_path(&self, path: &Path) -> Result<String, PolicyError> {
+        if let Some(source_root) = crate::distribution::active().firmware_project_dir() {
+            if let Ok(relative) = path.canonicalize().and_then(|p| {
+                p.strip_prefix(&source_root)
+                    .map(Path::to_path_buf)
+                    .map_err(std::io::Error::other)
+            }) {
+                let mut roots = Roots::empty();
+                roots.app_data = source_root;
+                let policy = Policy::new(roots);
+                return policy.read_text(RootKind::AppData, &relative);
+            }
+        }
+        self.read_text_path(path)
+    }
+
     pub fn read_text_path(&self, path: &Path) -> Result<String, PolicyError> {
         for kind in [RootKind::ActiveProject, RootKind::AppData] {
             if let Ok(root) = self.policy.root(kind) {
@@ -373,6 +409,7 @@ impl FileBrowser {
                 }
             }
             ContextAction::Editor => self.open_request = Some(item.path.clone()),
+            ContextAction::Compare => self.compare_request = Some(item.path.clone()),
             ContextAction::Explorer => {
                 return Some(match pickers::open_in_explorer(&item.path) {
                     Ok(()) => "Opened in Windows Explorer".into(),
@@ -637,6 +674,12 @@ impl FileBrowser {
                         .clicked()
                     {
                         context_action = Some((ContextAction::Editor, item.clone()));
+                    }
+                    if ui
+                        .add_enabled(!item.is_dir, egui::Button::new("Compare with stock"))
+                        .clicked()
+                    {
+                        context_action = Some((ContextAction::Compare, item.clone()));
                         ui.close_menu();
                     }
                     if ui.button("Open in Windows Explorer").clicked() {
