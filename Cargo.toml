@@ -30,6 +30,11 @@ license = "MIT OR Apache-2.0"
 # NOT referenced by the on-device binary (which falls back to Cargo's autolink
 # only if the bin path `use`s it). The firmware build is verified to link the same
 # machine code as before this change.
+[[bin]]
+name = "minimal-usb"
+path = "src/minimal_usb.rs"
+required-features = ["minimal-usb"]
+
 [lib]
 name = "sensor_watch"
 path = "src/lib.rs"
@@ -72,6 +77,9 @@ hostmock = []
 # and `#[global_allocator]` lang items. Without it (ARM firmware, host `cargo
 # test`), the lib stays `no_std` and provides its own minimal lang items.
 std = []
+# Developer-only minimal application boundary for USB feasibility work. This is
+# intentionally separate from the production application and optional drivers.
+minimal-usb = []
 # Enables the physical Alarm/service-button hook for mutating shell commands.
 # Without this feature, mutations remain permanently locked (fail closed).
 shell-auth = []

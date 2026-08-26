@@ -160,6 +160,11 @@ cargo build -p sensor-watch --release --target thumbv6m-none-eabi --features def
 feature set and does not change the normal firmware dependency or size path.
 See [`docs/DEVELOPER_DEBUGGING.md`](docs/DEVELOPER_DEBUGGING.md) for probe use.
 
+For the opt-in Developer-only minimal USB feasibility image, including exact
+flash and recovery steps, see [`docs/MINIMAL_USB_PROFILE.md`](docs/MINIMAL_USB_PROFILE.md).
+It does not activate USB hardware or provide CDC bulk I/O or a shell, and never
+changes the default production firmware.
+
 Produce a `.uf2` for drag-and-drop flashing:
 
 ```

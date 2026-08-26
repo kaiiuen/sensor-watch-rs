@@ -51,6 +51,37 @@ jobs:
           name: sensor-watch-elf
           path: target/thumbv6m-none-eabi/release/sensor-watch
 
+  minimal-usb:
+    name: Developer minimal USB feasibility profile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          channel: '1.97.1'
+          targets: thumbv6m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - name: Install binutils for minimal size check
+        run: sudo apt-get update && sudo apt-get install -y binutils-arm-none-eabi
+      - name: Check minimal profile
+        run: cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
+      - name: Build minimal profile
+        run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
+      - name: Enforce minimal flash budget
+        env:
+          FLASH_BUDGET_BYTES: 237568
+        run: |
+          elf=target/thumbv6m-none-eabi/release/minimal-usb
+          flash_bytes=$(arm-none-eabi-size -A "$elf" | awk '$1 ~ /^(\\.vector_table|\\.text|\\.rodata|\\.data|\\.ramfunc|\\.ARM.exidx)(\\.|$)/ { total += $2 } END { if (total == 0) exit 1; print total }')
+          echo "Developer minimal flash usage: ${flash_bytes}/${FLASH_BUDGET_BYTES} bytes"
+          test "$flash_bytes" -le "$FLASH_BUDGET_BYTES"
+      - name: Reject mixed production features
+        run: |
+          if cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb,optical; then
+            echo "minimal-usb unexpectedly accepted optical"
+            exit 1
+          fi
+
   clippy:
     name: Clippy
     runs-on: ubuntu-latest

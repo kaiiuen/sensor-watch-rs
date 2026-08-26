@@ -3,13 +3,13 @@ use std::{env, path::PathBuf, process::ExitCode};
 
 fn usage() -> ! {
     eprintln!(
-        "usage: sensor-watch-tools <build|package-studio|uf2|verify|backup|rollback|report|flash> ..."
+        "usage: sensor-watch-tools <build|build-minimal|package-studio|uf2|verify|backup|rollback|report|flash> ..."
     );
     std::process::exit(2)
 }
 fn help() {
     println!(
-        "usage: sensor-watch-tools <build|package-studio|uf2|verify|backup|rollback|report|flash> ..."
+        "usage: sensor-watch-tools <build|build-minimal|package-studio|uf2|verify|backup|rollback|report|flash> ..."
     );
     println!(
         "verify checks UF2 structure, local manifest consistency, and optional trusted release SHA-256 matching; SHA-256 is a digest/hash for integrity, not a signing key or authenticity proof. Authenticity requires a signature verified with a separately trusted public key (for example, Ed25519)."
@@ -82,6 +82,16 @@ fn main() -> ExitCode {
             println!(
                 "built {}",
                 tools::build_firmware()
+                    .unwrap_or_else(|e| fail(e))
+                    .uf2_path
+                    .display()
+            )
+        }
+        "build-minimal" => {
+            ensure_no_extra(&mut args);
+            println!(
+                "built Developer-only {}",
+                tools::build_minimal_firmware()
                     .unwrap_or_else(|e| fail(e))
                     .uf2_path
                     .display()
