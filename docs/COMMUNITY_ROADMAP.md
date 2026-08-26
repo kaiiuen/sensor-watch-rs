@@ -23,8 +23,8 @@ traceability, while only genuinely unfinished items belong in the Backburner.
 - Event-driven Movement framework with RTC-owned timekeeping, scheduled tasks,
   debounce, long-press handling, fault tracking, buzzer priority, and primary /
   secondary face registration.
-- 111 registered firmware faces, with 108 faces currently running through the
-  real Studio host seam and 3 using the `face_sim` fallback.
+- 111 registered firmware faces, all running through the default Studio real-face
+  host seam. The `face_sim` fallback remains available when the feature is disabled.
 - Alarm, advanced alarm, countdown, timer, stopwatch, quick utility, metronome,
   repetition-minute, time-left, deadline, and world-clock families.
 - DST-aware timezones, UTC/local-time conversion, NTP, drift correction,
@@ -60,7 +60,8 @@ traceability, while only genuinely unfinished items belong in the Backburner.
 
 ### Faces and algorithms
 
-- Finish the remaining 3 real-face host migrations with face-specific harnesses
+- Add additional face-specific harnesses and broaden regression coverage for the
+  completed 111-face real host seam
   rather than generic activation assumptions.
 - Add a conservative LIS2DW step-counter algorithm using replayable recorded
   samples, bounded FIFO reads, and a power budget.
@@ -76,12 +77,13 @@ traceability, while only genuinely unfinished items belong in the Backburner.
 
 ### Tooling and Studio
 
-- Wire presets, selected faces, board profiles, and component profiles into the
-  actual firmware build inputs. Studio currently refuses these builds rather
-  than publishing an unconfigured artifact.
+- Extend configured firmware builds beyond the supported stock board, revision,
+  LCD, and component combinations. Current supported inputs are generated,
+  validated, and emitted with provenance. Unsupported combinations fail closed.
 - Generate board-specific compile-time configuration for pins, LCD, sensors,
   LED polarity, buzzer voltage, and optional modules.
-- Add minimal firmware profiles as well as the full 111-face regression build.
+- Add more minimal firmware profiles beyond the currently supported stock
+  combinations.
 - Resolve Cargo, objcopy, probe-rs, and firmware workspace paths from verified
   installation/configuration roots rather than ambient PATH/current directory.
 - Add a stale-build-lock recovery workflow with PID/timestamp ownership.
@@ -119,8 +121,8 @@ traceability, while only genuinely unfinished items belong in the Backburner.
   available.
 - Add pressure/altitude hardware and a dive-computer face only behind an
   explicit external-sensor module.
-- Complete and hardware-test the experimental receive-only optical/IrDA path;
-  transmitter hardware, transfer reliability, and current draw remain open.
+- Complete and hardware-test the experimental receive-only optical/IrDA path.
+  Transmitter hardware, transfer reliability, and current draw remain open.
 - Integrate NFC flashing/charging only as a separate custom-board project.
 - Integrate BLE only if the project intentionally changes its air-gapped design.
 - Add GPS-assisted calibration only with a defined external fixture.
@@ -166,5 +168,5 @@ Rust architecture can model them:
 - A UART jig is not native USB CDC.
 - Protocol-only optical framing is not optical hardware integration.
 - A simulated sensor/diagnostic PASS is not a measured hardware PASS.
-- A configured Studio preset is not part of a firmware artifact until the build
-  inputs are actually wired into the embedded build.
+- A configured Studio preset is part of a firmware artifact only when the
+  generated inputs and provenance are validated by the embedded build.

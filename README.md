@@ -68,17 +68,19 @@ graph TD
 ```
 
 The firmware is a sealed, air-gapped system: the CPU wakes only to react to a
-single event, then returns to STANDBY. The Studio app is the companion simulator
-and configuration front end, its UF2 build is fail-closed until selections are
-wired into firmware inputs.
+single event, then returns to STANDBY. The Studio app is the companion
+simulator and configuration front end. Its configured build path generates
+validated firmware inputs for supported stock
+board and profile combinations, and rejects unsupported or incomplete inputs.
 
 ## Firmware Studio (companion app)
 
 The `studio/` directory contains **Firmware Studio**, a GUI companion app that
-lists and simulates watch faces, manages configuration, and provides the planned
-build/flash workflow. Its configured UF2 build currently fails closed because
-preset, board, and component selections are not yet firmware build inputs. It
-reuses the `core` crate's pure logic (UF2 encoding, date math, settings).
+lists and simulates watch faces, manages configuration, and provides the
+build/flash workflow. Its configured build path emits validated generated
+firmware inputs for supported stock board and profile combinations, while
+unsupported or incomplete combinations fail closed. It reuses the `core` crate's
+pure logic (UF2 encoding, date math, settings).
 
 ```
 cargo build -p sensor-watch-studio
@@ -90,7 +92,7 @@ mode and Probe/Test (Diagnostics) workflow are for experienced users and do not
 turn simulated checks into physical hardware validation.
 
 For physical access, the USB bootloader drive exposes UF2/file-transfer
-information only. A UART shell requires a 3.3 V UART jig on A4/A2/GND at
+information only. A UART shell requires a 3.3 V UART jig on A2/A3/GND at
 9600 8-N-1, a missing host serial port does not prove that the board lacks UART.
 See [`docs/HARDWARE_ACCESS.md`](docs/HARDWARE_ACCESS.md) for wiring, command
 safety, and PASS/FAIL/NOT AVAILABLE/NOT TESTED reporting.
@@ -172,16 +174,21 @@ cargo run -p sensor-watch-tools -- build
 ```
 
 The same host operations are also exposed by the all-in-one Studio binary, but
-Studio's configured Build & Flash path is fail-closed until preset, board, and
-component selections are wired into firmware build inputs:
+Studio's configured Build & Flash path validates the preset, board, revision,
+LCD, component, mapping, and provenance inputs before building. The separate
+`build` command remains the unconfigured stock firmware path:
 
 ```
-cargo run -p sensor-watch-studio -- build  # rejects configured builds for now
+cargo run -p sensor-watch-studio -- configured-build --help
+cargo run -p sensor-watch-studio -- build  # stock, unconfigured firmware
 cargo run -p sensor-watch-studio -- help
 ```
 
 The `sensor-watch-tools` command above produces the stock firmware UF2. It does
-not apply Studio selections. To build a deterministic, offline Studio folder package, run this from the repository root. The command first builds the release `sensor-watch-launcher` and Studio artifacts through the workspace. A launcher build failure or missing artifact stops packaging:
+not apply Studio selections. To build a deterministic, offline Studio folder
+package, run this from the repository root. The command first builds the release
+`sensor-watch-launcher` and Studio artifacts through the workspace. A launcher
+build failure or missing artifact stops packaging:
 
 ```
 cargo run -p sensor-watch-tools -- package-studio
@@ -276,23 +283,24 @@ validation.
       UART jig path for command execution.
 - [x] An experimental receive-only optical path exists for Pro hardware, built on
       the protocol framing and validation core. It has not been tested on hardware.
-- [x] 108 real firmware faces are wired into the Studio host seam, which is
-      enabled by default by Studio's `real-faces` feature. The remaining 3
-      firmware faces use the `face_sim` fallback. This is host coverage, not
+- [x] All 111 firmware faces are wired into the Studio host seam, which is enabled
+      by default by Studio's `real-faces` feature. This is host coverage, not
       hardware coverage.
-- [ ] Firmware component profiles for board-wide hardware presets. Studio has
-      persisted profile/configuration UI and planning estimates, but profiles do
-      not yet change firmware build flags or pin mappings.
-- [ ] Native USB CDC transfers (compile-safe scaffolding only, enabling it returns
-      `UsbError::Unsupported`, see `docs/USB_CDC.md`).
+- [x] Firmware component profiles for supported stock board-wide hardware
+      presets. Generated inputs include validated board, revision, component,
+      pin, ownership, and provenance data. Unsupported combinations remain
+      fail-closed.
+- [ ] Native USB CDC bulk transfers. USB clock, pad, reset, descriptor, and EP0
+      feasibility code is implemented in the opt-in minimal profile. Bulk CDC
+      transfer and hardware enumeration remain pending, see `docs/USB_CDC.md`.
 
 ## Status and validation snapshot
 
 - The latest validated workspace run passes 121 firmware host-seam tests, 69
   core tests, 145 Studio tests, and 30 tools tests, for 365 passing tests total.
 - `sensor-watch-tools -- build` produces a stock firmware UF2. Studio's
-  configured Build & Flash path remains fail-closed until its selections become
-  firmware build inputs.
+  Studio's configured Build & Flash path accepts supported validated generated
+  inputs and fails closed for unsupported or incomplete selections.
 - Host tests, simulated diagnostics, and the ARM build do not validate physical
   hardware. No on-silicon validation has been run.
 - No complete repository warning total is claimed here because the full
@@ -300,9 +308,9 @@ validation.
 
 The all-in-one Studio CLI is available on top of the reusable Rust tools
 library. UART-jig transport, protocol-only optical and transfer foundations,
-panic-map and host-side recovery validation, and default-enabled Studio
-real-face coverage remain software/host capabilities, no on-silicon validation
-has been run.
+panic-map and host-side recovery validation, configured-build generation, and
+Studio real-face coverage remain software/host capabilities. No on-silicon
+validation has been run.
 
 ## Documentation
 

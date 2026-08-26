@@ -151,9 +151,9 @@ With all 111 faces registered (via the `#[used]` face-retain array), a release
 build is roughly **210-230 KB**, so most of the region is used. Each watch face
 adds roughly 1-3 KB, leaving modest headroom for a few more faces, not dozens.
 Adding faces beyond the current count should be validated against the linker
-region on every build. Studio currently wires 108 of those faces into its
-default-enabled `real-faces` host seam, the remaining 3 faces use the
-`face_sim` fallback engine in Studio.
+region on every build. Studio wires all 111 of those faces into its
+default-enabled `real-faces` host seam. The separate `face_sim` engine remains
+available when that feature is disabled.
 
 ### RAM (32 KB)
 
@@ -574,8 +574,8 @@ Red / Lite, Green, and Blue remain battery-level/unboosted, while 9 V boosted dr
 is reserved for the explicitly supported Pro converter revision and unknown inputs
 fail closed.
 
-**Why:** a freshly-flashed watch can be configured on-device (via the diagnostics
-face) without recompiling.
+**Why:** a freshly-flashed watch can be configured on-device through the
+supported settings and diagnostics flows without recompiling.
 
 ### 7.7 `movement/stats.rs` - Statistics tracking
 

@@ -1,9 +1,10 @@
 # Firmware Studio
 
 A **GUI companion app** for the Sensor-Watch firmware. This is the end-goal
-product: an editor, debugger, simulator, and assembler. The Studio UI currently
-refuses its UF2 build because its configuration input contract is incomplete.
-This prevents a stock artifact from being misrepresented as configured firmware.
+product: an editor, debugger, simulator, and assembler. Studio generates
+configured UF2 artifacts for supported stock board, revision, LCD, component,
+and face inputs. Unsupported or incomplete configurations fail closed so a
+stock artifact is never misrepresented as configured firmware.
 
 Built with **egui/eframe** (pure Rust, cross-platform GUI).
 
@@ -48,38 +49,42 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Simulator** - F-91W SVG display replica with clickable button hotspots, a
   **date/time controller**, and face cycling through the active preset. The
   current face render path is shown prominently in the panel. With the default
-  `real-faces` feature, 108 of 111 faces execute the actual firmware face source
-  files through translated host movement and HAL seams with `MockHw`. The other
-  3 faces use the separate `face_sim` approximation. With `real-faces` disabled,
-  all 111 faces use `face_sim`. This is not full ARM firmware simulation or
-  hardware simulation. MMIO, interrupts, sensors, power, RTC oscillator
+  `real-faces` feature, all 111 faces execute the actual firmware face source
+  files through translated host movement and HAL seams with `MockHw`. With
+  `real-faces` disabled, all 111 faces use `face_sim`. This is not full ARM
+  firmware simulation or hardware simulation. MMIO, interrupts, sensors, power,
+  RTC oscillator
   accuracy, peripheral electrical behavior, and some scheduling are modeled or
   stubbed and can diverge from a physical watch. The SVG and firmware character
   set provide a display preview, not physical hardware validation.
 - **Build & Flash** - combined panel: review the target board and component
-  profile, then request a firmware build. The build preflight is explicitly
-  fail-closed and the profile panel displays the disabled state. Build failures
+  profile, then request a firmware build. Supported stock configurations emit
+  validated generated inputs and artifacts. Unsupported or incomplete inputs
+  fail closed with the reason shown in the profile panel. Build failures
   include bounded Cargo and tool diagnostics in the panel, status, terminal,
   error log, and a safe `build.log` under the resolved output path. The panel
   still documents the intended USB-drive/`INFO_UF2.TXT` workflow.
 - **Calibration** - guided clock calibration (generates a `settime` command for
   the next minute boundary), a **beep-on-minute-rollover** helper, and guided
-  drift calibration (parts-per-million). The hardware path requires UART Jig
-  mode, the default simulated path does not change a watch.
+  manual RTC drift calibration in parts-per-million, and optional temperature
+  compensation settings. Manual ppm correction and temperature compensation
+  are separate. The hardware path requires UART Jig mode, and the default
+  simulated path does not change a watch.
 - **Shell Access** - explicit **Simulated** mode (the default, using the existing
   in-app watch model) or **UART Jig** mode. UART mode discovers host serial
   ports, opens a selected port at **9600 8-N-1**, and exchanges CR/LF-framed
   shell commands with bounded read/write timeouts. It is for the debug pads
-  (A4 TX, A2 RX, GND), not the watch's UF2 USB port, USB CDC is not assumed.
+  (A2 TX, A3 RX, GND), not the watch's UF2 USB port, USB CDC is not assumed.
   A missing port can mean the jig is disconnected, off, miswired, or not passed
   through to the host. It does not prove that the board lacks UART.
 - **Modules** - register custom hardware modules for modded boards (e.g. a BLE
   board instead of the accelerometer). Each module targets a HAL file in
   `src/watch/`, modules are persisted and can be enabled/disabled/removed.
   Component profiles are implemented in Studio as persisted configuration and
-  planning-estimate UI, but they do not yet alter firmware build flags or pin
-  mappings. The UF2 build refuses to proceed while that limitation remains.
-  Thermistor and OPT3001 readings still require matching hardware.
+  planning-estimate UI, and supported stock profiles now generate validated
+  firmware build flags, pin mappings, and provenance. Unsupported custom
+  combinations remain unavailable. Thermistor and OPT3001 readings still
+  require matching hardware.
   simulator diagnostics do not create sensor measurements.
 - **Diagnostics / Probe-Test** - offline simulator and shell diagnostics. A
   connected UART is shown separately, but the diagnostic report does not query
@@ -103,10 +108,8 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 
 ## Studio build input contract
 
-A safe profile-to-build path is not available yet. The current profile contains
-only an LCD variant and component booleans. Those values cannot identify a valid
-firmware configuration or concrete hardware wiring. Before the fail-closed gate
-can be removed, Studio and firmware must agree on all of the following inputs:
+The profile-to-build path is available for supported stock combinations. Studio
+and firmware validate all of the following inputs before any build side effect:
 
 1. Active preset identity plus the ordered face/source inputs.
 2. Target board identity, revision, and board-specific runtime settings.
@@ -117,10 +120,9 @@ can be removed, Studio and firmware must agree on all of the following inputs:
 5. A generated-input provenance and validation record tied to the exact firmware
    build, so the resulting UF2 can be identified as configured rather than stock.
 
-Until this contract exists on both sides, profile edits are for planning/review
-only. Studio shows the missing contract in the profile panel and rejects the
-build before filesystem, Cargo, or UF2 side effects. No pin assignments are
-inferred or claimed by the current UI.
+Unsupported or incomplete profiles remain planning-only. Studio shows the
+specific validation issue and rejects the build before filesystem, Cargo, or
+UF2 side effects. No pin assignments are inferred for unsupported combinations.
 
 ## Advanced and Probe/Test safety
 
@@ -134,7 +136,7 @@ and target before using it.
 
 The watch USB bootloader drive exposes UF2/file-transfer information only. It
 can be used to copy a `.uf2` and inspect bootloader files, but it is not a
-serial console and does not replace the UART jig on A4/A2/GND.
+serial console and does not replace the UART jig on A2/A3/GND.
 
 The UART shell separates commands into:
 
@@ -194,7 +196,7 @@ and bundled templates are never used for mutable writes. Packaged builds copy an
 validate the bundled template into the mutable project first, then build only
 from that active project.
 
-The launcher forwards the package root, the same app-local data root, version, attempt, and portable context explicitly. A package-root write failure is reported as an
+The launcher forwards the package root, the same package-local data root, version, attempt, and portable context explicitly. A package-root write failure is reported as an
 actionable error; Studio does not silently fall back to Windows AppData,
 Documents, or legacy settings. Developer checkouts may continue to use the
 normal user-scoped defaults. Packaged mode never accepts a custom data root. If the package root or its data directory is protected or unwritable, move or extract the application to a writable folder.
@@ -249,8 +251,8 @@ tools/targets and the optional `master_clock` capability. Studio reports
 **Packaged mode** only after validating that manifest. Missing project sources or
 tools are reported as unavailable. The Master Clock action is Advanced-only,
 on-demand, package-local, hash-validated, and never launched at startup. It
-warns that NTP/geolocation are external network activity and does not change
-Windows time. The package builder does not bundle the unlicensed/untracked
+warns that NTP/geolocation are external network activity. Windows time changes only through the tool's own
+explicit control. The package builder does not bundle the unlicensed/untracked
 Master Clock source. All mutable settings and data remain under `<package root>/data`.
 
 A binary copied from a developer checkout does not silently use that checkout.
@@ -266,16 +268,17 @@ The app launches at a 480p (640x480) default window size and is resizable.
 The app depends on `sensor-watch-core` (from `../core`), which provides the
 pure logic (UF2 encoding, date math, settings bit-packing, SECDED ECC, transfer
 validation, and optical protocol validation) that is host-testable and directly
-reusable by the app. The Build panel is fail-closed until its selected preset/faces, board, and
-component profile are passed into the firmware build. Once that input path is
-implemented, it will invoke the firmware's own `cargo build` and use the core
-crate's `convert_to_uf2` to produce the final file.
+reusable by the app. The Build panel validates its selected preset/faces, board,
+revision, LCD, and component profile, then passes generated inputs into the
+firmware build. It invokes the firmware's own `cargo build` and uses the core
+crate's
+`convert_to_uf2` to produce the final file. Unsupported combinations fail
+closed.
 
-The Simulator's default `real-faces` mode executes 108 of 111 faces from the
+The Simulator's default `real-faces` mode executes all 111 faces from the
 actual firmware face source files through translated host movement and HAL seams
-with `MockHw`. The other 3 faces use the separate `face_sim` approximation. If
-`real-faces` is disabled, the existing fallback behavior remains in place and all
-111 faces use `face_sim`.
+with `MockHw`. If `real-faces` is disabled, the existing fallback behavior
+remains in place and all 111 faces use `face_sim`.
 
 This is not full ARM firmware simulation or hardware simulation. MMIO,
 interrupts, sensors, power, RTC oscillator accuracy, peripheral electrical

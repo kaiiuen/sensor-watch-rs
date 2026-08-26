@@ -84,8 +84,9 @@ being covered by the passing test counts:
 - current draw, RTC drift, brown-out, watchdog reset, and clock-failure recovery.
 - USB CDC device enumeration and endpoint transfers.
 - UART jig wiring and SWD/RTT probe behavior.
-- Studio configured UF2 generation with user selections. The path is correctly
-  fail-closed until selections become firmware build inputs.
+- Studio configured UF2 generation for unsupported or incomplete selections.
+  Supported stock selections now generate and validate firmware inputs and
+  provenance. No hardware build result is implied.
 - experimental receive-only optical support for Pro hardware. The protocol
   framing and authentication logic are host-testable, but the optical path has
   not been tested on hardware.
@@ -98,8 +99,9 @@ being covered by the passing test counts:
   30 = 365`. The separate Studio no-default-features run reports 121 tests.
   The command-scoped firmware runs report 1 test for `usb-cdc` only and 122
   tests for `hostmock,std,optical,shell-auth,usb-cdc`.
-- The current Studio mapping uses 108 real firmware faces and 3 `face_sim`
-  fallback faces out of 111.
+- The current Studio mapping uses all 111 real firmware faces through the
+  default-enabled host seam. The `face_sim` fallback remains covered separately
+  with `--no-default-features`.
 - `PROJECT_LOG.md` contains historical snapshots that are intentionally not
   part of the public validation baseline. Those entries are retained as dated
   history, not treated as the current validation contract.

@@ -67,15 +67,15 @@ The shell's mutation authorization is a separate physical-presence gate. UART
 being enabled never authorizes `settime`, drift changes, or event clearing.
 
 The current pin assignment is SERCOM3 TX=A2 and RX=A3. A4 is intentionally not
-claimed because it remains an accelerometer/connector pin; other connector
+claimed because it remains an accelerometer and connector pin. Other connector
 functions must not be silently remapped by the UART policy. When disabled,
 `release_peripherals()` disables SERCOM3 and returns A2/A3 to the safe GPIO
 state.
 
-Polling remains bounded (16 shell bytes and 64 RX bytes per wake). UART traffic
-does **not** wake the watch: there is no SERCOM RX interrupt path yet. Adding
-that interrupt path is required before claiming wake-on-UART behavior. USB CDC
-is unsupported and is not a fallback transport.
+Polling remains bounded at 16 shell bytes and 64 RX bytes per wake. UART traffic
+does **not** wake the watch because there is no SERCOM RX interrupt path. An RX
+interrupt path is required before claiming wake-on-UART behavior. USB CDC is
+not a fallback transport, and its bulk transfers remain unproven.
 
 No firmware flashing command should be added to this loop; firmware updates
 remain on the existing bootloader/SWD path.

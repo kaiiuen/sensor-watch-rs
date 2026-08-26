@@ -213,9 +213,8 @@ reference, so the raw value *rises* as the battery weakens. The formula
 The thermistor and OPT3001 drivers and their watch faces are present in source,
 and the host seam can exercise their fail-closed paths. They are not hardware
 validated in this checkout: host mocks do not provide a thermistor fixture or an
-OPT3001 fixture, so the real-face tests expect `NO TE` and `NO LS` rather than a
-measured value. Treat temperature and optical readings as hardware-dependent
-until bench tests in `docs/TESTING.md` pass.
+OPT3001 bus. Treat temperature and optical readings as hardware-dependent
+until measured in the bench tests described in `docs/TESTING.md`.
 
 ---
 
@@ -255,7 +254,7 @@ until bench tests in `docs/TESTING.md` pass.
 
 | Symbol | Type | Purpose |
 |--------|------|---------|
-| `register_extwake_callback()` | fn | External wake on A2/A4/Alarm. |
+| `register_extwake_callback()` | fn | External wake on A2/A4/Alarm. UART RX is not an external wake source. |
 | `store_backup_data()` / `get_backup_data()` | fn | RTC backup registers. |
 | `enter_sleep_mode()` | fn | Enter STANDBY. |
 | `enter_standby()` | fn | SysTick-safe STANDBY (main-loop sleep). |
@@ -496,7 +495,8 @@ Commands: `time`, `settime YYMMDDHHMMSS`, `help`.
 Each face implements `WatchFace` with `setup`, `activate`, `loop_`, `resign`,
 and optionally `wants_background_task` and `advise`.
 
-There are **111 registered faces**. Highlights:
+There are **111 registered faces**, and Studio's default real-face host seam
+covers all 111. Highlights:
 
 | Face | File | Purpose |
 |------|------|---------|

@@ -73,15 +73,14 @@ host tool builds the stock release firmware, extracts the raw binary with
 recovery manifest. It does not apply Studio profile selections. `build.sh`
 remains a compatibility launcher. The same host-side UF2 verification,
 recovery-staging, and probe-flash operations are available through
-`cargo run -p sensor-watch-studio -- help`. Studio's configured `build` command
-is fail-closed until preset, board, and component selections become firmware
-build inputs.
+`cargo run -p sensor-watch-studio -- help`. Studio's `configured-build` command
+builds supported validated board, revision, LCD, component, and face inputs.
+Unsupported or incomplete selections fail closed.
 
 The `build` CLI resolves the workspace from the executable location, with the
 tool crate's manifest as a verified fallback, so it does not depend on the
-caller's current directory. Studio still refuses configured builds until preset,
-board, and component selections are wired into firmware inputs, this fail-closed
-policy is checked before any build tool is run.
+caller's current directory. Studio validates configured-build inputs and checks
+its fail-closed policy before any build tool is run.
 
 ## Linting
 

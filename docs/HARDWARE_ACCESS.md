@@ -48,11 +48,11 @@ dongle to the three debug pads and talk to the shell.
 
 The shell runs on SERCOM3. The pads you need:
 
-- **A4** - UART TX (watch -> dongle RX)
-- **A2** - UART RX (dongle TX -> watch)
+- **A2** - UART TX (watch -> dongle RX)
+- **A3** - UART RX (dongle TX -> watch)
 - **GND** - common ground
 
-Wire them cross-over to the dongle (A4 to its RX, A2 to its TX, and GND to
+Wire them cross-over to the dongle (A2 to its RX, A3 to its TX, and GND to
 GND), then open a terminal at **9600 baud**, 8-N-1. Use a 3.3 V-compatible
 USB-serial adapter. Do not connect a 5 V UART signal to the watch.
 

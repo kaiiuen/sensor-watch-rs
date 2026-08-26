@@ -24,5 +24,16 @@ cannot silently introduce an overlap.
 
 The capability set does not assert sensor population, converter presence, or
 converter support. Those fields remain `Unknown` unless directly evidenced.
+The current thermistor evidence used by software profiles is:
+
+- Green: unknown for this board and revision.
+- Red / Lite: documented onboard temperature sensor.
+- Blue reference: unknown for this board and revision.
+- Pro: documented onboard temperature sensor, with nine-pin ownership still
+  subject to board validation.
+
+These are documentation and configuration facts, not physical validation. A
+thermistor profile does not prove that a sensor is fitted or that its ADC wiring
+matches the selected mapping.
 The mapping model also does not change USB, UART, optical, RTC/calibration,
 package, launcher, or unrelated UI behavior.

@@ -114,7 +114,7 @@ device resets and returns to normal operation.
 ### Reading a fingerprint over the UART shell
 
 After a panic-and-reset, connect the UART shell (HARDWARE_ACCESS.md, 9600 baud,
-SERCOM3 on pads A4/A2/GND) and type:
+SERCOM3 on pads A2/A3/GND) and type:
 
 ```
 panic
@@ -129,9 +129,9 @@ Firmware Studio's **Bugs** panel accepts the `Pxxxxxx` value from the shell and
 scans the firmware Rust source tree for matching `file:line:column` candidates.
 A successful firmware build through a path that generates the panic map writes
 `sensor-watch.panic-map.json` beside the ELF. Studio's configured Build & Flash
-path is currently fail-closed and does not publish a configured UF2 until its
-preset, board, and component selections become firmware build inputs. That
-manifest records the SHA-256 of the ELF and of every `src/**/*.rs` and
+path now publishes configured UF2 artifacts for supported validated inputs.
+Unsupported or incomplete preset, board, and component selections fail closed.
+That manifest records the SHA-256 of the ELF and of every `src/**/*.rs` and
 `core/src/**/*.rs` path/content pair, so the resolver refuses a missing,
 replaced, or source-mismatched build rather than producing a misleading match.
 The resolver uses the exact firmware algorithm: FNV-1a with offset basis
@@ -158,7 +158,7 @@ fingerprint reported by the UART shell.
 
 For fast iteration you usually do **not** need a debugger at all. The firmware
 has a minimal command shell over the UART (9600 baud, 8-N-1, SERCOM3, pads
-A4/A2/GND). The USB bootloader drive is not an alternate serial path.
+A2/A3/GND). The USB bootloader drive is not an alternate serial path.
 
 A host that shows no serial port does not prove that UART is absent. The UART
 jig may be disconnected, powered off, miswired, using an incompatible adapter,
@@ -238,8 +238,8 @@ no attempt was made.
 
 ## Summary
 
-The current host validation baseline is 284 passing tests: 109 firmware
-host-seam, 67 core, 94 Studio, and 14 tools. These are host, mock, or simulated
+The current host validation baseline is 365 passing tests: 121 firmware
+host-seam, 69 core, 145 Studio, and 30 tools. These are host, mock, or simulated
 checks. The ARM build and SWD/UART procedures document ways to exercise real
 hardware, but no on-silicon validation has been run. Report physical results
 only with the explicit `PASS`, `FAIL`, `NOT AVAILABLE`, or `NOT TESTED` labels

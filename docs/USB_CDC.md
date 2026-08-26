@@ -25,15 +25,22 @@ The minimal image contains a reviewed, bounded EP0 feasibility path, but physica
 - status zero length packets, stalls, reset handling, suspend detach, and
   bounded EP0 re-arm
 
-The EP0 code is a hardware feasibility scaffold, not a claim of successful USB
-enumeration. The CDC transport remains replaceable and inert.
+The EP0 code is implemented as a bounded hardware feasibility path, not a
+claim of successful USB enumeration. The CDC transport remains replaceable and
+inert.
 
-No CDC bulk endpoint is configured. `CdcTransport` provides fixed 64-byte buffers, explicit connection/USB states, line-coding and control-request contracts, and a read-only command allowlist (`ping`, `help`, `time`, `identity`). Until physical EP0 and CDC transfers are proven, transport operations return `NotEnumerated` or `Unsupported`; no shell response is fabricated and no mutating command is accepted.
+No CDC bulk endpoint is configured. `CdcTransport` provides fixed 64-byte
+buffers, explicit connection and USB states, line-coding and control-request
+contracts, and a read-only command allowlist (`ping`, `help`, `time`,
+`identity`). Until physical EP0 and CDC transfers are proven, transport
+operations return `NotEnumerated` or `Unsupported`. No shell response is
+fabricated and no mutating command is accepted.
 
 ## Hardware-unverified details
 
-The pack proves the USB register offsets, endpoint bank field layout, SRAM
-section contract, clock IDs, USB pad mux, OTP5 address, and OTP5 PADCAL and
+The software checks and host tests cover the USB register offsets, endpoint
+bank field layout, SRAM section contract, clock IDs, USB pad mux, OTP5 address,
+and OTP5 PADCAL and
 DFLL calibration fields. The minimal path reads those documented OTP5 fields
 and writes PADCAL. Electrical signal quality, DFLL lock behavior, and actual
 host enumeration still require hardware verification.
