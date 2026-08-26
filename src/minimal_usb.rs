@@ -148,6 +148,10 @@ mod minimal {
 
         // USB is only entered by the explicitly selected minimal-usb image.
         // VBUS is checked before pin muxing and again on every bounded poll.
+        let transport = crate::usb::CdcTransport::new();
+        // The transport is intentionally inert until physical EP0 and CDC
+        // transfers are proven; this does not claim enumeration or a shell.
+        core::hint::black_box(transport.state());
         let _ = crate::usb::init();
         core::hint::black_box(PROOF_OF_LIFE.as_ptr());
         core::hint::black_box(uid);

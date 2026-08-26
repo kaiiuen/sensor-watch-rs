@@ -12,7 +12,7 @@ The opt-in `minimal-usb` feature implies `usb-enum` and selects the separate
 watch application, bootloader range, EEPROM bounds, WDT, and battery behavior
 are unchanged.
 
-The minimal image now implements a bounded EP0 enumeration path:
+The minimal image contains a reviewed, bounded EP0 feasibility path, but physical EP0 transfers are not proven and CDC is not enabled:
 
 - USBCRM DFLL48M setup from the documented 32 kHz reference and GCLK1 to USB
 - USB AHB and APBB clocks
@@ -25,7 +25,10 @@ The minimal image now implements a bounded EP0 enumeration path:
 - status zero length packets, stalls, reset handling, suspend detach, and
   bounded EP0 re-arm
 
-No CDC bulk endpoint is configured. `read` and `write` remain fail closed.
+The EP0 code is a hardware feasibility scaffold, not a claim of successful USB
+enumeration. The CDC transport remains replaceable and inert.
+
+No CDC bulk endpoint is configured. `CdcTransport` provides fixed 64-byte buffers, explicit connection/USB states, line-coding and control-request contracts, and a read-only command allowlist (`ping`, `help`, `time`, `identity`). Until physical EP0 and CDC transfers are proven, transport operations return `NotEnumerated` or `Unsupported`; no shell response is fabricated and no mutating command is accepted.
 
 ## Hardware-unverified details
 

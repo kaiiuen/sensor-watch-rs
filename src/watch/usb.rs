@@ -287,6 +287,263 @@ pub enum UsbError {
     UnsafeHardware,
 }
 
+/// A fixed-size CDC packet buffer. No heap allocation is used by the transport.
+pub const CDC_ENDPOINT_BUFFER_SIZE: usize = 64;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConnectionState {
+    Disconnected,
+    Connected,
+    Suspended,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UsbState {
+    Detached,
+    Default,
+    Addressed,
+    Configured,
+    Suspended,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CdcError {
+    Unsupported,
+    NotEnumerated,
+    Overflow,
+    InvalidRequest,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LineCoding {
+    pub baud_rate: u32,
+    pub stop_bits: u8,
+    pub parity: u8,
+    pub data_bits: u8,
+}
+
+impl Default for LineCoding {
+    fn default() -> Self {
+        Self {
+            baud_rate: 115_200,
+            stop_bits: 0,
+            parity: 0,
+            data_bits: 8,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CdcControlRequest {
+    GetLineCoding { length: u16 },
+    SetLineCoding { length: u16, coding: LineCoding },
+    SetControlLineState { value: u16 },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CdcControlResponse {
+    LineCoding(LineCoding),
+    Accepted,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadOnlyCommand {
+    Ping,
+    Help,
+    Time,
+    Identity,
+}
+
+impl ReadOnlyCommand {
+    pub fn parse(input: &[u8]) -> Option<Self> {
+        match input {
+            b"ping" => Some(Self::Ping),
+            b"help" => Some(Self::Help),
+            b"time" => Some(Self::Time),
+            b"identity" => Some(Self::Identity),
+            _ => None,
+        }
+    }
+}
+
+/// A CDC transport boundary with deliberately inert transfer operations.
+///
+/// The buffers and contracts are ready for a reviewed physical implementation,
+/// but no method fabricates enumeration, packets, or shell responses.
+pub struct CdcTransport {
+    rx: [u8; CDC_ENDPOINT_BUFFER_SIZE],
+    tx: [u8; CDC_ENDPOINT_BUFFER_SIZE],
+    rx_len: usize,
+    tx_len: usize,
+    usb_state: UsbState,
+    connection: ConnectionState,
+    suspended_state: UsbState,
+    line_coding: LineCoding,
+}
+
+impl CdcTransport {
+    pub const fn new() -> Self {
+        Self {
+            rx: [0; CDC_ENDPOINT_BUFFER_SIZE],
+            tx: [0; CDC_ENDPOINT_BUFFER_SIZE],
+            rx_len: 0,
+            tx_len: 0,
+            usb_state: UsbState::Detached,
+            connection: ConnectionState::Disconnected,
+            suspended_state: UsbState::Detached,
+            line_coding: LineCoding {
+                baud_rate: 115_200,
+                stop_bits: 0,
+                parity: 0,
+                data_bits: 8,
+            },
+        }
+    }
+
+    pub const fn state(&self) -> UsbState {
+        self.usb_state
+    }
+
+    pub const fn connection_state(&self) -> ConnectionState {
+        self.connection
+    }
+
+    pub const fn line_coding(&self) -> LineCoding {
+        self.line_coding
+    }
+
+    pub fn on_vbus(&mut self, present: bool) {
+        if present {
+            if self.connection == ConnectionState::Disconnected {
+                self.connection = ConnectionState::Connected;
+                self.usb_state = UsbState::Default;
+            }
+        } else {
+            self.disconnect();
+        }
+    }
+
+    pub fn on_bus_reset(&mut self) {
+        self.rx_len = 0;
+        self.tx_len = 0;
+        if self.connection != ConnectionState::Disconnected {
+            self.connection = ConnectionState::Connected;
+        }
+        self.usb_state = if self.connection == ConnectionState::Disconnected {
+            UsbState::Detached
+        } else {
+            UsbState::Default
+        };
+    }
+
+    pub fn on_configured(&mut self, configured: bool) {
+        if configured && self.connection == ConnectionState::Connected {
+            self.usb_state = UsbState::Configured;
+        } else if !configured && self.connection == ConnectionState::Connected {
+            self.usb_state = UsbState::Addressed;
+            self.rx_len = 0;
+            self.tx_len = 0;
+        }
+    }
+
+    pub fn on_suspend(&mut self) {
+        if self.connection == ConnectionState::Connected {
+            self.suspended_state = self.usb_state;
+            self.connection = ConnectionState::Suspended;
+            self.usb_state = UsbState::Suspended;
+        }
+    }
+
+    pub fn on_resume(&mut self) {
+        if self.connection == ConnectionState::Suspended {
+            self.connection = ConnectionState::Connected;
+            self.usb_state = self.suspended_state;
+        }
+    }
+
+    pub fn disconnect(&mut self) {
+        self.rx_len = 0;
+        self.tx_len = 0;
+        self.connection = ConnectionState::Disconnected;
+        self.usb_state = UsbState::Detached;
+    }
+
+    pub fn write(&mut self, bytes: &[u8]) -> Result<usize, CdcError> {
+        if bytes.len() > CDC_ENDPOINT_BUFFER_SIZE {
+            return Err(CdcError::Overflow);
+        }
+        if self.usb_state != UsbState::Configured {
+            return Err(CdcError::NotEnumerated);
+        }
+        if self.tx_len != 0 {
+            return Err(CdcError::Overflow);
+        }
+        self.tx[..bytes.len()].copy_from_slice(bytes);
+        self.tx_len = bytes.len();
+        Ok(bytes.len())
+    }
+
+    pub fn read(&mut self) -> Result<Option<u8>, CdcError> {
+        if self.usb_state != UsbState::Configured {
+            return Err(CdcError::NotEnumerated);
+        }
+        if self.rx_len == 0 {
+            return Ok(None);
+        }
+        let value = self.rx[0];
+        self.rx.copy_within(1..self.rx_len, 0);
+        self.rx_len -= 1;
+        Ok(Some(value))
+    }
+
+    /// Contract seam for a future hardware RX completion. It never executes a command.
+    pub fn accept_rx_packet(&mut self, packet: &[u8]) -> Result<(), CdcError> {
+        if packet.len() > CDC_ENDPOINT_BUFFER_SIZE
+            || packet.len() > CDC_ENDPOINT_BUFFER_SIZE - self.rx_len
+        {
+            return Err(CdcError::Overflow);
+        }
+        if self.usb_state != UsbState::Configured {
+            return Err(CdcError::NotEnumerated);
+        }
+        self.rx[self.rx_len..self.rx_len + packet.len()].copy_from_slice(packet);
+        self.rx_len += packet.len();
+        Ok(())
+    }
+
+    pub fn handle_control_request(
+        &mut self,
+        request: CdcControlRequest,
+    ) -> Result<CdcControlResponse, CdcError> {
+        if self.usb_state != UsbState::Configured {
+            return Err(CdcError::NotEnumerated);
+        }
+        match request {
+            CdcControlRequest::GetLineCoding { length } if length == 7 => {
+                Ok(CdcControlResponse::LineCoding(self.line_coding))
+            }
+            CdcControlRequest::SetLineCoding { length, coding } if length == 7 => {
+                self.line_coding = coding;
+                Ok(CdcControlResponse::Accepted)
+            }
+            CdcControlRequest::SetControlLineState { .. } => Ok(CdcControlResponse::Accepted),
+            _ => Err(CdcError::Unsupported),
+        }
+    }
+
+    /// Recognize only read-only command names; execution is intentionally absent.
+    pub fn allow_read_only_command(input: &[u8]) -> Result<ReadOnlyCommand, CdcError> {
+        ReadOnlyCommand::parse(input).ok_or(CdcError::Unsupported)
+    }
+}
+
+impl Default for CdcTransport {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(target_arch = "arm")]
 mod hardware {
     #![allow(unsafe_op_in_unsafe_fn)]
@@ -735,6 +992,104 @@ mod tests {
             handle_setup(&mut machine, setup(0x80, 8, 0, 2)),
             ControlResponse::Stall
         );
+    }
+
+    #[test]
+    fn cdc_state_transitions_and_lifecycle_clear_buffers() {
+        let mut transport = CdcTransport::new();
+        assert_eq!(transport.state(), UsbState::Detached);
+        assert_eq!(transport.connection_state(), ConnectionState::Disconnected);
+        transport.on_vbus(true);
+        assert_eq!(transport.state(), UsbState::Default);
+        assert_eq!(transport.connection_state(), ConnectionState::Connected);
+        transport.on_configured(true);
+        assert_eq!(transport.state(), UsbState::Configured);
+        transport.on_suspend();
+        assert_eq!(transport.state(), UsbState::Suspended);
+        assert_eq!(transport.connection_state(), ConnectionState::Suspended);
+        transport.on_resume();
+        assert_eq!(transport.state(), UsbState::Configured);
+        transport.on_bus_reset();
+        assert_eq!(transport.state(), UsbState::Default);
+        transport.disconnect();
+        assert_eq!(transport.state(), UsbState::Detached);
+        assert_eq!(transport.connection_state(), ConnectionState::Disconnected);
+    }
+
+    #[test]
+    fn cdc_bounds_and_not_enumerated_are_explicit() {
+        let mut transport = CdcTransport::new();
+        assert_eq!(transport.write(&[0; 65]), Err(CdcError::Overflow));
+        assert_eq!(transport.write(b"ping"), Err(CdcError::NotEnumerated));
+        assert_eq!(transport.read(), Err(CdcError::NotEnumerated));
+        transport.on_vbus(true);
+        transport.on_configured(true);
+        assert_eq!(
+            transport.accept_rx_packet(&[0; 65]),
+            Err(CdcError::Overflow)
+        );
+        assert_eq!(transport.write(&[0; 64]), Ok(64));
+        assert_eq!(transport.write(b"x"), Err(CdcError::Overflow));
+        transport.disconnect();
+        assert_eq!(transport.read(), Err(CdcError::NotEnumerated));
+    }
+
+    #[test]
+    fn cdc_line_coding_contract_does_not_mutate_on_invalid_request() {
+        let mut transport = CdcTransport::new();
+        let original = transport.line_coding();
+        assert_eq!(
+            transport.handle_control_request(CdcControlRequest::GetLineCoding { length: 6 }),
+            Err(CdcError::NotEnumerated)
+        );
+        transport.on_vbus(true);
+        transport.on_configured(true);
+        assert_eq!(
+            transport.handle_control_request(CdcControlRequest::GetLineCoding { length: 6 }),
+            Err(CdcError::Unsupported)
+        );
+        assert_eq!(transport.line_coding(), original);
+        transport.disconnect();
+        assert_eq!(
+            transport.handle_control_request(CdcControlRequest::SetLineCoding {
+                length: 7,
+                coding: LineCoding {
+                    baud_rate: 9_600,
+                    stop_bits: 0,
+                    parity: 0,
+                    data_bits: 8,
+                },
+            }),
+            Err(CdcError::NotEnumerated)
+        );
+        // Line coding is a control contract only until CDC transfers are proven.
+        assert_eq!(transport.line_coding(), original);
+    }
+
+    #[test]
+    fn cdc_allowlist_is_read_only_and_has_no_execution_path() {
+        assert_eq!(
+            CdcTransport::allow_read_only_command(b"ping"),
+            Ok(ReadOnlyCommand::Ping)
+        );
+        assert_eq!(
+            CdcTransport::allow_read_only_command(b"help"),
+            Ok(ReadOnlyCommand::Help)
+        );
+        assert_eq!(
+            CdcTransport::allow_read_only_command(b"time"),
+            Ok(ReadOnlyCommand::Time)
+        );
+        assert_eq!(
+            CdcTransport::allow_read_only_command(b"identity"),
+            Ok(ReadOnlyCommand::Identity)
+        );
+        for command in [b"set".as_slice(), b"write", b"erase", b"echo"] {
+            assert_eq!(
+                CdcTransport::allow_read_only_command(command),
+                Err(CdcError::Unsupported)
+            );
+        }
     }
 
     #[test]

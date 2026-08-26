@@ -7,8 +7,10 @@ the default production build.
 This profile is a minimal application feasibility boundary only. It retains
 startup, watchdog, reset/fault recording, device identity, and the normal
 bootloader application range while omitting the production application and
-optional drivers. It does not activate USB hardware, implement enumeration,
-or provide CDC bulk transfer, a terminal, or a shell claim.
+optional drivers. It contains only an EP0 feasibility scaffold and a replaceable
+CDC transport contract. Physical EP0 and CDC transfers are unproven, so the
+transport returns `NotEnumerated` or `Unsupported`; it provides no terminal,
+shell response, or mutating command path.
 
 ## Checks and size
 
@@ -32,8 +34,10 @@ target/validation/minimal-usb/thumbv6m-none-eabi/release/minimal-usb
 
 The image must fit the application region `0x00002000..0x0003C000`, or
 `0x3A000` bytes. Report the exact ELF path and byte size from the size check.
-USB register and packet-memory work is deliberately excluded from this
-profile and must be reviewed separately before any hardware implementation.
+The EP0 register and packet-memory scaffold is fail closed and must be proven
+with hardware traces before CDC transfers are implemented. The transport uses
+fixed 64-byte endpoint buffers and is deliberately separate from production
+firmware.
 
 ## Hardware validation required
 
@@ -45,8 +49,8 @@ battery removed or otherwise protected from USB back-powering:
 2. Full-speed reset, GET_DESCRIPTOR, SET_ADDRESS, and SET_CONFIGURATION.
 3. Suspend, resume, bus reset, unplug, and repeated reconnect behavior.
 4. EP0 packet correctness with a USB protocol analyzer or host trace.
-5. Only after that, real CDC bulk host terminal read/write and a separately
-   reviewed command policy.
+5. Only after that, connect the replaceable CDC transport to real bulk
+   transfers and separately review the read-only command policy.
 
 The existing UF2 bootloader remains the only supported flash entry path. Preserve
 a known-good production UF2 before replacing the application image. Restore it
