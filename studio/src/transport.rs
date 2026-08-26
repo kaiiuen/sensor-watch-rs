@@ -166,7 +166,8 @@ pub fn encode_command(command: &str) -> Result<Vec<u8>, TransportError> {
 
 fn is_allowed_uart_command(command: &str) -> bool {
     match command {
-        "help" | "status" | "time" | "events" | "events clear" | "panic" | "optical" => true,
+        "help" | "status" | "time" | "identity" | "id" | "events" | "events clear" | "panic"
+        | "optical" => true,
         value if value.starts_with("drift ") => value[6..]
             .parse::<i32>()
             .map(|ppm| (-127..=127).contains(&ppm))

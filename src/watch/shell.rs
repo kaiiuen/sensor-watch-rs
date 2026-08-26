@@ -95,7 +95,8 @@ impl Shell {
     ///
     /// Call this from a tick or background task. It reads available bytes,
     /// accumulates a line, and executes the command when a newline arrives.
-    pub fn poll(&mut self) {
+    pub fn poll(&mut self) -> bool {
+        let mut had_input = false;
         transport_service();
         if transport_rx_overflowed() {
             self.reset_line();
@@ -105,6 +106,7 @@ impl Shell {
         // Consume a bounded amount per wake. The UART ring retains the rest.
         for _ in 0..16 {
             let Some(c) = transport_getc() else { break };
+            had_input = true;
             if c == b'\n' || c == b'\r' {
                 if !self.last_was_terminator {
                     if self.invalid_line {
@@ -131,6 +133,7 @@ impl Shell {
                 self.last_was_terminator = false;
             }
         }
+        had_input
     }
 
     fn reset_line(&mut self) {
