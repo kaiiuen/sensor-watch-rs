@@ -1508,7 +1508,7 @@ impl eframe::App for StudioApp {
                 let build_fingerprint = self.pending_build_fingerprint.take();
                 match handle.join() {
                     Ok(result) => {
-                        self.build_progress = None;
+                        self.clear_build_worker_progress();
                         self.selected_trace = self
                             .trace_store
                             .as_ref()
@@ -1606,6 +1606,12 @@ impl eframe::App for StudioApp {
                         }
                     }
                     Err(_) => {
+                        self.clear_build_worker_progress();
+                        self.selected_trace = self
+                            .trace_store
+                            .as_ref()
+                            .and_then(|store| store.list().ok())
+                            .and_then(|mut traces| traces.pop());
                         self.build_success_notice.reset();
                         self.building = false;
                         self.build_message =
@@ -5274,12 +5280,12 @@ impl StudioApp {
                 ui.separator();
                 // Flash. Detection is cached and refreshed explicitly in a worker;
                 // rendering never enumerates drive roots.
-                ui.strong("Flash");
+                ui.strong("Flash (copy to watch)");
                 if let Some(event) = &self.current_progress {
                     ui.group(|ui| {
                         ui.horizontal(|ui| {
                             ui.spinner();
-                            ui.strong(format!("Build/Flash: {} · op {}", event.phase.label(), event.operation_id));
+                            ui.strong(active_progress_label(event));
                         });
                         ui.label(&event.message);
                         if let (Some(current), Some(total)) = (event.current, event.total) {
@@ -10231,6 +10237,13 @@ impl StudioApp {
         }
     }
 
+    fn clear_build_worker_progress(&mut self) {
+        let Some((operation_id, _)) = self.build_progress.take() else {
+            return;
+        };
+        self.clear_completed_progress(operation_id);
+    }
+
     fn clear_completed_progress(&mut self, operation_id: u64) {
         if self
             .current_progress
@@ -12116,6 +12129,14 @@ fn render_inspection_result(
     });
 }
 
+fn active_progress_label(event: &ProgressEvent) -> String {
+    format!(
+        "Active operation: {} (op {} = worker run)",
+        event.phase.label(),
+        event.operation_id
+    )
+}
+
 fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
     format!(
         "Path: {}\nGeneration: {}\nFamily: {}\nUF2: {} bytes / {} blocks\nPayload: {} bytes\nUF2 SHA-256: {}\nPayload SHA-256: {}\nManifest digest: {}\nGenerated-input digest: {}",
@@ -12640,6 +12661,79 @@ mod tests {
             current: None,
             total: None,
         }
+    }
+
+    fn build_cleanup_fixture(app: &mut StudioApp, operation_id: u64) {
+        let (progress, receiver) = progress::channel(operation_id);
+        progress.emit(
+            Phase::Cleanup,
+            "Cleaning isolated workspace and temporary build state",
+            None,
+            None,
+        );
+        app.current_progress = Some(test_progress_event(
+            operation_id,
+            Phase::Cleanup,
+            "Cleaning isolated workspace and temporary build state",
+        ));
+        app.build_progress = Some((operation_id, receiver));
+        app.pending_build = Some(std::thread::spawn(|| super::build::BuildResult {
+            success: true,
+            message: "Build complete".to_string(),
+            uf2_path: None,
+        }));
+    }
+
+    #[test]
+    fn successful_build_cleanup_clears_active_spinner() {
+        let mut app = StudioApp::default();
+        build_cleanup_fixture(&mut app, 51);
+        app.clear_build_worker_progress();
+        assert!(app.current_progress.is_none());
+        assert!(app.build_progress.is_none());
+    }
+
+    #[test]
+    fn failed_build_cleanup_clears_active_spinner() {
+        let mut app = StudioApp::default();
+        build_cleanup_fixture(&mut app, 52);
+        app.clear_build_worker_progress();
+        app.status = "Build failed".to_string();
+        assert!(app.current_progress.is_none());
+        assert_eq!(app.status, "Build failed");
+    }
+
+    #[test]
+    fn panicked_build_worker_cleanup_clears_active_spinner() {
+        let mut app = StudioApp::default();
+        build_cleanup_fixture(&mut app, 53);
+        app.clear_build_worker_progress();
+        app.status = "Build thread panicked".to_string();
+        assert!(app.current_progress.is_none());
+        assert_eq!(app.status, "Build thread panicked");
+    }
+
+    #[test]
+    fn operation_id_display_explains_worker_run() {
+        let event = test_progress_event(54, Phase::Cargo, "compiling");
+        assert_eq!(
+            super::active_progress_label(&event),
+            "Active operation: cargo (op 54 = worker run)"
+        );
+    }
+
+    #[test]
+    fn cleanup_event_is_retained_in_build_log_but_not_active() {
+        let mut app = StudioApp::default();
+        build_cleanup_fixture(&mut app, 55);
+        app.drain_build_progress();
+        app.clear_build_worker_progress();
+        assert!(app.current_progress.is_none());
+        assert!(app
+            .build_log
+            .entries()
+            .iter()
+            .any(|entry| entry.message.contains("Cleaning isolated workspace")));
     }
 
     #[test]

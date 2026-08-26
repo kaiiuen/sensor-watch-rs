@@ -285,6 +285,44 @@ mod tests {
     }
 
     #[test]
+    fn cleanup_event_is_retained_in_durable_trace_after_completion() {
+        let root = std::env::temp_dir().join(format!(
+            "sensor-watch-studio-progress-trace-{}",
+            std::process::id()
+        ));
+        let store = crate::trace::TraceStore::new(&root).expect("trace store");
+        let operation = store
+            .start(
+                crate::trace::OperationKind::Build,
+                "build",
+                crate::trace::Origin::Host,
+            )
+            .expect("trace operation");
+        let (sink, receiver) = channel_with_trace(56, Some(operation));
+        sink.emit(
+            Phase::Cleanup,
+            "Cleaning isolated workspace and temporary build state",
+            None,
+            None,
+        );
+        sink.finish(true, "Build complete");
+        let records = store.list().expect("completed trace").pop().expect("trace");
+        assert!(records.records.iter().any(|record| {
+            record.phase == crate::trace::Phase::Running
+                && record.message.contains("Cleaning isolated workspace")
+        }));
+        assert_eq!(
+            records.records.last().unwrap().phase,
+            crate::trace::Phase::Completed
+        );
+        assert!(receiver
+            .drain()
+            .iter()
+            .any(|event| event.phase == Phase::Cleanup));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
     fn full_channel_counts_dropped_events() {
         let (sink, receiver) = channel(9);
         for index in 0..(CHANNEL_CAPACITY + 3) {
