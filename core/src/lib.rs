@@ -12,6 +12,7 @@
 extern crate alloc;
 
 pub mod background_tasks;
+pub mod board;
 pub mod datetime;
 pub mod ecc;
 pub mod event_log;

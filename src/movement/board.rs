@@ -7,6 +7,12 @@
 
 use crate::watch::deepsleep;
 
+/// Evidence-backed mappings shared with Studio; BoardConfig remains compatible.
+pub use sensor_watch_core::board::{
+    BoardId, BoardMapping, Capability, CapabilitySet, LcdMap, MappingConflicts, MappingError,
+    PinAssignment, PinId, PinMap, RevisionId, RevisionSelector, lookup,
+};
+
 /// Backup register for the board configuration.
 const REG_BOARD: u8 = 7;
 

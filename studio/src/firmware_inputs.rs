@@ -564,6 +564,18 @@ impl BoardData {
     }
 }
 fn board_data(board: BoardKind, revision: &str) -> Result<&'static BoardData, FirmwareInputError> {
+    let firmware_board = match board {
+        BoardKind::Green => sensor_watch_core::board::BoardId::Green,
+        BoardKind::RedLite => sensor_watch_core::board::BoardId::RedLite,
+        BoardKind::Blue => sensor_watch_core::board::BoardId::Blue,
+        BoardKind::Pro => sensor_watch_core::board::BoardId::Pro,
+    };
+    sensor_watch_core::board::lookup(firmware_board, revision).map_err(|_| {
+        FirmwareInputError::Unsupported(format!(
+            "unsupported {} revision {revision:?}",
+            board.label()
+        ))
+    })?;
     let data = match board {
         BoardKind::Green | BoardKind::Blue => &SWAT_DATA,
         BoardKind::RedLite => &LITE_DATA,
