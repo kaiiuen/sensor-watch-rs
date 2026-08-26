@@ -592,6 +592,7 @@ fn editor_hash(source: &str) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
 
     #[test]
     fn all_categories_are_serializable_and_unknowns_migrate_to_archive() {
@@ -635,7 +636,13 @@ mod tests {
 
     #[test]
     fn category_create_and_external_conflict_are_safe() {
-        let root = std::env::temp_dir().join(format!("studio-notepad-{}", std::process::id()));
+        let executable = std::env::current_exe().unwrap();
+        let executable_id = sha2::Sha256::digest(executable.to_string_lossy().as_bytes());
+        let root = std::env::temp_dir().join(format!(
+            "studio-notepad-{}-{executable_id:x}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
         let mut notepad = Notepad::from_roots(root.clone());
         notepad.create("Build plan", NoteCategory::Project).unwrap();

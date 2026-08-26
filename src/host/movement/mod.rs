@@ -2143,6 +2143,26 @@ mod tests {
     }
 
     #[test]
+    fn real_thermistor_readout_simulated_temperature_shows_celsius_and_fahrenheit() {
+        let mut mock = steady_state();
+        mock.thermistor_temperature_celsius = Some(25.0);
+        let mut settings = h24_settings();
+        let mut face = thermistor_readout::ThermistorReadoutFace::new();
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || {
+            face.loop_(types::Event::Activate, &mut settings)
+        });
+        assert!(mock.text().contains("25.0#C"));
+        seam::with_hw(&mut mock, || {
+            face.loop_(
+                types::Event::Button(types::Button::Alarm, types::ButtonEvent::Down),
+                &mut settings,
+            )
+        });
+        assert!(mock.text().contains("77.0#F"));
+    }
+
+    #[test]
     fn real_thermistor_readout_alarm_down_toggles_fahrenheit() {
         let mut mock = steady_state();
         let mut settings = h24_settings();
@@ -2208,6 +2228,19 @@ mod tests {
         });
         // note_ind 9 -> "A " at pos 8 -> 8 leading spaces.
         assert_eq!(mock.text(), "        A");
+    }
+
+    #[test]
+    fn real_voltage_simulated_value_changes_display() {
+        let mut mock = steady_state();
+        mock.vcc_mv = 2750;
+        let mut settings = h24_settings();
+        let mut face = voltage::VoltageFace::new();
+        seam::with_hw(&mut mock, || face.activate(&settings));
+        seam::with_hw(&mut mock, || {
+            face.loop_(types::Event::Activate, &mut settings)
+        });
+        assert_eq!(mock.text(), "BA  2.75 V");
     }
 
     #[test]
