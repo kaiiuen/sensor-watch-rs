@@ -2200,8 +2200,8 @@ impl eframe::App for StudioApp {
                         }
                     }
                     ConfirmKind::LaunchMasterClock => {
-                        if !self.developer_mode {
-                            self.status = "Master Clock requires Developer mode".into();
+                        if !self.advanced_mode {
+                            self.status = "Master Clock requires Advanced mode".into();
                         } else if self.master_clock_process.is_some() {
                             self.status = "Master Clock is already running".into();
                         } else if let Some(path) = self.master_clock_executable() {

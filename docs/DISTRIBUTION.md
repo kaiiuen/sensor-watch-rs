@@ -24,7 +24,7 @@ before Studio enters packaged mode:
   "tools_directory": "tools",
   "targets_directory": "targets",
   "master_clock": null,
-  "user_data_directory": "(platform user-data directory; not included)"
+  "user_data_directory": "data"
 }
 ```
 
@@ -44,10 +44,13 @@ when present. The optional `master_clock` capability must be exactly
 `tools/master-clock.exe`, include a SHA-256 digest, and may include a signature
 checked through the existing desktop-update authentication hook. The executable
 must be present, package-local, and hash-valid before Advanced Settings exposes
-it. The package builder emits this capability as absent: the unlicensed,
-untracked Master Clock source is not bundled automatically. A package is never
-described as self-contained when any required project/resource capability or
-optional tool/target bundle is absent.
+it. The package builder includes this capability only when the caller explicitly
+requests it and supplies non-empty license and provenance metadata. It either
+builds the known Windows `master-clock` sibling in bounded release mode or uses
+an explicitly supplied source/executable override. It never searches `PATH`.
+The resulting `tools/master-clock.exe` is recorded with its SHA-256 digest. A
+package is never described as self-contained when any required project/resource
+capability or optional tool/target bundle is absent.
 
 ## Runtime modes and mutable data
 
@@ -57,13 +60,15 @@ optional tool/target bundle is absent.
   compiled developer workspace and is labeled separately in the GUI.
 - With no manifest and no explicit developer mode, project resources are
   unavailable. Studio does not silently use a checkout.
-- Settings, presets, logs, restore points, and generated user data stay in the
-  platform user-data root and are not written into the package root.
+- Packaged settings, presets, logs, restore points, generated user data, and
+  build outputs stay below `<package root>/data`. They are separate from
+  immutable version and resource directories.
 - Master Clock is never launched during startup. In Advanced mode it is an
   explicit, confirmed action with a privacy warning: NTP and geolocation are
-  external network activity, and Windows time is not changed. Developer mode
-  accepts only an explicitly configured and validated executable path; it never
-  searches `PATH`.
+  external network activity, and Windows time is not changed. Packaged mode
+  accepts only the package-local capability after hash/signature validation;
+  Developer mode additionally accepts only an explicitly configured and
+  validated executable path. Neither mode searches `PATH`.
 
 The footer displays the mode, current package version when available, and
 whether the distribution is complete or partial. Missing resources are shown
@@ -132,18 +137,35 @@ launcher itself is installed once and is not replaced while it is running.
 
 ## Building a package
 
-`package-studio` automatically runs release builds for both the launcher package
-`sensor-watch-launcher` and the Studio package `sensor-watch-studio`, then places
-both artifacts in the package. A separately supplied launcher is supported for
-tests or a release pipeline, but the normal command does not require a manual
-launcher build.
+`package-studio` automatically runs bounded release builds for both the launcher
+package `sensor-watch-launcher` and the Studio package `sensor-watch-studio`,
+then places both artifacts in the package. A separately supplied launcher is
+supported for tests or a release pipeline, but the normal command does not
+require a manual launcher build.
+
+To include Master Clock, the caller must explicitly provide both metadata fields:
+
+```powershell
+cargo run -p sensor-watch-tools -- package-studio `
+  --master-clock-license "<license supplied by the user>" `
+  --master-clock-provenance "<source/release provenance supplied by the user>"
+```
+
+On Windows this builds the known sibling project at
+`..\..\master-clock` (relative to `sensor-watch-rs`) for the bounded
+`x86_64-pc-windows-msvc` release target. `--master-clock-source PATH` selects a
+different local source tree, while `--master-clock-exe PATH` selects an
+already-built `master-clock.exe`; either override avoids the automatic build.
+The builder hashes the selected executable and packages it only as
+`tools/master-clock.exe`.
 
 ## Limitations
 
 This is an offline, folder-based distribution foundation. It does not download
 updates, discover releases, or replace the running executable in place. The
 package builder does not sign release metadata or bundle optional `tools` and
-`targets` by default. Publishing still requires an external signing step and
-any required optional bundles must be supplied separately. The launcher owns
+`targets` by default. Master Clock is the explicit, metadata-bearing exception
+described above. Publishing still requires an external signing step and any
+required optional bundles must be supplied separately. The launcher owns
 selection, verification, startup timeout, and rollback. Studio does not perform
 those operations itself.

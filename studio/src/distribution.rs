@@ -542,6 +542,7 @@ impl PackageStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::Digest;
     use std::time::{SystemTime, UNIX_EPOCH};
 
     fn temp(name: &str) -> PathBuf {
@@ -569,6 +570,51 @@ mod tests {
         })
         .to_string()
     }
+    #[test]
+    fn packaged_master_clock_capability_is_hash_validated_end_to_end() {
+        let root = temp("master-clock-capability");
+        let exe = root.join("app/sensor-watch-studio.exe");
+        let tool = root.join(master_clock::TOOL_RELATIVE_PATH);
+        std::fs::create_dir_all(exe.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(tool.parent().unwrap()).unwrap();
+        std::fs::write(&exe, b"studio").unwrap();
+        std::fs::write(&tool, b"master-clock-release").unwrap();
+        let hash = format!("{:x}", sha2::Sha256::digest(b"master-clock-release"));
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "current_version": {"version": "2.4.0"},
+            "launcher_executable": "app/sensor-watch-studio.exe",
+            "app_directory": "app",
+            "resources_directory": "resources",
+            "templates_directory": "templates",
+            "firmware_project_directory": "firmware",
+            "master_clock": {
+                "path": master_clock::TOOL_RELATIVE_PATH,
+                "sha256": hash,
+                "signature": null,
+                "license": "MIT OR Apache-2.0",
+                "provenance": "user-supplied sibling release"
+            }
+        });
+        std::fs::write(root.join(MANIFEST_FILE), manifest.to_string()).unwrap();
+        let status = resolve(&exe, false, None);
+        assert_eq!(status.master_clock, Some(tool.canonicalize().unwrap()));
+        assert!(status.capabilities.master_clock);
+        assert!(!status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("Master Clock")));
+        std::fs::write(&tool, b"tampered").unwrap();
+        let status = resolve(&exe, false, None);
+        assert!(status.master_clock.is_none());
+        assert!(!status.capabilities.master_clock);
+        assert!(status
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("hash")));
+        let _ = std::fs::remove_dir_all(root);
+    }
+
     #[test]
     fn discovers_package_root_and_version_metadata() {
         let root = temp("discover");

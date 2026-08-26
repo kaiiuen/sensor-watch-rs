@@ -242,7 +242,7 @@ pub fn package_studio_artifacts(
     executable: &Path,
     output: Option<&Path>,
 ) -> ToolResult<StudioPackageResult> {
-    let target = root.join("target");
+    let target = target_directory(root);
     let launcher = find_launcher_artifact(&target.join("release"))?;
     package_studio_artifacts_with_launcher(root, executable, &launcher, output)
 }
@@ -775,11 +775,12 @@ mod tests {
         ] {
             fs::write(root.join(file), file).unwrap();
         }
-        fs::create_dir_all(root.join("target/release")).unwrap();
-        let executable = root.join("target/release/sensor-watch-studio.exe");
+        let target = target_directory(&root);
+        fs::create_dir_all(target.join("release")).unwrap();
+        let executable = target.join("release/sensor-watch-studio.exe");
         fs::write(&executable, b"exe").unwrap();
         fs::write(
-            root.join("target/release/sensor-watch-studio-launcher.exe"),
+            target.join("release/sensor-watch-studio-launcher.exe"),
             b"launcher",
         )
         .unwrap();
@@ -828,7 +829,7 @@ mod tests {
     #[test]
     fn automatic_launcher_resolution_uses_canonical_release_name() {
         let (root, _) = fixture("launcher-resolution");
-        let release = root.join("target/release");
+        let release = target_directory(&root).join("release");
         assert_eq!(
             resolve_launcher_artifact(&release, None).unwrap(),
             release.join("sensor-watch-studio-launcher.exe")
@@ -860,7 +861,8 @@ mod tests {
     #[test]
     fn package_requires_a_separate_launcher() {
         let (root, executable) = fixture("launcher-required");
-        fs::remove_file(root.join("target/release/sensor-watch-studio-launcher.exe")).unwrap();
+        fs::remove_file(target_directory(&root).join("release/sensor-watch-studio-launcher.exe"))
+            .unwrap();
         let error =
             package_studio_artifacts(&root, &executable, Some(&root.join("out.zip"))).unwrap_err();
         assert!(error.contains("required launcher/bootstrapper artifact is absent"));
@@ -1040,7 +1042,7 @@ mod tests {
         package_studio_artifacts_with_launcher_and_master_clock(
             &root,
             &executable,
-            &root.join("target/release/sensor-watch-studio-launcher.exe"),
+            &target_directory(&root).join("release/sensor-watch-studio-launcher.exe"),
             Some(&output),
             Some(prepared),
         )
@@ -1074,7 +1076,9 @@ mod tests {
         let error = prepare_master_clock(
             &root,
             &MasterClockPackageOptions {
-                executable_override: Some(root.join("target/release/sensor-watch-studio.exe")),
+                executable_override: Some(
+                    target_directory(&root).join("release/sensor-watch-studio.exe"),
+                ),
                 ..Default::default()
             },
         )
