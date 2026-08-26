@@ -6,7 +6,7 @@
 //! production authentication/key provisioning exists.
 
 #[cfg(feature = "pro-irda-rx")]
-use sensor_watch_core::optical::{self, DecodeError, Decoder};
+use sensor_watch_core::optical::{OpticalIo, OpticalSession, SessionState};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum State {
@@ -22,7 +22,26 @@ pub enum Error {
 }
 
 #[cfg(feature = "pro-irda-rx")]
-static mut DECODER: Decoder = Decoder::new();
+struct UartIo {
+    now_ms: u32,
+}
+
+#[cfg(feature = "pro-irda-rx")]
+impl OpticalIo for UartIo {
+    fn read_byte(&mut self) -> Option<u8> {
+        crate::watch::uart::try_getc_pro_irda()
+    }
+    fn now_ms(&mut self) -> u32 {
+        self.now_ms
+    }
+    fn queue_ack(&mut self, _sequence: u32) {}
+    fn apply_rtc(&mut self, _packed_datetime: u32) -> Result<(), ()> {
+        Err(())
+    }
+}
+
+#[cfg(feature = "pro-irda-rx")]
+static mut SESSION: OpticalSession = OpticalSession::receive_only();
 #[cfg(feature = "pro-irda-rx")]
 static mut FRAMES: u32 = 0;
 #[cfg(feature = "pro-irda-rx")]
@@ -53,22 +72,13 @@ pub fn enable() -> bool {
 #[cfg(feature = "pro-irda-rx")]
 pub fn poll_at(now_ms: u32) {
     crate::watch::uart::service_pro_irda_rx();
-    for _ in 0..64 {
-        let Some(byte) = crate::watch::uart::try_getc_pro_irda() else {
-            break;
-        };
-        let result = critical_section::with(|_| unsafe { DECODER.push(byte, now_ms, None) });
-        if let Some(result) = result {
-            match result {
-                Ok(frame) => unsafe {
-                    FRAMES = FRAMES.saturating_add(1);
-                    if frame.command == optical::CommandType::TimeSync {
-                        ERRORS = ERRORS.saturating_add(1);
-                    }
-                },
-                Err(DecodeError::Authentication) => unsafe { ERRORS = ERRORS.saturating_add(1) },
-                Err(_) => unsafe { ERRORS = ERRORS.saturating_add(1) },
-            }
+    let mut io = UartIo { now_ms };
+    let result = critical_section::with(|_| unsafe { SESSION.service(&mut io, None) });
+    if let Some(result) = result {
+        match result {
+            Ok(SessionState::AckQueued) => unsafe { FRAMES = FRAMES.saturating_add(1) },
+            Err(_) => unsafe { ERRORS = ERRORS.saturating_add(1) },
+            _ => {}
         }
     }
 }

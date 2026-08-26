@@ -270,16 +270,25 @@ pub fn decode(bytes: &[u8], auth: Option<&dyn AuthenticationHook>) -> Result<Fra
     {
         return Err(DecodeError::Crc);
     }
-    let command = CommandType::from_byte(bytes[3]).ok_or(DecodeError::UnsupportedCommand)?;
+    let command = match CommandType::from_byte(bytes[3]) {
+        Some(command) => command,
+        None => return Err(DecodeError::UnsupportedCommand),
+    };
     let requires_auth = matches!(command, CommandType::TimeSync);
     let payload_len = if requires_auth {
-        let hook = auth.ok_or(DecodeError::Authentication)?;
+        let hook = match auth {
+            Some(hook) => hook,
+            None => return Err(DecodeError::Authentication),
+        };
         if length < AUTH_TAG_LEN {
             return Err(DecodeError::Authentication);
         }
         let payload_len = length - AUTH_TAG_LEN;
         let tag = &bytes[HEADER_LEN + payload_len..HEADER_LEN + length];
-        let tag: &[u8; AUTH_TAG_LEN] = tag.try_into().map_err(|_| DecodeError::Authentication)?;
+        let tag: &[u8; AUTH_TAG_LEN] = match tag.try_into() {
+            Ok(tag) => tag,
+            Err(_) => return Err(DecodeError::Authentication),
+        };
         if !hook.verify(&bytes[..HEADER_LEN + payload_len], tag) {
             return Err(DecodeError::Authentication);
         }
@@ -292,11 +301,11 @@ pub fn decode(bytes: &[u8], auth: Option<&dyn AuthenticationHook>) -> Result<Fra
     };
     let mut frame = Frame::empty();
     frame.command = command;
-    frame.sequence = u32::from_be_bytes(
-        bytes[5..9]
-            .try_into()
-            .map_err(|_| DecodeError::InvalidLength)?,
-    );
+    let sequence: [u8; 4] = match bytes[5..9].try_into() {
+        Ok(sequence) => sequence,
+        Err(_) => return Err(DecodeError::InvalidLength),
+    };
+    frame.sequence = u32::from_be_bytes(sequence);
     frame.payload_len = payload_len;
     frame.payload[..payload_len].copy_from_slice(&bytes[9..9 + payload_len]);
     Ok(frame)
@@ -403,6 +412,218 @@ impl Decoder {
 impl Default for Decoder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Explicit lifecycle of one replaceable optical synchronization session.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionState {
+    Idle,
+    Receiving,
+    Authenticated,
+    Authorized,
+    Applied,
+    AckQueued,
+    Expired,
+}
+
+/// The bounded hardware/application seam for a session.
+///
+/// Implementations own the physical byte source and RTC adapter. The core
+/// session never creates a transmitter and never mutates an RTC unless both
+/// the policy and the implementation explicitly permit it.
+pub trait OpticalIo {
+    fn read_byte(&mut self) -> Option<u8>;
+    fn now_ms(&mut self) -> u32;
+    fn queue_ack(&mut self, sequence: u32);
+    fn apply_rtc(&mut self, packed_datetime: u32) -> Result<(), ()>;
+}
+
+pub const MAX_POLL_BYTES: usize = 64;
+pub const DEFAULT_AUTHORIZATION_MS: u32 = 5_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionError {
+    Decode(DecodeError),
+    Payload(TimeSyncError),
+    AuthorizationExpired,
+    RtcApply,
+}
+
+/// A fixed-storage optical session. Construct a new value per association or
+/// call [`OpticalSession::reset`] before accepting another one.
+pub struct OpticalSession {
+    decoder: Decoder,
+    policy: TimeSyncPolicy,
+    state: SessionState,
+    authorization_until_ms: Option<u32>,
+    ack: Option<u32>,
+}
+
+impl OpticalSession {
+    pub const fn new(policy: TimeSyncPolicy) -> Self {
+        Self {
+            decoder: Decoder::new(),
+            policy,
+            state: SessionState::Idle,
+            authorization_until_ms: None,
+            ack: None,
+        }
+    }
+
+    pub const fn receive_only() -> Self {
+        Self::new(TimeSyncPolicy::receive_only())
+    }
+
+    pub const fn state(&self) -> SessionState {
+        self.state
+    }
+
+    pub const fn policy(&self) -> TimeSyncPolicy {
+        self.policy
+    }
+
+    /// Grants physical authorization only until the supplied wrapping-safe
+    /// monotonic deadline. This is separate from cryptographic authentication.
+    pub fn authorize_until(&mut self, deadline_ms: u32) {
+        self.authorization_until_ms = Some(deadline_ms);
+    }
+
+    pub fn clear_authorization(&mut self) {
+        self.authorization_until_ms = None;
+        if matches!(self.state, SessionState::Authorized) {
+            self.state = SessionState::Expired;
+        }
+    }
+
+    pub const fn ack_pending(&self) -> Option<u32> {
+        self.ack
+    }
+
+    pub fn reset(&mut self) {
+        self.decoder = Decoder::new();
+        self.state = SessionState::Idle;
+        self.authorization_until_ms = None;
+        self.ack = None;
+    }
+
+    pub fn expire(&mut self, now_ms: u32) {
+        if self
+            .authorization_until_ms
+            .is_some_and(|deadline| now_ms.wrapping_sub(deadline) < 0x8000_0000)
+        {
+            self.state = SessionState::Expired;
+            self.ack = None;
+        }
+    }
+
+    /// Accepts one encoded frame. It is useful for host tests and for I/O
+    /// adapters that already have a bounded frame buffer.
+    pub fn receive(
+        &mut self,
+        bytes: &[u8],
+        now_ms: u32,
+        auth: Option<&dyn AuthenticationHook>,
+    ) -> Result<Frame, SessionError> {
+        self.expire(now_ms);
+        if self.state == SessionState::Expired {
+            return Err(SessionError::AuthorizationExpired);
+        }
+        self.state = SessionState::Receiving;
+        let frame = decode(bytes, auth).map_err(SessionError::Decode)?;
+        self.state = SessionState::Authenticated;
+        if frame.command == CommandType::TimeSync {
+            let payload = TimeSyncPayload::parse(frame.payload()).map_err(SessionError::Payload)?;
+            if !payload.is_fresh(now_ms / 1_000) {
+                return Err(SessionError::Payload(TimeSyncError::Stale));
+            }
+            let authorized = self.policy.crypto_provisioned
+                && self.policy.authenticated
+                && self.policy.physically_authorized
+                && self
+                    .authorization_until_ms
+                    .is_some_and(|deadline| now_ms.wrapping_sub(deadline) >= 0x8000_0000);
+            if !authorized {
+                self.state = if self.authorization_until_ms.is_some() {
+                    SessionState::Expired
+                } else {
+                    SessionState::Authenticated
+                };
+                return Err(SessionError::Payload(
+                    if self.authorization_until_ms.is_some() {
+                        TimeSyncError::NotAuthorized
+                    } else {
+                        TimeSyncError::NotAuthenticated
+                    },
+                ));
+            }
+            self.state = SessionState::Authorized;
+            if self.policy.rtc_mutation_enabled {
+                // Applying is deliberately delegated to the caller's I/O seam.
+                // `receive` cannot mutate because it has no I/O object.
+            }
+        }
+        Ok(frame)
+    }
+
+    /// Services at most [`MAX_POLL_BYTES`] bytes and queues an ACK only after
+    /// a complete, authorized frame. RTC mutation remains policy-gated.
+    pub fn service<I: OpticalIo>(
+        &mut self,
+        io: &mut I,
+        auth: Option<&dyn AuthenticationHook>,
+    ) -> Option<Result<SessionState, SessionError>> {
+        let now = io.now_ms();
+        self.expire(now);
+        for _ in 0..MAX_POLL_BYTES {
+            let Some(byte) = io.read_byte() else { break };
+            if self.state == SessionState::Idle {
+                self.state = SessionState::Receiving;
+            }
+            if let Some(result) = self.decoder.push(byte, now, auth) {
+                let frame = match result {
+                    Ok(frame) => frame,
+                    Err(error) => return Some(Err(SessionError::Decode(error))),
+                };
+                self.state = SessionState::Authenticated;
+                if frame.command == CommandType::TimeSync {
+                    let payload = match TimeSyncPayload::parse(frame.payload()) {
+                        Ok(payload) => payload,
+                        Err(error) => return Some(Err(SessionError::Payload(error))),
+                    };
+                    if !payload.is_fresh(now / 1_000) {
+                        return Some(Err(SessionError::Payload(TimeSyncError::Stale)));
+                    }
+                    if !self.policy.crypto_provisioned
+                        || !self.policy.authenticated
+                        || !self.policy.physically_authorized
+                    {
+                        return Some(Err(SessionError::Payload(TimeSyncError::NotAuthenticated)));
+                    }
+                    if self
+                        .authorization_until_ms
+                        .is_none_or(|deadline| now.wrapping_sub(deadline) < 0x8000_0000)
+                    {
+                        self.state = SessionState::Expired;
+                        return Some(Err(SessionError::AuthorizationExpired));
+                    }
+                    self.state = SessionState::Authorized;
+                    if self.policy.rtc_mutation_enabled
+                        && io.apply_rtc(payload.packed_datetime).is_err()
+                    {
+                        return Some(Err(SessionError::RtcApply));
+                    }
+                }
+                self.ack = Some(frame.sequence);
+                if self.policy.rtc_mutation_enabled {
+                    self.state = SessionState::Applied;
+                }
+                io.queue_ack(frame.sequence);
+                self.state = SessionState::AckQueued;
+                return Some(Ok(self.state));
+            }
+        }
+        None
     }
 }
 
@@ -602,6 +823,127 @@ mod tests {
         };
         assert!(policy.authorize(payload, 100).is_ok());
         assert_eq!(policy.authorize(payload, 401), Err(TimeSyncError::Stale));
+    }
+
+    struct TestIo {
+        bytes: [u8; MAX_FRAME_LEN],
+        len: usize,
+        pos: usize,
+        now: u32,
+        ack: Option<u32>,
+        applied: bool,
+    }
+
+    impl TestIo {
+        fn new(bytes: [u8; MAX_FRAME_LEN], len: usize, now: u32) -> Self {
+            Self {
+                bytes,
+                len,
+                pos: 0,
+                now,
+                ack: None,
+                applied: false,
+            }
+        }
+    }
+
+    impl OpticalIo for TestIo {
+        fn read_byte(&mut self) -> Option<u8> {
+            let byte = (self.pos < self.len).then(|| self.bytes[self.pos]);
+            self.pos += usize::from(byte.is_some());
+            byte
+        }
+        fn now_ms(&mut self) -> u32 {
+            self.now
+        }
+        fn queue_ack(&mut self, sequence: u32) {
+            self.ack = Some(sequence);
+        }
+        fn apply_rtc(&mut self, _packed_datetime: u32) -> Result<(), ()> {
+            self.applied = true;
+            Ok(())
+        }
+    }
+
+    fn authorized_session() -> OpticalSession {
+        OpticalSession::new(TimeSyncPolicy {
+            crypto_provisioned: true,
+            authenticated: true,
+            physically_authorized: true,
+            rtc_mutation_enabled: false,
+        })
+    }
+
+    fn sync_frame(sequence: u32, freshness: u32) -> ([u8; MAX_FRAME_LEN], usize) {
+        let mut payload = [0u8; TIME_SYNC_PAYLOAD_LEN];
+        payload[..4].copy_from_slice(&(3u32 << 26 | 1u32 << 22 | 1u32 << 17).to_be_bytes());
+        payload[4..].copy_from_slice(&freshness.to_be_bytes());
+        let mut bytes = [0; MAX_FRAME_LEN];
+        let len = encode_authenticated(
+            sequence_command(),
+            sequence,
+            &payload,
+            &[0xC3; AUTH_TAG_LEN],
+            &mut bytes,
+        )
+        .unwrap();
+        (bytes, len)
+    }
+
+    fn sequence_command() -> CommandType {
+        CommandType::TimeSync
+    }
+
+    #[test]
+    fn session_is_bounded_and_queues_ack_without_default_rtc_mutation() {
+        let (bytes, len) = sync_frame(11, 1);
+        let mut session = authorized_session();
+        session.authorize_until(2_000);
+        let mut io = TestIo::new(bytes, len, 1_000);
+        assert_eq!(
+            session.service(&mut io, Some(&AcceptAuth)),
+            Some(Ok(SessionState::AckQueued))
+        );
+        assert_eq!(io.ack, Some(11));
+        assert!(!io.applied);
+        assert_eq!(session.ack_pending(), Some(11));
+    }
+
+    #[test]
+    fn session_reports_crc_auth_truncation_replay_timeout_and_expiry() {
+        let (mut bytes, len) = sync_frame(12, 1);
+        assert_eq!(
+            decode(&bytes[..len - 1], Some(&AcceptAuth)),
+            Err(DecodeError::InvalidLength)
+        );
+        bytes[10] ^= 1;
+        assert_eq!(
+            decode(&bytes[..len], Some(&AcceptAuth)),
+            Err(DecodeError::Crc)
+        );
+        let (bytes, len) = sync_frame(12, 1);
+        let mut decoder = Decoder::new();
+        for byte in bytes[..len].iter().copied() {
+            decoder.push(byte, 1, Some(&AcceptAuth));
+        }
+        let mut replay = None;
+        for byte in bytes[..len].iter().copied() {
+            replay = decoder.push(byte, 2, Some(&AcceptAuth));
+        }
+        assert_eq!(replay, Some(Err(DecodeError::Replay)));
+        assert_eq!(
+            decoder.push(PREAMBLE[0], RX_TIMEOUT_MS + 200, None),
+            Some(Err(DecodeError::Timeout))
+        );
+        let mut session = authorized_session();
+        session.authorize_until(1_000);
+        let (bytes, len) = sync_frame(13, 1);
+        let mut io = TestIo::new(bytes, len, 1_001);
+        assert_eq!(
+            session.service(&mut io, Some(&AcceptAuth)),
+            Some(Err(SessionError::AuthorizationExpired))
+        );
+        assert_eq!(session.state(), SessionState::Expired);
     }
 
     #[test]

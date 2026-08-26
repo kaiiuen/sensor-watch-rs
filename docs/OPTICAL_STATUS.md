@@ -28,3 +28,33 @@ community/reference result does not prove this firmware works on a physical Pro
 board, and Studio's optical preview is not a transmitter or receiver test.
 The 900-baud setting, optical polarity, electrical levels, standby behavior,
 and end-to-end reception still require a real Pro board and an IrDA source.
+
+## Session skeleton boundary
+
+`core/src/optical.rs` contains the replaceable, fixed-storage session seam. Its
+explicit states are `Idle`, `Receiving`, `Authenticated`, `Authorized`,
+`Applied`, `AckQueued`, and `Expired`. `OpticalIo` bounds polling to 64 bytes,
+keeps ACK delivery as an injected operation, and delegates any RTC application
+to an injected adapter. The default `TimeSyncPolicy::receive_only()` never
+permits authentication, physical authorization, or RTC mutation. ACKs are
+queued only in memory by the current watch adapter; they are not transmitted.
+
+Studio's `preview_waveform` and frame preview are deterministic software
+representations only. They do not drive an LED, GPIO, serial port, camera, or
+receiver and make no hardware claim.
+
+## Unsupported hardware steps
+
+Before enabling a production receiver or RTC mutation, a hardware owner must:
+
+1. Select and document a supported optical receiver/electrical interface for a
+   specific board revision; verify polarity, voltage levels, and power behavior.
+2. Validate the Pro IR enable and sense routing against the assembled board,
+   including the UART mode and 900-baud timing with an oscilloscope or logic
+   analyzer.
+3. Implement and review real key provisioning/authentication and the physical
+   presence authorization path; do not substitute the Studio preview tag.
+4. Validate bounded reception, replay/freshness/duty-cycle behavior, ACK
+   delivery, standby/wake behavior, and failure recovery on hardware.
+5. Only after those checks, provide an explicit RTC adapter and enable mutation
+   in a board-specific feature/configuration. No default feature should change.
