@@ -32,21 +32,22 @@
 
 #[cfg(feature = "real-faces")]
 use sensor_watch::movement::{
-    accel_interrupt_count, activity, alarm, alarm_thermometer, astronomy, baby_kicks, beats, beeps,
-    blackjack, blinky, breathing, butterfly_game, character_set, chirpy_demo, close_enough,
-    couch_to_5k, countdown, counter, databank, day_night_percentage, day_one, days_since, deadline,
-    decimal_time, demo, diagnostics, discgolf, dual_timer, endless_runner, finetune, flashlight,
-    french_revolutionary, frequency_correction, geomancy, habit, hello_there, higher_lower_game,
-    hydration, interval, invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter,
-    lis2dw_logging, mars_time, menstrual_cycle, metronome, minimal_clock, minmax,
-    minute_repeater_decimal, moon_phase, morsecalc, nanosec, orrery, periodic, ping,
-    planetary_hours, planetary_time, preferences, probability, pulsometer, randonaut, ratemeter,
-    repetition_minute, rpn_calculator, rpn_calculator_alt, sailing, save_load, set_time,
-    set_time_hackwatch, ships_bell, simon, simple_calculator, simple_clock, simple_clock_bin_led,
-    simple_coin_flip, solar_time, solstice, sos, squash, stock_stopwatch, stopwatch,
-    sunrise_sunset, tachymeter, tally, tarot, tempchart, thermistor_logging, thermistor_readout,
-    thermistor_testing, tide, time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones,
-    types, voltage, wake, wareki, weeknumber, wordle, world_clock, world_clock2, wyoscan,
+    accel_interrupt_count, accelerometer_data_acquisition, activity, advanced_alarm, alarm,
+    alarm_thermometer, astronomy, baby_kicks, beats, beeps, blackjack, blinky, breathing,
+    butterfly_game, character_set, chirpy_demo, close_enough, couch_to_5k, countdown, counter,
+    databank, day_night_percentage, day_one, days_since, deadline, decimal_time, demo, diagnostics,
+    discgolf, dual_timer, endless_runner, finetune, flashlight, french_revolutionary,
+    frequency_correction, geomancy, habit, hello_there, higher_lower_game, hydration, interval,
+    invaders, ish, ke_decimal_time, kitchen_conversions, lander, lightmeter, lis2dw_logging,
+    mars_time, menstrual_cycle, metronome, minimal_clock, minmax, minute_repeater_decimal,
+    moon_phase, morsecalc, nanosec, orrery, periodic, ping, planetary_hours, planetary_time,
+    preferences, probability, pulsometer, randonaut, ratemeter, repetition_minute, rpn_calculator,
+    rpn_calculator_alt, sailing, save_load, set_time, set_time_hackwatch, settings_face,
+    ships_bell, simon, simple_calculator, simple_clock, simple_clock_bin_led, simple_coin_flip,
+    solar_time, solstice, sos, squash, stock_stopwatch, stopwatch, sunrise_sunset, tachymeter,
+    tally, tarot, tempchart, thermistor_logging, thermistor_readout, thermistor_testing, tide,
+    time_left, timer, tomato, toss_up, totp, totp_lfs, tuning_tones, types, voltage, wake, wareki,
+    weeknumber, wordle, world_clock, world_clock2, wyoscan,
 };
 #[cfg(feature = "real-faces")]
 use sensor_watch_core::datetime::DateTime;
@@ -404,6 +405,12 @@ impl_real_face_trait!(butterfly_game::ButterflyGameFace);
 
 #[cfg(feature = "real-faces")]
 impl_real_face_trait!(diagnostics::DiagnosticsFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(accelerometer_data_acquisition::AccelerometerDataAcquisitionFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(advanced_alarm::AdvancedAlarmFace);
+#[cfg(feature = "real-faces")]
+impl_real_face_trait!(settings_face::SettingsFace);
 
 #[cfg(feature = "real-faces")]
 impl RealFaceTrait for alarm::AlarmFace {
@@ -1020,10 +1027,78 @@ macro_rules! real_face_registry {
     };
 }
 
+#[cfg(all(test, feature = "real-faces"))]
+mod remaining_face_tests {
+    use super::{RealButton, RealButtonEvent, RealFace, REAL_FACE_NAMES};
+
+    fn tap(face: &mut RealFace, button: RealButton) {
+        face.button_event(button, RealButtonEvent::Up);
+    }
+
+    #[test]
+    fn remaining_faces_are_registered_with_canonical_names() {
+        for name in [
+            "ACCELEROMETER_DATA_ACQUISITION",
+            "ADVANCED_ALARM",
+            "SETTINGS_FACE",
+        ] {
+            assert!(REAL_FACE_NAMES.contains(&name), "missing {name}");
+            assert_eq!(
+                RealFace::new(&name.to_ascii_lowercase())
+                    .unwrap()
+                    .face_name(),
+                name
+            );
+        }
+    }
+
+    #[test]
+    fn accelerometer_face_runs_without_claiming_sensor_hardware() {
+        let mut face = RealFace::new("accelerometer_data_acquisition").unwrap();
+        face.activate(true);
+        assert!(face.is_activated());
+        assert_eq!(face.snapshot().chars.len(), 10);
+        // The host LIS2DW seam is unavailable; starting a run must remain safe
+        // and must not turn an absent sensor into a physical PASS.
+        tap(&mut face, RealButton::Alarm);
+        for _ in 0..4 {
+            face.tick();
+        }
+        assert_eq!(face.snapshot().chars.len(), 10);
+    }
+
+    #[test]
+    fn advanced_alarm_preserves_alarm_entry_and_resign_lifecycle() {
+        let mut face = RealFace::new("advanced_alarm").unwrap();
+        face.activate(true);
+        assert!(face.snapshot().colon);
+        tap(&mut face, RealButton::Light);
+        assert!(face.is_activated());
+        face.resign();
+        assert!(!face.is_activated());
+    }
+
+    #[test]
+    fn settings_face_cycles_pages_and_persists_changes_across_reentry() {
+        let mut face = RealFace::new("settings_face").unwrap();
+        face.activate(true);
+        assert_eq!(&face.snapshot().chars[..2], &['C', 'L']);
+        tap(&mut face, RealButton::Alarm);
+        face.resign();
+        face.activate(true);
+        assert_eq!(&face.snapshot().chars[..2], &['C', 'L']);
+        face.button_event(RealButton::Light, RealButtonEvent::Down);
+        assert_eq!(&face.snapshot().chars[..2], &['B', 'T']);
+    }
+}
+
 #[cfg(feature = "real-faces")]
 real_face_registry! {
     "SIMPLE_CLOCK" => simple_clock::SimpleClockFace::new,
     "ACCEL_INTERRUPT_COUNT" => accel_interrupt_count::AccelInterruptCountFace::new_static,
+    "ACCELEROMETER_DATA_ACQUISITION" => accelerometer_data_acquisition::AccelerometerDataAcquisitionFace::new,
+    "ADVANCED_ALARM" => advanced_alarm::AdvancedAlarmFace::new,
+    "SETTINGS_FACE" => settings_face::SettingsFace::new,
     "BABY_KICKS" => baby_kicks::BabyKicksFace::new,
     "BUTTERFLY_GAME" => butterfly_game::ButterflyGameFace::new,
     "ACTIVITY" => activity::ActivityFace::new_static,
@@ -1306,7 +1381,7 @@ mod tests {
     fn registry_constructs_round_trips_and_preserves_fallbacks() {
         use std::collections::HashSet;
 
-        assert_eq!(REAL_FACE_NAMES.len(), 108);
+        assert_eq!(REAL_FACE_NAMES.len(), 111);
         let mut names = HashSet::new();
         for name in REAL_FACE_NAMES {
             assert!(names.insert(*name), "duplicate real-face name: {name}");
@@ -1356,8 +1431,7 @@ mod tests {
         ] {
             assert!(RealFace::new(name).is_some(), "{name} should be migrated");
         }
-        assert_eq!(REAL_FACE_NAMES.len(), 108);
-        assert_eq!(111 - REAL_FACE_NAMES.len(), 3);
+        assert_eq!(REAL_FACE_NAMES.len(), 111);
         assert!(RealFace::new("ACTIVITY").is_some());
         assert!(RealFace::new("geomancy").is_some());
         assert!(RealFace::new("NOT_A_FACE").is_none());
@@ -1783,8 +1857,7 @@ mod tests {
     }
 
     #[test]
-    fn unmigrated_face_falls_back() {
-        assert_eq!(111 - REAL_FACE_NAMES.len(), 3);
+    fn unknown_face_falls_back() {
         assert!(
             render_real_face("NOT_A_FACE", 2023, 1, 6, 15, 4, 0, 5, true, false, false).is_none()
         );

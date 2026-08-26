@@ -99,6 +99,29 @@ pub mod accel_interrupt_count {
     pub use real::AccelInterruptCountFace;
 }
 
+/// The REAL accelerometer data acquisition face. The host LIS2DW seam reports
+/// the sensor as unavailable, so the real state machine remains runnable without
+/// claiming physical samples or a successful recording.
+pub mod accelerometer_data_acquisition {
+    #[path = "../../../movement/accelerometer_data_acquisition.rs"]
+    pub mod real;
+    pub use real::AccelerometerDataAcquisitionFace;
+}
+
+/// The REAL advanced alarm face.
+pub mod advanced_alarm {
+    #[path = "../../../movement/advanced_alarm.rs"]
+    pub mod real;
+    pub use real::AdvancedAlarmFace;
+}
+
+/// The REAL settings face, including its persisted movement settings contract.
+pub mod settings_face {
+    #[path = "../../../movement/settings_face.rs"]
+    pub mod real;
+    pub use real::SettingsFace;
+}
+
 // ---- The rest of the host-compilable subset. ------------------------------
 // Each real face is pulled in verbatim via `#[path]` (never edited) and its
 // face *type* is re-exported. The `#[path]` inside an inline `mod` resolves
@@ -900,6 +923,15 @@ use types::{Event, Settings};
 
 static mut UART_POLICY: uart_policy::UartRuntimePolicy = uart_policy::UartRuntimePolicy::new();
 
+// The firmware movement module owns these values globally. Keep the same
+// ownership model on host so SettingsFace changes survive face resign/re-entry
+// without pretending that a physical RTC backup register or flash controller is
+// present.
+static mut HOST_SETTINGS: Settings = Settings {
+    reg: 0,
+    uart_shell_enabled: false,
+};
+
 pub fn uart_shell_enabled() -> bool {
     unsafe { UART_POLICY.enabled() }
 }
@@ -1017,10 +1049,10 @@ pub fn play_alarm() {}
 /// exercise face state transitions but do not model wake delivery.
 pub fn request_wake() {}
 
-/// Returns whether button feedback should sound. Host policy is silent because
-/// the mock does not model the firmware settings register or audio delivery.
+/// Returns whether button feedback should sound from the host settings shadow.
+/// Audio delivery itself remains unavailable on the mock.
 pub fn button_should_sound() -> bool {
-    false
+    unsafe { HOST_SETTINGS.button_should_sound() }
 }
 
 /// Plays `rounds` of `alarm_note`. Host: no-op.
@@ -1031,9 +1063,15 @@ pub fn accelerometer_begin() -> bool {
     false
 }
 
-/// Saves the current settings so they survive a reset. Host: no-op (the mock
-/// keeps settings in memory only). Mirrors `movement::save_settings`.
+/// Saves the current settings. Host persistence is an in-process shadow of the
+/// firmware's persisted settings; it makes face re-entry deterministic without
+/// claiming non-volatile hardware.
 pub fn save_settings() {}
+
+/// Compatibility name used by the settings face when it resigns.
+pub fn store_settings() {
+    save_settings();
+}
 
 /// Returns the current UTC date/time (the RTC stores UTC). Host: returns the
 /// installed mock's clock unchanged.
@@ -1055,11 +1093,97 @@ pub fn get_current_timezone_offset() -> i32 {
     0
 }
 
-/// Returns the clock mode as a 12H/24H/024H enum. Host: returns `H24` so tests
-/// are deterministic (the mock has no global settings register); faces make
-/// `H24` the default and assert on it.
+/// Returns the persisted clock mode used by the real settings face.
 pub fn clock_mode_24h() -> types::ClockMode {
-    types::ClockMode::H24
+    unsafe {
+        if !HOST_SETTINGS.clock_mode_24h() {
+            types::ClockMode::H12
+        } else if HOST_SETTINGS.clock_24h_leading_zero() {
+            types::ClockMode::H024
+        } else {
+            types::ClockMode::H24
+        }
+    }
+}
+
+pub fn set_clock_mode_24h(mode: types::ClockMode) {
+    unsafe {
+        HOST_SETTINGS.set_clock_mode_24h(!matches!(mode, types::ClockMode::H12));
+        HOST_SETTINGS.set_clock_24h_leading_zero(matches!(mode, types::ClockMode::H024));
+    }
+}
+
+pub fn set_button_should_sound(value: bool) {
+    unsafe { HOST_SETTINGS.set_button_should_sound(value) }
+}
+
+pub fn button_volume() -> bool {
+    unsafe { HOST_SETTINGS.button_volume() }
+}
+
+pub fn set_button_volume(value: bool) {
+    unsafe { HOST_SETTINGS.set_button_volume(value) }
+}
+
+pub fn signal_volume() -> bool {
+    unsafe { HOST_SETTINGS.signal_volume() }
+}
+
+pub fn set_signal_volume(value: bool) {
+    unsafe { HOST_SETTINGS.set_signal_volume(value) }
+}
+
+pub fn alarm_volume() -> bool {
+    unsafe { HOST_SETTINGS.alarm_volume() }
+}
+
+pub fn set_alarm_volume(value: bool) {
+    unsafe { HOST_SETTINGS.set_alarm_volume(value) }
+}
+
+pub fn get_fast_tick_timeout() -> u8 {
+    unsafe { HOST_SETTINGS.to_interval() }
+}
+
+pub fn set_fast_tick_timeout(value: u8) {
+    unsafe { HOST_SETTINGS.set_to_interval(value) }
+}
+
+pub fn get_low_energy_timeout() -> u8 {
+    unsafe { HOST_SETTINGS.le_interval() }
+}
+
+pub fn set_low_energy_timeout(value: u8) {
+    unsafe { HOST_SETTINGS.set_le_interval(value) }
+}
+
+pub fn set_alarm_enabled(value: bool) {
+    unsafe { HOST_SETTINGS.set_alarm_enabled(value) }
+}
+
+pub fn get_backlight_dwell() -> u8 {
+    unsafe { HOST_SETTINGS.led_duration() }
+}
+
+pub fn set_backlight_dwell(value: u8) {
+    unsafe { HOST_SETTINGS.set_led_duration(value) }
+}
+
+pub fn backlight_color() -> (u8, u8, u8) {
+    unsafe {
+        (
+            HOST_SETTINGS.led_red_color(),
+            HOST_SETTINGS.led_green_color(),
+            0,
+        )
+    }
+}
+
+pub fn set_backlight_color(red: u8, green: u8, _blue: u8) {
+    unsafe {
+        HOST_SETTINGS.set_led_red_color(red);
+        HOST_SETTINGS.set_led_green_color(green);
+    }
 }
 
 #[cfg(test)]
@@ -1071,6 +1195,18 @@ pub fn request_tick_frequency(freq: u8) {
     if freq.is_power_of_two() && (1..=128).contains(&freq) {
         set_tick_rate(freq != 1);
     }
+}
+
+/// Turns the modeled LED on. Brightness is forwarded to the mock, but no
+/// physical LED capability is claimed by the host simulation.
+pub fn force_led_on(red: u8, green: u8, _blue: u8) {
+    watch::led::enable_leds();
+    watch::led::set_led_color(red, green);
+}
+
+/// Turns the modeled LED off.
+pub fn force_led_off() {
+    watch::led::disable_leds();
 }
 
 /// Plays a single note with the given priority. Host: no-op (the mock does not
@@ -1099,6 +1235,8 @@ mod face_tests_alarm_thermometer;
 mod face_tests_baby_kicks;
 #[cfg(test)]
 mod face_tests_blackjack;
+#[cfg(test)]
+mod face_tests_remaining;
 #[cfg(test)]
 mod face_tests_stock_stopwatch;
 #[cfg(test)]

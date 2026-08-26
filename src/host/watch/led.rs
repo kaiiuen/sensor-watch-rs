@@ -19,6 +19,11 @@ pub fn set_led_off() {
     seam::with_current_hw(|hw| hw.set_led_off());
 }
 
+/// Compatibility alias for the movement LED lifecycle API.
+pub fn disable_leds() {
+    set_led_off();
+}
+
 /// Sets the LED to a custom color by modulating each output's duty cycle.
 /// Host: records via `Hw::set_led_color`.
 pub fn set_led_color(red: u8, green: u8) {
