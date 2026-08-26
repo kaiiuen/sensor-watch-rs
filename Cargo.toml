@@ -79,7 +79,7 @@ hostmock = []
 std = []
 # Developer-only minimal application boundary for USB feasibility work. This is
 # intentionally separate from the production application and optional drivers.
-minimal-usb = []
+minimal-usb = ["usb-enum"]
 # Enables the physical Alarm/service-button hook for mutating shell commands.
 # Without this feature, mutations remain permanently locked (fail closed).
 shell-auth = []

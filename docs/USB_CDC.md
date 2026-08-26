@@ -1,37 +1,57 @@
-# USB CDC status
+# USB CDC and minimal enumeration status
 
-The reference TinyUSB application uses SAM L22 full-speed CDC with VID:PID
-`0x1209:0x2151`, 64-byte packets, notification endpoint `0x81`, bulk OUT
-endpoint `0x02`, and bulk IN endpoint `0x82`.
+The production reference uses TinyUSB commit
+`5572168994a29266df6cbf12b46919498d3ece66` on the SAM L22 at full speed with
+VID:PID `0x1209:0x2151`, 64 byte EP0 packets, notification endpoint `0x81`,
+bulk OUT endpoint `0x02`, and bulk IN endpoint `0x82`.
 
-The Rust feasibility work is currently exposed as the opt-in `usb-enum`
-feature. It keeps the reviewed descriptors and a host-testable standard
-control-state machine, but does not activate USB hardware. The `atsaml22j`
-0.1.0 PAC omits the descriptor-bank and packet SRAM types required to safely
-service EP0 and endpoint transfers. The raw layout is documented in
-`src/watch/usb.rs`; it is not a packet I/O implementation.
+## Implemented
 
-`usb-cdc` remains a compatibility opt-in that includes `usb-enum`, but it is
-not a claim of CDC support. `init`, `poll`, `read`, and `write` fail closed with
-`MissingPacketSram`. No terminal, shell, or `PING` response exists yet.
+The opt-in `minimal-usb` feature implies `usb-enum` and selects the separate
+`minimal-usb` firmware binary. Production firmware and its default clocks,
+watch application, bootloader range, EEPROM bounds, WDT, and battery behavior
+are unchanged.
 
-Host contract tests:
+The minimal image now implements a bounded EP0 enumeration path:
 
-```sh
+- USBCRM DFLL48M setup from the documented 32 kHz reference and GCLK1 to USB
+- USB AHB and APBB clocks
+- PA24/PA25 output-low preconditioning and mux G for DM/DP
+- PA05 VBUS detect input for the OSO-SWAT-A1-05 board, explicitly enabled as a pulled-down digital input
+- USB reset, full-speed device mode, descriptor address, and EP0 control setup
+- eight endpoint groups with two 16 byte banks per group and 32 byte stride
+- setup reception and bounded GET_DESCRIPTOR for device and configuration data
+- SET_ADDRESS, GET_CONFIGURATION, and SET_CONFIGURATION
+- status zero length packets, stalls, reset handling, suspend detach, and
+  bounded EP0 re-arm
+
+No CDC bulk endpoint is configured. `read` and `write` remain fail closed.
+
+## Hardware-unverified details
+
+The pack proves the USB register offsets, endpoint bank field layout, SRAM
+section contract, clock IDs, USB pad mux, OTP5 address, and OTP5 PADCAL and
+DFLL calibration fields. The minimal path reads those documented OTP5 fields
+and writes PADCAL. Electrical signal quality, DFLL lock behavior, and actual
+host enumeration still require hardware verification.
+
+The VBUS input mapping (PA05) is taken from the A1-05 board reference, not from
+the MCU device pack. The input buffer and pull-down are explicitly configured;
+a different board revision must not use this image without a separate VBUS
+review. USB disconnect, suspend, and no-VBUS handling detach, clear software address/
+EP0 state where required, and reinitialize only after VBUS is present; they do
+not enable a battery-side power path.
+
+Host control tests:
+
+```text
 cargo test -p sensor-watch --lib --features usb-enum
-cargo test -p sensor-watch --lib --features usb-cdc
+cargo test -p sensor-watch --test minimal_profile
 ```
 
-Target feasibility checks:
+ARM checks:
 
-```sh
-cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb \
-  --features minimal-usb,usb-enum
-cargo build --release --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb \
-  --features minimal-usb,usb-enum
+```text
+cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
+cargo build --release --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
 ```
-
-The default production firmware remains unchanged. Completing USB requires a
-reviewed PAC/raw SRAM implementation, clock and VBUS sequencing, suspend and
-disconnect safety, endpoint tests, host enumeration traces, and only then real
-CDC bulk transfer tests.

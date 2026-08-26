@@ -28,6 +28,10 @@ compile_error!(
 use cortex_m_rt::entry;
 
 #[cfg(target_arch = "arm")]
+#[path = "watch/usb.rs"]
+mod usb;
+
+#[cfg(target_arch = "arm")]
 mod minimal {
     use atsaml22j::mclk::RegisterBlock as Mclk;
     use atsaml22j::osc32kctrl::RegisterBlock as Osc32kctrl;
@@ -142,10 +146,16 @@ mod minimal {
         init_clock();
         let uid = identity();
 
+        // USB is only entered by the explicitly selected minimal-usb image.
+        // VBUS is checked before pin muxing and again on every bounded poll.
+        let _ = crate::usb::init();
         core::hint::black_box(PROOF_OF_LIFE.as_ptr());
         core::hint::black_box(uid);
         loop {
             kick_wdt();
+            // poll() retries initialization after VBUS appears and after a
+            // suspended controller is resumed; all waits remain bounded.
+            let _ = crate::usb::poll();
             core::hint::black_box(PROOF_OF_LIFE);
         }
     }
