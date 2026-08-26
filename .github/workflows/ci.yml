@@ -7,181 +7,147 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  RUST_TOOLCHAIN: '1.97.1'
 
 jobs:
-  build:
-    name: Build (thumbv6m)
+  fmt:
+    name: Formatting
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          channel: '1.97.1'
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: rustfmt
+      - run: cargo fmt --check
+
+  core-tests:
+    name: Core tests and strict Clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Core tests
+        run: cargo test -p sensor-watch-core --target x86_64-unknown-linux-gnu
+      - name: Core strict Clippy
+        run: cargo clippy -p sensor-watch-core --target x86_64-unknown-linux-gnu -- -D warnings
+
+  studio:
+    name: Studio (${{ matrix.profile }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: default features
+            args: ''
+          - profile: no default features
+            args: '--no-default-features'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libgtk-3-dev
+      - name: Build Studio
+        run: cargo build -p sensor-watch-studio ${{ matrix.args }}
+      - name: Run Studio tests
+        run: cargo test -p sensor-watch-studio ${{ matrix.args }}
+
+  firmware-host-features:
+    name: Firmware host (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: runtime UART and identity
+            features: hostmock,std
+          - name: optical
+            features: hostmock,std,optical
+          - name: shell authorization
+            features: hostmock,std,shell-auth
+          - name: optical USB and shell
+            features: hostmock,std,optical,shell-auth,usb-cdc
+          - name: minimal USB contract
+            features: hostmock,std,minimal-usb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Check host feature combination
+        run: cargo check -p sensor-watch --lib --features ${{ matrix.features }}
+      - name: Test host feature combination
+        run: cargo test -p sensor-watch --lib --features ${{ matrix.features }}
+
+  firmware-arm:
+    name: ARM checks (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            features: ''
+          - name: optical
+            features: optical
+          - name: identity and runtime UART baseline
+            features: ''
+          - name: USB CDC
+            features: usb-cdc
+          - name: Pro optical receive
+            features: pro-irda-rx
+          - name: RTT logging
+            features: defmt-log
+          - name: minimal USB
+            features: minimal-usb
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: thumbv6m-none-eabi
       - uses: Swatinem/rust-cache@v2
-      - name: Check firmware (debug)
-        # Debug linking can exceed the device flash budget; check validates the
-        # ARM compilation without requiring a debug firmware image.
-        run: cargo check --target thumbv6m-none-eabi -p sensor-watch
-      - name: Check firmware (ARM defmt-log)
-        # Structured RTT logging is an ARM-only feature; keep this separate from
-        # host feature-contract tests.
-        run: cargo check --target thumbv6m-none-eabi -p sensor-watch --features defmt-log
-      - name: Build firmware (release flash image)
-        run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch
-      - name: Install binutils for release size check
+      - name: ARM compile check
+        run: cargo check --target thumbv6m-none-eabi -p sensor-watch --features "${{ matrix.features }}"
+
+  arm-release:
+    name: ARM release, size, and UF2
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: thumbv6m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ARM size tools
         run: sudo apt-get update && sudo apt-get install -y binutils-arm-none-eabi
+      - name: Build release firmware
+        run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch
       - name: Enforce release flash budget
         env:
           FLASH_BUDGET_BYTES: 237568
         run: |
           elf=target/thumbv6m-none-eabi/release/sensor-watch
-          flash_bytes=$(arm-none-eabi-size -A "$elf" | awk '
-            $1 ~ /^\.(vector_table|text|rodata|data|ramfunc|ARM.exidx)(\.|$)/ { total += $2 }
-            END {
-              if (total == 0) exit 1
-              print total
-            }
-          ')
+          flash_bytes=$(arm-none-eabi-size -A "$elf" | awk '$1 ~ /^\.(vector_table|text|rodata|data|ramfunc|ARM.exidx)(\.|$)/ { total += $2 } END { if (total == 0) exit 1; print total }')
           echo "Release flash usage: ${flash_bytes}/${FLASH_BUDGET_BYTES} bytes"
           test "$flash_bytes" -le "$FLASH_BUDGET_BYTES"
-      - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sensor-watch-elf
-          path: target/thumbv6m-none-eabi/release/sensor-watch
-
-  minimal-usb:
-    name: Developer minimal USB feasibility profile
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          channel: '1.97.1'
-          targets: thumbv6m-none-eabi
-      - uses: Swatinem/rust-cache@v2
-      - name: Install binutils for minimal size check
-        run: sudo apt-get update && sudo apt-get install -y binutils-arm-none-eabi
-      - name: Check minimal profile
-        run: cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
-      - name: Build minimal profile
-        run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
-      - name: Enforce minimal flash budget
-        env:
-          FLASH_BUDGET_BYTES: 237568
-        run: |
-          elf=target/thumbv6m-none-eabi/release/minimal-usb
-          flash_bytes=$(arm-none-eabi-size -A "$elf" | awk '$1 ~ /^(\\.vector_table|\\.text|\\.rodata|\\.data|\\.ramfunc|\\.ARM.exidx)(\\.|$)/ { total += $2 } END { if (total == 0) exit 1; print total }')
-          echo "Developer minimal flash usage: ${flash_bytes}/${FLASH_BUDGET_BYTES} bytes"
-          test "$flash_bytes" -le "$FLASH_BUDGET_BYTES"
-      - name: Reject mixed production features
-        run: |
-          if cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb,optical; then
-            echo "minimal-usb unexpectedly accepted optical"
-            exit 1
-          fi
-
-  clippy:
-    name: Clippy
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          channel: '1.97.1'
-          targets: thumbv6m-none-eabi
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Clippy (firmware, informational)
-        # The firmware exposes the full C-reference HAL API and many ported
-        # faces, which carry intentional dead-code and pedantic style lints.
-        # Keep this informational; the core crate below is the strict gate.
-        run: cargo clippy --target thumbv6m-none-eabi -p sensor-watch
-      - name: Clippy (core, strict)
-        run: cargo clippy -p sensor-watch-core --target x86_64-unknown-linux-gnu -- -D warnings
-
-  firmware-host:
-    name: Test firmware host seam
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          channel: '1.97.1'
-      - uses: Swatinem/rust-cache@v2
-      - name: Check firmware hostmock seam
-        # Compile the host mock without std to keep the no_std host contract
-        # visible; this does not validate physical hardware.
-        run: cargo check -p sensor-watch --lib --features hostmock
-      - name: Run firmware host-seam tests
-        # Exercise real firmware faces through the host mock and std library
-        # seam; this does not validate physical hardware.
-        run: cargo test -p sensor-watch --lib --features hostmock,std
-      - name: Run firmware host-seam optical tests
-        run: cargo test -p sensor-watch --lib --features hostmock,std,optical
-      - name: Run firmware shell-auth host tests
-        # Shell authorization is host-testable behavior; no physical button or
-        # hardware authorization path is implied by this check.
-        run: cargo test -p sensor-watch --lib --features hostmock,std,shell-auth
-      - name: Run firmware combined host feature tests
-        run: cargo test -p sensor-watch --lib --features hostmock,std,optical,shell-auth,usb-cdc
-
-  test:
-    name: Test (host)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          channel: '1.97.1'
-      - uses: Swatinem/rust-cache@v2
-      - name: Run core tests
-        # Override the workspace's embedded target so tests run on the host.
-        run: cargo test -p sensor-watch-core --target x86_64-unknown-linux-gnu
-      - name: Test host tooling
-        run: cargo test -p sensor-watch-tools --target x86_64-unknown-linux-gnu
-
-  studio:
-    name: Build Studio (GUI app)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          channel: '1.97.1'
-      - uses: Swatinem/rust-cache@v2
-      - name: Install GUI system dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libxcb1-dev libxcb-render0-dev \
-            libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev \
-            libssl-dev libgtk-3-dev
-      - name: Build Studio
-        run: cargo build -p sensor-watch-studio
-      - name: Run Studio tests
-        run: cargo test -p sensor-watch-studio
-      - name: Run Studio tests without default features
-        run: cargo test -p sensor-watch-studio --no-default-features
-
-  uf2:
-    name: Build UF2 artifact
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          channel: '1.97.1'
-          targets: thumbv6m-none-eabi
-      - uses: Swatinem/rust-cache@v2
-      - name: Install binutils
-        run: sudo apt-get update && sudo apt-get install -y binutils-arm-none-eabi
-      - name: Build firmware (release)
-        run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch
-      - name: Build UF2 and recovery manifest with Rust tooling
+      - name: Build UF2 and sidecars
         run: cargo run -p sensor-watch-tools -- build
-      - name: Upload UF2 artifact and recovery manifest
-        uses: actions/upload-artifact@v4
+      - name: Verify UF2 manifest and signature sidecar
+        run: cargo run -p sensor-watch-tools -- verify target/thumbv6m-none-eabi/release/sensor-watch.uf2 --manifest target/thumbv6m-none-eabi/release/sensor-watch.uf2.json
+      - uses: actions/upload-artifact@v4
         with:
           name: sensor-watch-uf2
           path: |
@@ -189,28 +155,122 @@ jobs:
             target/thumbv6m-none-eabi/release/sensor-watch.uf2.json
             target/thumbv6m-none-eabi/release/sensor-watch.uf2.json.sig
 
-  fmt:
-    name: Format
+  minimal-usb:
+    name: Minimal USB release feasibility and budget
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          channel: '1.97.1'
-          components: rustfmt
-      - name: Check formatting
-        run: cargo fmt --check
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: thumbv6m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - name: Install ARM size tools
+        run: sudo apt-get update && sudo apt-get install -y binutils-arm-none-eabi
+      - run: cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
+      - run: cargo build --release --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb
+      - name: Enforce minimal USB flash budget
+        env:
+          FLASH_BUDGET_BYTES: 237568
+        run: |
+          elf=target/thumbv6m-none-eabi/release/minimal-usb
+          flash_bytes=$(arm-none-eabi-size -A "$elf" | awk '$1 ~ /^\.(vector_table|text|rodata|data|ramfunc|ARM.exidx)(\.|$)/ { total += $2 } END { if (total == 0) exit 1; print total }')
+          test "$flash_bytes" -le "$FLASH_BUDGET_BYTES"
+      - name: Reject mixed production feature
+        run: |
+          if cargo check --target thumbv6m-none-eabi -p sensor-watch --bin minimal-usb --features minimal-usb,optical; then
+            echo 'minimal-usb unexpectedly accepted optical'
+            exit 1
+          fi
 
-  audit:
-    name: Audit (cargo audit)
+  board-configured:
+    name: Board mapping and configured Green/Red-Lite builds
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run cargo audit
-        uses: actions-rust-lang/audit@v1
-        # Blocking vulnerability gate: audit failures must fail this job.
-        # Unmaintained-crate warnings remain visible but are nonblocking under the
-        # action's existing warning policy.
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          # Don't auto-create GitHub issues for advisories on this run.
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          targets: thumbv6m-none-eabi
+      - uses: Swatinem/rust-cache@v2
+      - name: Install configured-build toolchain
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-binutils --version 0.3.6
+      - name: Verify board mapping contract
+        run: cargo test -p sensor-watch-core evidenced_tuples
+      - name: Verify mapping conflict checks
+        run: cargo test -p sensor-watch-core standard_mapping
+      - name: Verify configured-input contract
+        run: cargo test -p sensor-watch-studio configuration_contract
+      - name: Build configured Green and Red-Lite fixtures
+        run: cargo test -p sensor-watch-studio configured_green_and_red_lite_builds_use_isolated_workspace -- --ignored
+      - name: Verify generated-input provenance and manifests
+        run: cargo test -p sensor-watch-studio generated_input_digest
+
+  release-package:
+    name: Studio decomposed ZIP and optional packaging
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Install GUI system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev libxkbcommon-dev libssl-dev libgtk-3-dev
+      - name: Package decomposed Studio ZIP
+        run: cargo run -p sensor-watch-tools -- package-studio --output target/ci/sensor-watch-studio.zip
+      - name: Exercise ZIP, manifest, and Master Clock optional behavior
+        run: cargo test -p sensor-watch-tools --lib studio_package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sensor-watch-studio-package
+          path: target/ci/sensor-watch-studio.zip
+
+  launcher-update:
+    name: Launcher and desktop update tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test -p sensor-watch-launcher
+      - run: cargo test -p sensor-watch-desktop-update
+
+  windows-tooling:
+    name: Windows paths and UF2 tooling
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Test Windows path policy and UF2 tooling
+        run: cargo test -p sensor-watch-tools --lib && cargo test -p sensor-watch-studio
+      - name: Test launcher and update behavior on Windows
+        run: cargo test -p sensor-watch-launcher -p sensor-watch-desktop-update
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/audit@v1
+        with:
           createIssues: false
+
+  # Physical-board procedures are documented separately in docs/TESTING.md.
+  # They are intentionally not represented as a required CI check: host seams,
+  # ARM compilation, and artifact validation cannot prove electrical behavior.
+  hardware-tests-not-gating:
+    name: Hardware tests (manual, non-gating)
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo 'Run docs/TESTING.md with a physical board; never a CI gate'
