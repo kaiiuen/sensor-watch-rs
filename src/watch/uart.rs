@@ -3,6 +3,7 @@
 //! Port of the C `watch_uart.c`. Uses SERCOM3 in USART mode. TX can be A2 or
 //! A4; RX can be A1, A2, A3, or A4.
 
+use crate::movement::uart_policy::{UartInterruptStatus, UartWakeEvents, UartWakeState};
 use crate::watch::gpio::{self, Direction, Function, Pin};
 use crate::watch::timeout::wait_until;
 use atsaml22j::sercom0::usart::Usart;
@@ -53,6 +54,9 @@ impl RxRing {
 }
 
 static mut RX_RING: RxRing = RxRing::new();
+
+// Software seam only: the physical wake source is fail-closed until validated.
+static mut UART_WAKE: UartWakeState = UartWakeState::new();
 
 #[cfg(feature = "pro-irda-rx")]
 static mut PRO_IRDA_RING: RxRing = RxRing::new();
@@ -331,6 +335,35 @@ pub fn take_rx_overflow() -> bool {
 /// Receives a byte from the software ring without waiting.
 pub fn try_getc() -> Option<u8> {
     critical_section::with(|_| unsafe { RX_RING.pop() })
+}
+
+/// Fail-closed until SERCOM wake registers and vector behavior are validated.
+pub fn enable_uart_wake() -> bool {
+    critical_section::with(|_| unsafe { UART_WAKE.disable_uart_wake() });
+    false
+}
+
+pub fn disable_uart_wake() {
+    critical_section::with(|_| unsafe { UART_WAKE.disable_uart_wake() });
+}
+
+/// Forwards translated status without MMIO access or parsing.
+pub fn capture_uart_wake_status(status: UartInterruptStatus) {
+    critical_section::with(|_| unsafe { UART_WAKE.capture_interrupt_status(status) });
+}
+
+/// Enqueues one already-read byte; a future validated ISR may call this.
+pub fn enqueue_uart_wake_rx(byte: u8) {
+    critical_section::with(|_| unsafe { UART_WAKE.enqueue_rx(byte) });
+}
+
+pub fn take_uart_wake_events() -> UartWakeEvents {
+    critical_section::with(|_| unsafe { UART_WAKE.take_wake_events() })
+}
+
+/// Main-loop-only bounded drain. It never blocks or parses.
+pub fn drain_uart_wake_rx(out: &mut [u8]) -> usize {
+    critical_section::with(|_| unsafe { UART_WAKE.drain_rx(out) })
 }
 
 /// Receives a single byte from the UART (bounded blocking).
