@@ -18,6 +18,11 @@ const PRIO_RTC_TICK: u8 = 1;
 const PRIO_EIC: u8 = 2;
 const PRIO_TC3: u8 = 3;
 
+/// Software-only UART wake status adapter; no vector is installed yet.
+pub fn capture_uart_interrupt_status(status: crate::movement::uart_policy::UartInterruptStatus) {
+    crate::watch::uart::capture_uart_wake_status(status);
+}
+
 /// Configures the interrupt priorities for all interrupts used by the system.
 ///
 /// Must be called once at boot, before any interrupt is enabled.
