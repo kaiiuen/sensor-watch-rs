@@ -62,7 +62,7 @@ pub fn measure(start: DriftSample, end: DriftSample) -> Result<DriftMeasurement,
         ));
     }
     if end.watch_seconds < start.watch_seconds {
-        return Err("The watch time moved backwards; reset and record again".into());
+        return Err("The watch time moved backwards. Reset and record again".into());
     }
     let watch_elapsed = end.watch_seconds - start.watch_seconds;
     let error = watch_elapsed as i128 - elapsed as i128;
@@ -106,7 +106,7 @@ impl DriftSession {
         }
     }
 
-    /// Records a sample. The first call sets the start; the second validates
+    /// Records a sample. The first call sets the start. The second validates
     /// the pair and computes the PPM. A failed second sample is not retained.
     pub fn record(
         &mut self,

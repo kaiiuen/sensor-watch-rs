@@ -2,7 +2,7 @@
 //!
 //! Help IDs and step text are intentionally data-driven. Dismissals are kept in
 //! the app session because the settings schema is deliberately not changed by
-//! this feature; restarting Studio shows help again.
+//! this feature. Restarting Studio shows help again.
 
 use std::collections::{HashMap, HashSet};
 
@@ -330,7 +330,7 @@ pub fn action_allowed(tour_active: bool, action: AnchorId) -> bool {
 }
 
 /// Actions which can write hardware, replace/delete user data, or start a
-/// destructive/irreversible operation. These are guarded at their handlers;
+/// destructive/irreversible operation. These are guarded at their handlers.
 /// no overlay hit-testing is part of this policy.
 pub fn unsafe_action(action: AnchorId) -> bool {
     matches!(
@@ -636,19 +636,19 @@ const TUTORIALS: &[Tutorial] = &[
         stable_key: "build-flash",
         title: "Build & Flash tutorial",
         steps: steps!
-        ("1. Check the configured-build gate" => "Start by reading the Build unavailable explanation. Configured Studio firmware builds remain fail-closed because the Studio-to-firmware input contract is incomplete; no configured UF2 is generated. The five items are explanations of a firmware contract, not a beginner checklist: selecting every toggle cannot satisfy them.",
+        ("1. Check the configured-build gate" => "Start by reading the Build unavailable explanation. Configured Studio firmware builds remain fail-closed because the Studio-to-firmware input contract is incomplete. No configured UF2 is generated. The five items are explanations of a firmware contract, not a beginner checklist. Selecting every toggle cannot satisfy them.",
          "2. Review the board" => "Review Target board and its revision details. This records which watch revision you intend to flash as planning data, but Studio cannot generate the board-specific firmware inputs while configured builds are unavailable.",
          "3. Review active preset and faces" => "Review the active preset and its faces in Watch Faces, then return here. You can choose the stock/default preset and Studio records the ordered face/source plan, but it cannot generate a configured UF2 from that plan.",
          "4. Review the component/LCD profile" => "Review Components / Build Profile, including the component and LCD description. A UI selection is not the same as being wired into the firmware build. For example, enabling OPT3001 records the light-sensor plan, but does not add its firmware feature/module or connect its driver. There is currently no beginner action that completes this item because Studio lacks firmware-input generation.",
-         "5. Understand the remaining contract" => "Studio cannot generate concrete pin, bus, address, power, ownership, or build-provenance inputs. SPI/I2C toggles are not pin mappings, and a selected thermistor does not identify its wiring. Keep the fail-closed gate in place; do not infer that the configured contract is complete.",
+         "5. Understand the remaining contract" => "Studio cannot generate concrete pin, bus, address, power, ownership, or build-provenance inputs. SPI/I2C toggles are not pin mappings, and a selected thermistor does not identify its wiring. Keep the fail-closed gate in place. Do not infer that the configured contract is complete.",
          "6. Follow the safe existing-UF2 path" => "For an existing, verified UF2, enter its explicit path, inspect it with its matching .uf2.json and .json.sig sidecars, review the metadata, approve only that exact artifact for this session, refresh bootloader detection, and copy only when exactly one expected watch drive is identified.",
-         "7. Know what the copy means" => "The verified existing-UF2 path safely inspects and copies an artifact; it does not make a stock or recovery UF2 configured, prove that Studio planning choices were compiled, or validate hardware behavior.",
-         "8. Choose your next action" => "Keep the stock preset, matching target/profile, and desired component choices if you want a saved plan; stop changing toggles expecting the gate to clear. If you need a watch artifact now, use only the existing verified-UF2 inspection/copy path above." ,
+         "7. Know what the copy means" => "The verified existing-UF2 path safely inspects and copies an artifact. It does not make a stock or recovery UF2 configured, prove that Studio planning choices were compiled, or validate hardware behavior.",
+         "8. Choose your next action" => "Keep the stock preset, matching target/profile, and desired component choices if you want a saved plan. Stop changing toggles expecting the gate to clear. If you need a watch artifact now, use only the existing verified-UF2 inspection/copy path above." ,
          "9. Inspect the artifact and sidecars" => "Click Inspect UF2. Review the reported structure, family, manifest, matching .uf2.json sidecar, and .json.sig sidecar where required. Stop if the required files are missing or the artifact is not the intended one.",
-         "10. Interpret verification correctly" => "Verification reports local structure and digest consistency only. SHA-256 detects corruption or unexpected change; it is not a release key or proof of publisher identity. Authenticity requires a signature from a protected private key verified by a separately trusted public key, such as Ed25519. A mutable GitHub branch or checksum alone is insufficient because both can be changed with the artifact. It does not establish provenance, that the configured board/profile/faces were applied, bootloader success, firmware health, or compatibility with physical hardware.",
+         "10. Interpret verification correctly" => "Verification reports local structure and digest consistency only. SHA-256 detects corruption or unexpected change. It is not a release key or proof of publisher identity. Authenticity requires a signature from a protected private key verified by a separately trusted public key, such as Ed25519. A mutable GitHub branch or checksum alone is insufficient because both can be changed with the artifact. It does not establish provenance, that the configured board/profile/faces were applied, bootloader success, firmware health, or compatibility with physical hardware.",
          "11. Approve for this session" => "After reviewing the metadata, click Approve for this session only for the exact artifact you intend to copy. Approval is session-scoped and does not make a stock artifact configured or prove hardware validity.",
-         "12. Put one watch in bootloader mode" => "Put exactly one intended watch in bootloader mode with USB connected, then click Refresh detection. Wait for detection to finish; do not rely on an old drive list.",
-         "13. Copy only with one expected drive" => "Copy only when detection shows one expected watch drive and the approved artifact is still the one you reviewed. Multiple drives are ambiguous; no drive is not ready. The Copy control is a host file-copy boundary and remains guarded.",
+         "12. Put one watch in bootloader mode" => "Put exactly one intended watch in bootloader mode with USB connected, then click Refresh detection. Wait for detection to finish. Do not rely on an old drive list.",
+         "13. Copy only with one expected drive" => "Copy only when detection shows one expected watch drive and the approved artifact is still the one you reviewed. Multiple drives are ambiguous. No drive is not ready. The Copy control is a host file-copy boundary and remains guarded.",
          "14. Wait, then unplug safely" => "After Copy reports completion, wait for the operation to finish and follow the watch/USB guidance before unplugging. Never unplug during a copy. A successful host copy still does not validate firmware behavior or hardware authenticity."),
     },
     Tutorial {
@@ -657,8 +657,8 @@ const TUTORIALS: &[Tutorial] = &[
         title: "Calibration tutorial",
         steps: steps!
         ("Purpose and controls" => "Calibration shows two separate kinds of information: drift-session results calculated from start/end samples, and optional temperature-compensated RTC settings (base correction, temperature coefficient, and reference temperature). A session result is not the same thing as enabling temperature compensation.",
-         "Beginner workflow" => "1. Use a trusted clock and record the start and end samples for a drift session. 2. Review the resulting ppm value and any optional temperature-compensation settings separately. 3. Copy a generated `settime` or `drift N` UART command if needed, then send it manually through the documented UART path; copying does not send or apply it. 4. Save only the local Studio session/settings you intend to keep. Expected result: Studio records host-side results/settings, while any hardware change happens only after you deliberately send a command over UART.",
-         "Safety and limits" => "Studio does not apply drift corrections or `settime` commands and does not directly save calibration to hardware. Do not invent a measurement or use extreme values; verify the target and UART wiring before sending a mutating command. Temperature-compensation settings are optional firmware configuration, not proof that a drift session was applied. Simulation cannot measure a crystal or validate physical timekeeping."),
+         "Beginner workflow" => "1. Use a trusted clock and record the start and end samples for a drift session. 2. Review the resulting ppm value and any optional temperature-compensation settings separately. 3. Copy a generated `settime` or `drift N` UART command if needed, then send it manually through the documented UART path. Copying does not send or apply it. 4. Save only the local Studio session/settings you intend to keep. Expected result: Studio records host-side results/settings, while any hardware change happens only after you deliberately send a command over UART.",
+         "Safety and limits" => "Studio does not apply drift corrections or `settime` commands and does not directly save calibration to hardware. Do not invent a measurement or use extreme values. Verify the target and UART wiring before sending a mutating command. Temperature-compensation settings are optional firmware configuration, not proof that a drift session was applied. Simulation cannot measure a crystal or validate physical timekeeping."),
     },
     Tutorial {
         id: HelpId::Modules,
@@ -719,7 +719,7 @@ const TUTORIALS: &[Tutorial] = &[
         title: "Notepad tutorial",
         steps: steps!
         ("Keep notes local" => "Notepad stores local notes for planning and troubleshooting. Use clear categories and record the target, inputs, and observed results.",
-         "Record evidence carefully" => "Notes describe what you intended and observed; they do not validate firmware, hardware, or a calibration result. Keep sensitive details private."),
+         "Record evidence carefully" => "Notes describe what you intended and observed. They do not validate firmware, hardware, or a calibration result. Keep sensitive details private."),
     },
     Tutorial {
         id: HelpId::FileBrowser,
