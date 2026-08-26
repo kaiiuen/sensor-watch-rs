@@ -31,4 +31,11 @@ SECTIONS
 
   /* LMA (load address) of the .ramfunc section, for the startup copy. */
   __sramfunc_lma = LOADADDR(.ramfunc);
+
+  /* Developer USB feasibility storage only. The controller packet layout is
+   * not used until the PAC USB SRAM contract is implemented. */
+  .usb_ram (NOLOAD) : ALIGN(4)
+  {
+    *(.usb_ram .usb_ram.*);
+  } > RAM
 } INSERT AFTER .bss;

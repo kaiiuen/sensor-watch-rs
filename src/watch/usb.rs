@@ -1,33 +1,87 @@
-//! Optional native USB CDC application transport for the SAM L22.
+//! Developer-only SAM L22 USB full-speed enumeration feasibility layer.
 //!
-//! The reference firmware uses TinyUSB in device/full-speed mode with CDC
-//! notification endpoint `0x81`, bulk OUT `0x02`, bulk IN `0x82`, 64-byte
-//! packets, and the descriptors below. The `atsaml22j` 0.1.0 PAC exposes the
-//! USB device control/status registers, but does not expose the USB descriptor
-//!/endpoint transfer SRAM (and this workspace does not depend on TinyUSB or a
-//! Rust USB device stack). Consequently this module is an honest compile-safe
-//! integration point, not a claimed CDC implementation.
+//! This module deliberately stops at the USB device/control boundary. The PAC
+//! exposes the USB device registers but omits the descriptor-bank and packet
+//! SRAM types needed to safely service EP0 and CDC bulk transfers. The raw
+//! layout below is therefore an audited address/shape contract only; it is not
+//! used to invent packet I/O. There is no CDC shell, read path, or write path.
 //!
-//! Enable with `--features usb-cdc`. Initialization then returns
-//! [`UsbError::Unsupported`]. The firmware entry point turns that into an
-//! explicit boot failure, so an accidentally enabled feature cannot silently
-//! ship a battery-draining or nonfunctional USB mode.
+//! The descriptor values mirror the reference TinyUSB application:
+//! 0x1209:0x2151, full-speed, 64-byte EP0, and CDC endpoint addresses 0x81,
+//! 0x02, and 0x82.
 
-#![cfg(feature = "usb-cdc")]
+#![cfg(any(feature = "usb-enum", feature = "usb-cdc"))]
 
-/// USB CDC packet size used by the reference TinyUSB configuration.
 pub const MAX_PACKET_SIZE: usize = 64;
-/// CDC notification endpoint from the reference descriptors.
 pub const NOTIFICATION_ENDPOINT: u8 = 0x81;
-/// CDC bulk OUT endpoint from the reference descriptors.
 pub const RX_ENDPOINT: u8 = 0x02;
-/// CDC bulk IN endpoint from the reference descriptors.
 pub const TX_ENDPOINT: u8 = 0x82;
+pub const USB_DPRAM_ORIGIN: usize = 0x2000_0000;
+pub const USB_DPRAM_SIZE: usize = 512;
+pub const USB_DESCRIPTOR_BANK_SIZE: usize = 12;
 
-/// Device descriptor values copied from the reference application.
-///
-/// This is kept as data so the eventual stack integration has a reviewed,
-/// stable source of truth. It is not installed into hardware by this module.
+/// SAM L22 USB device register offsets from the reference component header.
+pub const USB_REGISTER_BASE: usize = 0x4100_0000;
+pub const USB_CTRLA_OFFSET: usize = 0x000;
+pub const USB_DESCADD_OFFSET: usize = 0x024;
+pub const USB_PADCAL_OFFSET: usize = 0x028;
+pub const USB_ENDPOINTS_OFFSET: usize = 0x100;
+pub const USB_DESCRIPTOR_BANKS: usize = 16;
+
+/// The first request a real implementation must handle after reset.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ControlState {
+    Default,
+    Addressed,
+    Configured,
+}
+
+/// A small, target-independent representation of the standard control state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ControlMachine {
+    state: ControlState,
+}
+
+impl ControlMachine {
+    pub const fn new() -> Self {
+        Self {
+            state: ControlState::Default,
+        }
+    }
+
+    pub const fn state(self) -> ControlState {
+        self.state
+    }
+
+    pub fn set_address(&mut self, address: u8) -> bool {
+        if address <= 127 && self.state != ControlState::Configured {
+            self.state = if address == 0 {
+                ControlState::Default
+            } else {
+                ControlState::Addressed
+            };
+            true
+        } else {
+            false
+        }
+    }
+
+    pub fn set_configured(&mut self, configured: bool) -> bool {
+        match (self.state, configured) {
+            (ControlState::Addressed, true) => {
+                self.state = ControlState::Configured;
+                true
+            }
+            (ControlState::Configured, false) => {
+                self.state = ControlState::Addressed;
+                true
+            }
+            _ => false,
+        }
+    }
+}
+
+/// USB device descriptor from the reference TinyUSB application.
 pub const DEVICE_DESCRIPTOR: [u8; 18] = [
     18,
     1,
@@ -49,38 +103,165 @@ pub const DEVICE_DESCRIPTOR: [u8; 18] = [
     1,
 ];
 
-/// Error returned because the selected PAC/API cannot support transfers yet.
+/// Full-speed configuration descriptor from the reference TinyUSB layout.
+///
+/// It is retained for review and host validation. It is not installed into
+/// the controller until the missing SRAM transfer contract is implemented.
+pub const CONFIGURATION_DESCRIPTOR: [u8; 75] = [
+    9,
+    2,
+    75,
+    0,
+    2,
+    1,
+    0,
+    0xA0,
+    50,
+    8,
+    0x0B,
+    0,
+    2,
+    0x02,
+    0x02,
+    0x01,
+    0,
+    9,
+    4,
+    0,
+    0,
+    1,
+    0x02,
+    0x02,
+    0x01,
+    0,
+    5,
+    0x24,
+    0x00,
+    0x10,
+    0x01,
+    5,
+    0x24,
+    0x01,
+    0x00,
+    0x01,
+    4,
+    0x24,
+    0x02,
+    0x02,
+    5,
+    0x24,
+    0x06,
+    0,
+    1,
+    7,
+    5,
+    NOTIFICATION_ENDPOINT,
+    0x03,
+    8,
+    0,
+    16,
+    9,
+    4,
+    1,
+    0,
+    2,
+    0x0A,
+    0,
+    0,
+    0,
+    7,
+    5,
+    RX_ENDPOINT,
+    0x02,
+    64,
+    0,
+    0,
+    7,
+    5,
+    TX_ENDPOINT,
+    0x02,
+    64,
+    0,
+    0,
+];
+
+/// A raw descriptor-bank shape matching the SAM L22 reference header.
+///
+/// This is kept private because the PAC does not expose a safe packet-buffer
+/// API and this layer must not expose an unsafe transfer surface by accident.
+#[repr(C)]
+struct RawDescriptorBank {
+    addr: u32,
+    pcksize: u32,
+    extreg: u16,
+    status: u8,
+    reserved: u8,
+}
+
+const _: () = assert!(core::mem::size_of::<RawDescriptorBank>() == USB_DESCRIPTOR_BANK_SIZE);
+const _: () = assert!(MAX_PACKET_SIZE <= 64);
+const _: () = assert!(NOTIFICATION_ENDPOINT & 0x80 != 0);
+const _: () = assert!(RX_ENDPOINT & 0x80 == 0);
+const _: () = assert!(TX_ENDPOINT & 0x80 != 0);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum UsbError {
-    /// Endpoint descriptor/data SRAM access is absent from the current PAC, and no
-    /// USB device-stack implementation is available in this workspace.
-    Unsupported,
+    /// Descriptor/packet SRAM transfer support is not present in this PAC layer.
+    MissingPacketSram,
 }
 
-/// Initializes native USB CDC.
-///
-/// This deliberately does not touch USB clocks, pins, or registers. A partial
-/// initialization would be worse than an error: it could change the clock from
-/// the battery-safe 4 MHz mode while still leaving the application invisible
-/// to the host.
+/// Fail closed until EP0 packet memory and USB clock/power sequencing are wired.
 pub fn init() -> Result<(), UsbError> {
-    Err(UsbError::Unsupported)
+    Err(UsbError::MissingPacketSram)
 }
 
-/// Services USB and moves bytes between the CDC FIFOs and the shell.
-///
-/// Present to define the integration boundary for the eventual stack. There
-/// is no valid implementation until the PAC/device-stack gap is resolved.
 pub fn poll() -> Result<(), UsbError> {
-    Err(UsbError::Unsupported)
+    Err(UsbError::MissingPacketSram)
 }
 
-/// Queues bytes for CDC transmission.
 pub fn write(_bytes: &[u8]) -> Result<usize, UsbError> {
-    Err(UsbError::Unsupported)
+    Err(UsbError::MissingPacketSram)
 }
 
-/// Reads one byte from the CDC receive FIFO, if available.
 pub fn read() -> Result<Option<u8>, UsbError> {
-    Err(UsbError::Unsupported)
+    Err(UsbError::MissingPacketSram)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reference_descriptors_and_endpoints_are_consistent() {
+        assert_eq!(&DEVICE_DESCRIPTOR[8..12], &[0x09, 0x12, 0x51, 0x21]);
+        assert_eq!(
+            u16::from_le_bytes([CONFIGURATION_DESCRIPTOR[2], CONFIGURATION_DESCRIPTOR[3]]),
+            75
+        );
+        assert_eq!(CONFIGURATION_DESCRIPTOR.len(), 75);
+        assert!(
+            CONFIGURATION_DESCRIPTOR
+                .windows(2)
+                .any(|w| w == [5, RX_ENDPOINT])
+        );
+        assert!(
+            CONFIGURATION_DESCRIPTOR
+                .windows(2)
+                .any(|w| w == [5, TX_ENDPOINT])
+        );
+    }
+
+    #[test]
+    fn standard_control_state_is_fail_closed() {
+        let mut machine = ControlMachine::new();
+        assert_eq!(machine.state(), ControlState::Default);
+        assert!(!machine.set_configured(true));
+        assert!(machine.set_address(7));
+        assert_eq!(machine.state(), ControlState::Addressed);
+        assert!(machine.set_configured(true));
+        assert_eq!(machine.state(), ControlState::Configured);
+        assert!(!machine.set_address(8));
+        assert!(machine.set_configured(false));
+        assert_eq!(machine.state(), ControlState::Addressed);
+    }
 }

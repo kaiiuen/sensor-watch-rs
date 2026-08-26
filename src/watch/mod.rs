@@ -63,7 +63,7 @@ pub mod storage;
 pub mod thermistor;
 pub mod timeout;
 pub mod uart;
-#[cfg(feature = "usb-cdc")]
+#[cfg(any(feature = "usb-cdc", feature = "usb-enum"))]
 pub mod usb;
 pub mod utility;
 pub mod utz;

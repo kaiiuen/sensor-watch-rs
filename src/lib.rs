@@ -57,6 +57,11 @@ compile_error!(
 #[path = "watch/usb_contract.rs"]
 pub mod usb_contract;
 
+/// Host-testable USB enumeration/control contract.
+#[cfg(all(feature = "usb-enum", test))]
+#[path = "watch/usb.rs"]
+pub mod usb_enum_contract;
+
 // ---------------------------------------------------------------------------
 // Firmware target: reuse the real, byte-identical module trees untouched.
 // ---------------------------------------------------------------------------
