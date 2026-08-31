@@ -287,12 +287,8 @@ struct StudioApp {
     watch_config: watch_config::WatchConfig,
     /// Custom hardware modules.
     modules: modules::ModuleManager,
-    /// The canonical configured-build output root.
-    build_output_root: String,
-    /// Compatibility value for the existing session-local output-root call sites.
+    /// The authoritative configured-build output root for this session.
     selected_build_output_root: String,
-    /// Pending configured-build artifact root; applied only after validation.
-    pending_artifact_root: String,
     artifact_root_status: String,
     /// Pending user-entered data root; changes apply on next launch only.
     pending_data_folder: String,
@@ -1197,17 +1193,7 @@ impl Default for StudioApp {
             pending_checksum: None,
             watch_config: watch_config::WatchConfig::default(),
             modules: modules::ModuleManager::default(),
-            build_output_root: storage::default_artifact_root(
-                &distribution::active().user_data_root,
-            )
-            .display()
-            .to_string(),
             selected_build_output_root: default_selected_build_output_root(&distribution::active()),
-            pending_artifact_root: storage::default_artifact_root(
-                &distribution::active().user_data_root,
-            )
-            .display()
-            .to_string(),
             artifact_root_status: String::new(),
             pending_data_folder: bootstrap_preferences.data_folder.clone(),
             data_folder_status: String::new(),
