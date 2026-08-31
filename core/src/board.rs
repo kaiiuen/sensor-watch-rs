@@ -442,8 +442,8 @@ pub const RED_LITE: BoardMapping = BoardMapping {
         power: &[],
         buttons: [p(0, 2), p(1, 5), p(0, 7)],
         buzzer: p(0, 27),
-        red_led: p(0, 4),
-        green_led: Some(p(1, 23)),
+        red_led: p(0, 20),
+        green_led: Some(p(0, 21)),
         blue_led: None,
         connector: [p(1, 4), p(1, 1), p(1, 2), p(1, 3), p(1, 0)],
         i2c: None,
@@ -512,6 +512,18 @@ mod tests {
     }
 
     #[test]
+    fn generic_lite_mapping_uses_active_low_led_pins() {
+        let mapping = lookup(BoardId::RedLite, RevisionId::SwatA1_02).unwrap();
+        assert_eq!(mapping.pins.red_led, PinId::new(0, 20));
+        assert_eq!(mapping.pins.green_led, Some(PinId::new(0, 21)));
+
+        let test_mapping = lite_test_lookup(BoardId::RedLite, RevisionId::SwatA1_02).unwrap();
+        assert_eq!(mapping.pins.red_led, test_mapping.red_led);
+        assert_eq!(mapping.pins.green_led, Some(test_mapping.green_led));
+        assert!(test_mapping.leds_active_low);
+    }
+
+    #[test]
     fn evidenced_tuples_resolve_and_unknowns_fail_closed() {
         assert!(lookup(BoardId::Green, RevisionId::SwatA1_05).is_ok());
         assert!(lookup(BoardId::Green, "OSO-SWAT-A1-05").is_ok());
@@ -536,7 +548,7 @@ mod tests {
             lookup(BoardId::RedLite, "OSO-SWAT-A1-02")
                 .unwrap()
                 .validate()
-                .is_ok()
+                .is_err()
         );
     }
 
