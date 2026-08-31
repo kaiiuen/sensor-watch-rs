@@ -35,6 +35,11 @@ name = "minimal-usb"
 path = "src/minimal_usb.rs"
 required-features = ["minimal-usb"]
 
+[[bin]]
+name = "lite-hw-test"
+path = "src/lite_hw_test.rs"
+required-features = ["lite-hw-test"]
+
 [lib]
 name = "sensor_watch"
 path = "src/lib.rs"
@@ -90,6 +95,9 @@ usb-enum = []
 # Developer-only CDC contract for host tests and the ARM minimal profile. It
 # never enables production movement, mutation, update, or arbitrary file I/O.
 usb-cdc = ["usb-enum"]
+# Opt-in headless hardware test image. This is a separate binary and does not
+# select the normal application, watch faces, LCD, buttons, or sensor drivers.
+lite-hw-test = ["usb-cdc"]
 # Opt-in structured logs over the SWD probe's RTT channel. This is deliberately
 # not part of any default feature and is valid only for the ARM firmware target.
 defmt-log = ["dep:defmt", "dep:defmt-rtt"]

@@ -3,7 +3,7 @@ use std::{env, path::PathBuf, process::ExitCode};
 
 fn usage() -> ! {
     eprintln!(
-        "usage: sensor-watch-tools <build|build-minimal|package-studio|uf2|verify|backup|rollback|report|flash> ..."
+        "usage: sensor-watch-tools <build|build-minimal|build-lite|package-studio|uf2|verify|backup|rollback|report|flash> ..."
     );
     std::process::exit(2)
 }
@@ -82,6 +82,16 @@ fn main() -> ExitCode {
             println!(
                 "built {}",
                 tools::build_firmware()
+                    .unwrap_or_else(|e| fail(e))
+                    .uf2_path
+                    .display()
+            )
+        }
+        "build-lite" => {
+            ensure_no_extra(&mut args);
+            println!(
+                "built Developer-only Lite {}",
+                tools::build_lite_hardware_test()
                     .unwrap_or_else(|e| fail(e))
                     .uf2_path
                     .display()

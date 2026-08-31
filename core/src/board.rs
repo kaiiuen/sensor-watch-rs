@@ -408,6 +408,32 @@ pub const PRO_FEAL: BoardMapping = BoardMapping {
     },
 };
 
+/// Hardware-only mapping for the headless Lite profile. This is intentionally
+/// not a `BoardMapping`: it cannot accidentally expose LCD or production pins.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LiteTestMapping {
+    pub board: BoardId,
+    pub revision: RevisionId,
+    pub red_led: PinId,
+    pub green_led: PinId,
+    pub leds_active_low: bool,
+}
+
+pub const LITE_TEST_RED_A1_02: LiteTestMapping = LiteTestMapping {
+    board: BoardId::RedLite,
+    revision: RevisionId::SwatA1_02,
+    red_led: p(0, 20),
+    green_led: p(0, 21),
+    leds_active_low: true,
+};
+
+pub fn lite_test_lookup(board: BoardId, revision: RevisionId) -> Option<&'static LiteTestMapping> {
+    match (board, revision) {
+        (BoardId::RedLite, RevisionId::SwatA1_02) => Some(&LITE_TEST_RED_A1_02),
+        _ => None,
+    }
+}
+
 pub const RED_LITE: BoardMapping = BoardMapping {
     board: BoardId::RedLite,
     revision: RevisionId::SwatA1_02,
@@ -474,6 +500,16 @@ pub fn lookup<R: RevisionSelector>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lite_test_is_red_a1_02_only_and_has_active_low_leds() {
+        let mapping = lite_test_lookup(BoardId::RedLite, RevisionId::SwatA1_02).unwrap();
+        assert_eq!(mapping.red_led, PinId::new(0, 20));
+        assert_eq!(mapping.green_led, PinId::new(0, 21));
+        assert!(mapping.leds_active_low);
+        assert!(lite_test_lookup(BoardId::Green, RevisionId::SwatA1_05).is_none());
+        assert!(lite_test_lookup(BoardId::RedLite, RevisionId::SwatA1_05).is_none());
+    }
 
     #[test]
     fn evidenced_tuples_resolve_and_unknowns_fail_closed() {

@@ -1,5 +1,6 @@
 //! Host-side contract tests for the Developer-only minimal profile.
 
+use sensor_watch_core::{board, lite_test};
 use std::{fs, path::PathBuf};
 
 fn root_file(name: &str) -> String {
@@ -37,6 +38,29 @@ fn minimal_boundary_preserves_bootloader_range_and_proof_of_life() {
     assert!(source.contains("identity"));
 
     assert!(source.contains("fail closed"));
+}
+
+#[test]
+fn lite_protocol_is_read_only_bounded_and_host_mocked() {
+    use lite_test::{Command, MAX_RESPONSE, Status, format_response};
+    assert_eq!(Command::parse(b"test all\r\n"), Some(Command::All));
+    assert!(Command::parse(b"erase 127").is_none());
+    let mut response = [0; MAX_RESPONSE];
+    let length = format_response(Command::Status, Status::fresh(), &mut response);
+    let text = std::str::from_utf8(&response[..length]).unwrap();
+    assert!(text.contains("identity=UNKNOWN"));
+    assert!(text.contains("bulk=FAIL-CLOSED"));
+    assert!(text.len() <= MAX_RESPONSE);
+}
+
+#[test]
+fn lite_profile_maps_only_red_a1_02_without_lcd_ownership() {
+    let mapping =
+        board::lite_test_lookup(board::BoardId::RedLite, board::RevisionId::SwatA1_02).unwrap();
+    assert_eq!(mapping.red_led, board::PinId::new(0, 20));
+    assert_eq!(mapping.green_led, board::PinId::new(0, 21));
+    assert!(mapping.leds_active_low);
+    assert!(board::lite_test_lookup(board::BoardId::Green, board::RevisionId::SwatA1_05).is_none());
 }
 
 #[test]

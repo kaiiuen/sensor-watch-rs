@@ -842,6 +842,47 @@ pub fn build_firmware() -> ToolResult<BuildResult> {
     Ok(BuildResult { uf2_path })
 }
 
+/// Builds the Developer-only headless Lite hardware-test firmware and emits a separate UF2.
+pub fn build_lite_hardware_test() -> ToolResult<BuildResult> {
+    let root = workspace_root()?;
+    let _build_lock = acquire_build_lock(&root)?;
+    let mut c = Command::new("cargo");
+    c.args([
+        "build",
+        "--release",
+        "--target",
+        "thumbv6m-none-eabi",
+        "-p",
+        "sensor-watch",
+        "--bin",
+        "lite-hw-test",
+        "--features",
+        "lite-hw-test",
+    ]);
+    c.current_dir(&root);
+    run(c)?;
+    let dir = root.join("target/thumbv6m-none-eabi/release");
+    let elf = dir.join("lite-hw-test");
+    let bin = dir.join("lite-hw-test.bin");
+    let uf2_path = dir.join("lite-hw-test.uf2");
+    let mut c = Command::new(objcopy()?);
+    c.args(["-O", "binary"]).arg(&elf).arg(&bin);
+    run(c)?;
+    let image = read_file(&bin, MAX_APPLICATION_BYTES)?;
+    let encoded = uf2::convert_to_uf2(&image);
+    if encoded.is_empty() {
+        return Err("cannot convert Lite test firmware binary to UF2".into());
+    }
+    remove_regular_file(&uf2_path)?;
+    write_binary(&uf2_path, &encoded)?;
+    let manifest_path = uf2_path.with_extension("uf2.json");
+    let signature_path = manifest_path.with_extension("json.sig");
+    remove_regular_file(&manifest_path)?;
+    remove_regular_file(&signature_path)?;
+    write_manifest(&manifest_path, &create_manifest(&uf2_path, None, None)?)?;
+    Ok(BuildResult { uf2_path })
+}
+
 /// Builds the Developer-only minimal firmware and emits a separate UF2.
 pub fn build_minimal_firmware() -> ToolResult<BuildResult> {
     let root = workspace_root()?;

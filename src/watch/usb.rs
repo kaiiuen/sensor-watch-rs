@@ -427,19 +427,27 @@ pub enum CdcControlResponse {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadOnlyCommand {
+    TestAll,
+    TestIdentity,
+    TestRtc,
+    TestStorage,
+    TestLed,
+    Status,
     Ping,
     Help,
-    Time,
-    Identity,
 }
 
 impl ReadOnlyCommand {
     pub fn parse(input: &[u8]) -> Option<Self> {
         match input {
+            b"test all" => Some(Self::TestAll),
+            b"test identity" => Some(Self::TestIdentity),
+            b"test rtc" => Some(Self::TestRtc),
+            b"test storage" => Some(Self::TestStorage),
+            b"test led" => Some(Self::TestLed),
+            b"status" => Some(Self::Status),
             b"ping" => Some(Self::Ping),
             b"help" => Some(Self::Help),
-            b"time" => Some(Self::Time),
-            b"identity" => Some(Self::Identity),
             _ => None,
         }
     }
@@ -543,11 +551,23 @@ impl CdcTransport {
         };
     }
 
+    pub fn on_addressed(&mut self) {
+        if self.connection == ConnectionState::Connected && self.usb_state != UsbState::Configured {
+            self.usb_state = UsbState::Addressed;
+        }
+    }
+
     pub fn on_configured(&mut self, configured: bool) {
-        if configured && self.connection == ConnectionState::Connected {
+        if configured
+            && self.connection == ConnectionState::Connected
+            && self.usb_state != UsbState::Configured
+        {
             self.clear_queues();
             self.usb_state = UsbState::Configured;
-        } else if !configured && self.connection == ConnectionState::Connected {
+        } else if !configured
+            && self.connection == ConnectionState::Connected
+            && self.usb_state != UsbState::Addressed
+        {
             self.usb_state = UsbState::Addressed;
             self.clear_queues();
         }
@@ -790,6 +810,20 @@ mod hardware {
             TX_CURSOR = 0;
             TX_LIMIT = 0;
             TX_CONFIG = false;
+        }
+    }
+
+    pub fn sync_transport(transport: &mut CdcTransport) {
+        if !vbus_present() {
+            transport.disconnect();
+            return;
+        }
+        transport.on_vbus(true);
+        let state = unsafe { (&*(&raw const MACHINE)).state() };
+        match state {
+            ControlState::Default => transport.on_bus_reset(),
+            ControlState::Addressed => transport.on_addressed(),
+            ControlState::Configured => transport.on_configured(true),
         }
     }
 
@@ -1080,7 +1114,25 @@ mod hardware {
 }
 
 #[cfg(target_arch = "arm")]
+#[allow(unused_imports)]
 pub use hardware::{init, poll};
+
+/// Poll the controller and synchronize the one application CDC session with
+/// the controller's EP0 state. Bulk endpoints remain disabled until the proof
+/// gate is reviewed, but no second transport or shadow session is created.
+#[cfg(target_arch = "arm")]
+pub fn poll_transport(transport: &mut CdcTransport) -> Result<(), UsbError> {
+    let result = hardware::poll();
+    hardware::sync_transport(transport);
+    result
+}
+
+#[cfg(not(target_arch = "arm"))]
+pub fn poll_transport(transport: &mut CdcTransport) -> Result<(), UsbError> {
+    transport.disconnect();
+    Err(UsbError::NoVbus)
+}
+
 #[cfg(not(target_arch = "arm"))]
 pub fn init() -> Result<(), UsbError> {
     Err(UsbError::NoVbus)
@@ -1314,12 +1366,8 @@ mod tests {
             Ok(ReadOnlyCommand::Help)
         );
         assert_eq!(
-            CdcTransport::allow_read_only_command(b"time"),
-            Ok(ReadOnlyCommand::Time)
-        );
-        assert_eq!(
-            CdcTransport::allow_read_only_command(b"identity"),
-            Ok(ReadOnlyCommand::Identity)
+            CdcTransport::allow_read_only_command(b"test identity"),
+            Ok(ReadOnlyCommand::TestIdentity)
         );
         for command in [b"set".as_slice(), b"write", b"erase", b"echo"] {
             assert_eq!(

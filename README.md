@@ -165,7 +165,9 @@ See [`docs/DEVELOPER_DEBUGGING.md`](docs/DEVELOPER_DEBUGGING.md) for probe use.
 For the opt-in Developer-only minimal USB feasibility image, including exact
 flash and recovery steps, see [`docs/MINIMAL_USB_PROFILE.md`](docs/MINIMAL_USB_PROFILE.md).
 It does not activate USB hardware or provide CDC bulk I/O or a shell, and never
-changes the default production firmware.
+changes the default production firmware. The separate Red/Lite headless hardware
+test profile is documented in [`docs/LITE_HARDWARE_TEST.md`](docs/LITE_HARDWARE_TEST.md);
+it is selected only with `--features lite-hw-test` and is not a production build.
 
 Produce a `.uf2` for drag-and-drop flashing:
 
