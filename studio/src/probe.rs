@@ -140,7 +140,25 @@ pub fn run_with_transport<T: ProbeTransport>(
     artifact: Option<&Path>,
     ports: &[PortChoice],
     connection_error: Option<&str>,
+    uart: Option<T>,
+    progress: impl FnMut(ProbeProgress),
+) -> ProbeResult<T> {
+    run_with_transport_and_drives(
+        artifact,
+        ports,
+        connection_error,
+        uart,
+        enumerate_drives,
+        progress,
+    )
+}
+
+fn run_with_transport_and_drives<T: ProbeTransport>(
+    artifact: Option<&Path>,
+    ports: &[PortChoice],
+    connection_error: Option<&str>,
     mut uart: Option<T>,
+    enumerate: impl FnOnce(&mut ProbeReport) -> Vec<DriveInfo>,
     mut progress: impl FnMut(ProbeProgress),
 ) -> ProbeResult<T> {
     let mut report = ProbeReport {
@@ -149,7 +167,7 @@ pub fn run_with_transport<T: ProbeTransport>(
     };
     report.log("Starting physical probe; USB cannot test sensors or application hardware.");
 
-    let drives = enumerate_drives(&mut report);
+    let drives = enumerate(&mut report);
     let total = progress_total(drives.len());
     progress(ProbeProgress {
         completed: 0,
@@ -451,7 +469,7 @@ mod tests {
     use std::sync::mpsc;
     use std::sync::{
         atomic::{AtomicBool, Ordering},
-        Arc,
+        Arc, Mutex,
     };
     use std::time::Duration;
 
@@ -480,7 +498,7 @@ mod tests {
         let release = Arc::new(AtomicBool::new(false));
         let worker_release = Arc::clone(&release);
         let worker = std::thread::spawn(move || {
-            run_with_transport(
+            run_with_transport_and_drives(
                 None,
                 &[PortChoice {
                     name: "fake".into(),
@@ -491,6 +509,7 @@ mod tests {
                     started: started_tx,
                     release: worker_release,
                 }),
+                |_| Vec::new(),
                 |_| {},
             )
         });
@@ -515,6 +534,101 @@ mod tests {
         );
     }
 
+    struct RecordingTransport {
+        commands: Arc<Mutex<Vec<String>>>,
+        disconnect_on: Option<&'static str>,
+    }
+
+    impl ProbeTransport for RecordingTransport {
+        fn port_name(&self) -> &str {
+            "fake"
+        }
+
+        fn command(&mut self, command: &str) -> Result<String, crate::transport::TransportError> {
+            self.commands.lock().unwrap().push(command.to_string());
+            if self.disconnect_on == Some(command) {
+                Err(crate::transport::TransportError::Disconnected)
+            } else {
+                Ok("ok".into())
+            }
+        }
+    }
+
+    fn fake_port() -> [PortChoice; 1] {
+        [PortChoice {
+            name: "fake".into(),
+            description: "test".into(),
+        }]
+    }
+
+    #[test]
+    fn probe_sends_each_bounded_command_once_in_order() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let result = run_with_transport_and_drives(
+            None,
+            &fake_port(),
+            None,
+            Some(RecordingTransport {
+                commands: Arc::clone(&commands),
+                disconnect_on: None,
+            }),
+            |_| Vec::new(),
+            |_| {},
+        );
+
+        assert_eq!(
+            *commands.lock().unwrap(),
+            COMMANDS
+                .iter()
+                .map(|command| command.to_string())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            commands
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|command| command.as_str() == "identity")
+                .count(),
+            1
+        );
+        assert_eq!(result.connection, ConnectionState::Connected);
+    }
+
+    #[test]
+    fn disconnected_transport_cancels_remaining_commands() {
+        let commands = Arc::new(Mutex::new(Vec::new()));
+        let result = run_with_transport_and_drives(
+            None,
+            &fake_port(),
+            None,
+            Some(RecordingTransport {
+                commands: Arc::clone(&commands),
+                disconnect_on: Some("events"),
+            }),
+            |_| Vec::new(),
+            |_| {},
+        );
+
+        assert_eq!(
+            *commands.lock().unwrap(),
+            ["help", "time", "identity", "events"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(result.connection, ConnectionState::Disconnected);
+        assert_eq!(
+            result
+                .report
+                .tests
+                .iter()
+                .filter(|test| test.name.starts_with("UART read-only command:"))
+                .count(),
+            4
+        );
+    }
+
     #[test]
     fn progress_total_is_drive_count_plus_six_commands() {
         assert_eq!(progress_total(0), COMMAND_COUNT);
@@ -525,9 +639,16 @@ mod tests {
     #[test]
     fn six_commands_report_the_actual_total_without_uart() {
         let mut progress = Vec::new();
-        let result = run_with_transport(None, &[], None, None::<BlockingTransport>, |event| {
-            progress.push(event);
-        });
+        let result = run_with_transport_and_drives(
+            None,
+            &[],
+            None,
+            None::<BlockingTransport>,
+            |_| Vec::new(),
+            |event| {
+                progress.push(event);
+            },
+        );
 
         assert_eq!(result.connection, ConnectionState::Disconnected);
         let total = progress.first().expect("initial progress").total;
@@ -540,7 +661,7 @@ mod tests {
         let release = Arc::new(AtomicBool::new(true));
         let (started_tx, _started_rx) = mpsc::channel();
         let mut progress = Vec::new();
-        let result = run_with_transport(
+        let result = run_with_transport_and_drives(
             None,
             &[PortChoice {
                 name: "fake".into(),
@@ -551,6 +672,7 @@ mod tests {
                 started: started_tx,
                 release,
             }),
+            |_| Vec::new(),
             |event| progress.push(event),
         );
 
