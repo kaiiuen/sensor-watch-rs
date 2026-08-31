@@ -12,11 +12,12 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 
 - **Dashboard** - project overview and health: target board selection
   (Green/Red-Lite/Blue/Pro) with a board-info description beside the selector,
-  flash/RAM estimates, last build time + build count, current OS date/time, NTP
-  time fetch (auto-fetches from Cloudflare on launch), custom NTP server
-  management (add/edit/delete), a server list, clock calibration, drift
-  calibration, and fuzz testing. All sections are collapsible and default to
-  expanded.
+  flash/RAM estimates, last build time + build count, current OS date/time, an
+  on-demand NTP time fetch, custom NTP server management (add/edit/delete), a
+  server list, clock calibration, drift calibration, and fuzz testing. Studio
+  does not contact an NTP server on startup. Fetching time sends a request to
+  the selected server only after the user presses Fetch. All sections are
+  collapsible and default to expanded.
 - **Watch Faces** - lists all faces registered in the firmware (scanned from
   `src/movement/mod.rs`) with a **search box**, **category filter**, preset
   management (create/rename/delete presets, add/reorder/remove faces via
@@ -49,21 +50,26 @@ Built with **egui/eframe** (pure Rust, cross-platform GUI).
 - **Simulator** - F-91W SVG display replica with clickable button hotspots, a
   **date/time controller**, and face cycling through the active preset. The
   current face render path is shown prominently in the panel. With the default
-  `real-faces` feature, all 111 faces execute the actual firmware face source
-  files through translated host movement and HAL seams with `MockHw`. With
+  `real-faces` feature, 108 of the 111 faces execute the actual firmware face
+  source files through translated host movement and HAL seams with `MockHw`;
+  the remaining 3 use the separate `face_sim` approximation. With
   `real-faces` disabled, all 111 faces use `face_sim`. This is not full ARM
   firmware simulation or hardware simulation. MMIO, interrupts, sensors, power,
-  RTC oscillator
-  accuracy, peripheral electrical behavior, and some scheduling are modeled or
-  stubbed and can diverge from a physical watch. The SVG and firmware character
-  set provide a display preview, not physical hardware validation.
-- **Build & Flash** - combined panel: review the target board and component
-  profile, then request a firmware build. Supported stock configurations emit
-  validated generated inputs and artifacts. Unsupported or incomplete inputs
-  fail closed with the reason shown in the profile panel. Build failures
-  include bounded Cargo and tool diagnostics in the panel, status, terminal,
-  error log, and a safe `build.log` under the resolved output path. The panel
-  still documents the intended USB-drive/`INFO_UF2.TXT` workflow.
+  RTC oscillator accuracy, peripheral electrical behavior, and some scheduling
+  are modeled or stubbed and can diverge from a physical watch. The SVG and
+  firmware character set provide a display preview, not physical hardware
+  validation.
+- **Build & Flash** - combined panel: explicitly choose and review the target
+  board and component profile, then request a configured firmware build.
+  Supported stock board/profile combinations emit validated generated inputs
+  and artifacts. The separate stock firmware build is unconfigured and does not
+  use these Studio selections. Studio does not auto-detect the board from a
+  watch drive; the selected board and profile are user-provided inputs.
+  Unsupported or incomplete inputs fail closed with the reason shown in the
+  profile panel. Build failures include bounded Cargo and tool diagnostics in
+  the panel, status, terminal, error log, and a safe `build.log` under the
+  resolved output path. The panel still documents the intended
+  USB-drive/`INFO_UF2.TXT` workflow.
 - **Calibration** - guided clock calibration (generates a `settime` command for
   the next minute boundary), a **beep-on-minute-rollover** helper, and guided
   manual RTC drift calibration in parts-per-million, and optional temperature

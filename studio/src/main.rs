@@ -1349,8 +1349,7 @@ impl Default for StudioApp {
             app.block_editor.set_blocks_mode(true);
         }
         app.apply_bootstrap_preferences(&bootstrap_preferences);
-        // Auto-fetch the time from the default NTP server (Cloudflare) on launch.
-        app.fetch_ntp();
+        // NTP remains strictly on-demand; startup must not make a time request.
         // Check for updates on launch.
         app.check_for_updates();
         if app.artifact_root_status.is_empty() {
@@ -3048,9 +3047,10 @@ impl StudioApp {
             .show(ui, |ui| {
                 ui.label("Select a server and fetch the current time. Add your own servers below.")
                     .on_hover_text(
-                        "Network Time Protocol (NTP) synchronizes the watch's clock to an\n\
-                     atomic time source over the internet. Pick a server, press Fetch,\n\
-                     and the app shows the exact UTC time plus the network latency.",
+                        "No NTP request is made when Studio starts. Press Fetch to send\n\
+                     a request to the selected server over the internet. The server\n\
+                     receives the request and your network address; Studio shows the\n\
+                     returned UTC time and network latency.",
                     );
                 ui.add_space(4.0);
 
@@ -5050,11 +5050,12 @@ impl StudioApp {
                 });
                 ui.colored_label(
                     colors.info,
-                    "Choose the board revision you're flashing. The firmware binary is\n\
-                     the same for all boards; the board type (affecting LED polarity\n\
-                     and buzzer voltage) is set at runtime on the watch itself. This\n\
-                     selection records which board you're flashing and is auto-selected\n\
-                     from the watch when it is detected.",
+                    "Choose and review the board revision and profile for this build.\n\
+                     A stock firmware build is unconfigured and does not use these\n\
+                     Studio selections. A configured build uses them only after\n\
+                     Studio validates and generates matching firmware inputs. Studio\n\
+                     does not auto-detect the board from watch-drive detection; the\n\
+                     selected board and profile are user-provided inputs.",
                 );
                 let buzzer_drive = components::capabilities(self.board).buzzer_drive;
                 ui.colored_label(
@@ -5110,6 +5111,9 @@ impl StudioApp {
                 ui.add_space(8.0);
 
                 ui.strong("Build");
+                ui.label(
+                    "Build creates a configured UF2 from the validated board/profile inputs above. The separate stock build remains unconfigured.",
+                );
                 if self.building {
                     ui.spinner();
                     ui.label(configured_estimator_status(
@@ -12155,8 +12159,16 @@ fn artifact_metadata(inspection: &build::ArtifactInspection) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::Panel;
+    use super::{Panel, StudioApp};
     use crate::help::{tutorial, HelpId};
+
+    #[test]
+    fn startup_does_not_start_an_ntp_request() {
+        let app = StudioApp::default();
+
+        assert!(app.pending_ntp.is_none());
+        assert!(app.ntp_time.is_none());
+    }
 
     #[test]
     fn compare_and_notepad_use_their_own_help_ids() {
