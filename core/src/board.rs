@@ -215,7 +215,7 @@ impl BoardMapping {
         let mut power = [("", ""); 8];
         for assignment in self.pins.power.iter().copied() {
             for (rail, owner) in power.iter().copied() {
-                if rail == assignment.rail && owner != "" && owner != assignment.owner {
+                if rail == assignment.rail && !owner.is_empty() && owner != assignment.owner {
                     result.power = Some(MappingError::PowerConflict {
                         rail: assignment.rail,
                         first: owner,
@@ -223,7 +223,7 @@ impl BoardMapping {
                     });
                 }
             }
-            if let Some(slot) = power.iter_mut().find(|slot| slot.0 == "") {
+            if let Some(slot) = power.iter_mut().find(|slot| slot.0.is_empty()) {
                 *slot = (assignment.rail, assignment.owner);
             }
         }
@@ -236,7 +236,7 @@ impl BoardMapping {
                 break;
             }
             for (used, owner) in channels.iter().copied().take(8) {
-                if used == channel && owner != "" && owner != name {
+                if used == channel && !owner.is_empty() && owner != name {
                     result.interrupt = Some(MappingError::InterruptConflict {
                         channel,
                         first: owner,
