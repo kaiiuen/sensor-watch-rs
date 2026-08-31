@@ -605,12 +605,14 @@ mod tests {
         let _ = std::fs::remove_dir_all(package);
     }
 
-    #[cfg(windows)]
     #[test]
     fn preflight_reports_unavailable_drive_with_actionable_details() {
-        let root = PathBuf::from(r"Z:\\sensor-watch-unavailable-root");
+        let parent = temp("file-backed-preflight-parent");
+        std::fs::write(&parent, b"not a directory").unwrap();
+        let root = parent.join("sensor-watch-unavailable-root");
         let error =
             prepare_artifact_root(&root, "Green", "rev-a", "stock", None, None).unwrap_err();
+        let _ = std::fs::remove_file(parent);
         assert!(error.contains(&root.display().to_string()));
         assert!(error.contains("Green"));
         assert!(error.contains("rev-a"));

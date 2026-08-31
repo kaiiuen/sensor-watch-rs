@@ -1857,12 +1857,11 @@ mod tests {
             ordered_faces: vec!["SIMPLE_CLOCK".into()],
             modules: vec![],
         };
-        let root = if cfg!(windows) {
-            PathBuf::from(r"Z:\\sensor-watch-missing-share")
-        } else {
-            PathBuf::from("/proc/sensor-watch-missing-share")
-        };
+        let parent = temp_root("file-backed-preflight-parent");
+        std::fs::write(&parent, b"not a directory").unwrap();
+        let root = parent.join("sensor-watch-missing-root");
         let error = preflight_output_root(&root, &request, None, None).unwrap_err();
+        let _ = std::fs::remove_file(parent);
         assert!(error.contains("Artifact root preflight failed"));
         assert!(error.contains("Create folder"));
         assert!(error.contains("Use default"));
