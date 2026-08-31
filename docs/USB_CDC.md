@@ -12,7 +12,7 @@ The opt-in `minimal-usb` feature implies `usb-enum` and selects the separate
 watch application, bootloader range, EEPROM bounds, WDT, and battery behavior
 are unchanged.
 
-The minimal image contains a reviewed, bounded EP0 feasibility path, but physical EP0 transfers are not proven and CDC is not enabled:
+The minimal image contains a reviewed, bounded EP0 path plus a host-testable CDC ACM transport. Physical EP0 and bulk transfers are not proven, so the hardware bulk gate remains disabled:
 
 - USBCRM DFLL48M setup from the documented 32 kHz reference and GCLK1 to USB
 - USB AHB and APBB clocks
@@ -20,6 +20,9 @@ The minimal image contains a reviewed, bounded EP0 feasibility path, but physica
 - PA05 VBUS detect input for the OSO-SWAT-A1-05 board, explicitly enabled as a pulled-down digital input
 - USB reset, full-speed device mode, descriptor address, and EP0 control setup
 - eight endpoint groups with two 16 byte banks per group and 32 byte stride
+- CDC ACM descriptors for notification `0x81`, bulk OUT `0x02`, and bulk IN `0x82`
+- fixed 64-byte packet buffers, four-deep RX/TX queues, bounded line framing,
+  line coding, and control-line-state handling
 - setup reception and bounded GET_DESCRIPTOR for device and configuration data
 - SET_ADDRESS, GET_CONFIGURATION, and SET_CONFIGURATION
 - status zero length packets, stalls, reset handling, suspend detach, and
@@ -31,19 +34,23 @@ inert.
 
 No CDC bulk endpoint is configured. `CdcTransport` provides fixed 64-byte
 buffers, explicit connection and USB states, line-coding and control-request
-contracts, and a read-only command allowlist (`ping`, `help`, `time`,
-`identity`). Until physical EP0 and CDC transfers are proven, transport
-operations return `NotEnumerated` or `Unsupported`. No shell response is
-fabricated and no mutating command is accepted.
+No hardware bulk endpoint is configured while `BULK_HARDWARE_PROVEN` is false.
+`CdcTransport` provides fixed 64-byte buffers, bounded four-packet RX/TX
+queues, explicit connection and USB states, line-coding and control-line-state
+requests, line-delimited framing, and a read-only command adapter (`ping`,
+`help`, `time`, `identity`). Queue overflow, malformed/oversized lines,
+disconnect, reset, suspend, and non-enumerated access fail closed. No shell
+response is fabricated and no mutating, update, or file command is accepted.
 
 ## Hardware-unverified details
 
-The software checks and host tests cover the USB register offsets, endpoint
-bank field layout, SRAM section contract, clock IDs, USB pad mux, OTP5 address,
-and OTP5 PADCAL and
-DFLL calibration fields. The minimal path reads those documented OTP5 fields
-and writes PADCAL. Electrical signal quality, DFLL lock behavior, and actual
-host enumeration still require hardware verification.
+The software checks and host tests cover descriptors, CDC requests, framing,
+queue overflow, lifecycle handling, the USB register offsets, endpoint bank
+field layout, SRAM section contract, clock IDs, USB pad mux, OTP5 address, and
+OTP5 PADCAL/DFLL calibration fields. The minimal path reads those documented
+OTP5 fields and writes PADCAL. Electrical signal quality, DFLL lock behavior,
+EP0 transfer timing, packet-memory ownership, bulk endpoint completion,
+and actual host enumeration still require hardware verification.
 
 The VBUS input mapping (PA05) is taken from the A1-05 board reference, not from
 the MCU device pack. The input buffer and pull-down are explicitly configured;

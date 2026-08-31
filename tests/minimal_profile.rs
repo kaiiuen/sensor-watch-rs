@@ -67,11 +67,13 @@ fn usb_register_and_control_stage_contract_is_explicit() {
 }
 
 #[test]
-fn usb_remains_ep0_only_and_production_isolated() {
+fn usb_transport_is_developer_only_and_hardware_fail_closed() {
     let manifest = root_file("Cargo.toml");
     let source = root_file("src/watch/usb.rs");
     assert!(manifest.contains("minimal-usb = [\"usb-enum\"]"));
-    assert!(source.contains("No CDC bulk endpoint is enabled"));
-    assert!(source.contains("pub fn write(_bytes: &[u8]) -> Result<usize, UsbError>"));
-    assert!(source.contains("pub fn read() -> Result<Option<u8>, UsbError>"));
+    assert!(source.contains("BULK_HARDWARE_PROVEN: bool = false"));
+    assert!(source.contains("CDC_QUEUE_DEPTH"));
+    assert!(source.contains("CDC_REQ_SET_LINE_CODING"));
+    assert!(source.contains("pub fn take_tx_packet"));
+    assert!(source.contains("pub fn next_command"));
 }

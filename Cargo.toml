@@ -83,12 +83,12 @@ minimal-usb = ["usb-enum"]
 # Enables the physical Alarm/service-button hook for mutating shell commands.
 # Without this feature, mutations remain permanently locked (fail closed).
 shell-auth = []
-# Reserve the native SAM L22 USB enumeration feasibility layer. It is
-# intentionally disabled by default because USB raises the clock/power floor and
-# the current PAC/dependency graph cannot implement endpoint transfers.
+# Reserve the native SAM L22 USB layer. It is intentionally disabled by default;
+# the Developer profile owns the bounded CDC contract while hardware bulk
+# completion remains fail-closed pending SRAM/endpoint proof.
 usb-enum = []
-# Compatibility name for callers that request the future CDC path. This remains
-# opt-in and does not claim working enumeration or a shell.
+# Developer-only CDC contract for host tests and the ARM minimal profile. It
+# never enables production movement, mutation, update, or arbitrary file I/O.
 usb-cdc = ["usb-enum"]
 # Opt-in structured logs over the SWD probe's RTT channel. This is deliberately
 # not part of any default feature and is valid only for the ARM firmware target.

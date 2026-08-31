@@ -38,6 +38,13 @@ SECTIONS
    * if the normal RAM layout changes. */
   .usb_ram (NOLOAD) : ALIGN(16)
   {
+    __usb_ram_start = .;
     *(.usb_ram .usb_ram.*);
+    __usb_ram_end = .;
   } > RAM
+
+  /* Keep the verified SAM L22 USB packet-memory reservation bounded. Bulk
+   * endpoint ownership remains disabled in software until its behavior is
+   * proven, but this prevents later buffers from crossing the reserved area. */
+  ASSERT(SIZEOF(.usb_ram) <= 0x200, "USB packet memory exceeds 512 bytes")
 } INSERT AFTER .bss;

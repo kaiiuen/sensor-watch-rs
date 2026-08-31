@@ -1,9 +1,10 @@
 //! Developer-only SAM L22 USB full-speed enumeration layer.
 //!
-//! This is intentionally limited to EP0 enumeration. It does not implement
-//! CDC bulk endpoints or expose a shell transport. Hardware constants are
-//! taken from Microchip.SAML22_DFP.3.8.203.atpack and the pinned TinyUSB
-//! reference at 5572168994a29266df6cbf12b46919498d3ece66.
+//! This module contains the Developer-only CDC contract and the bounded
+//! controller-facing layer. Bulk hardware remains fail closed until the
+//! SAM L22 USB SRAM/endpoint behavior has been proven on hardware. Hardware
+//! constants are taken from Microchip.SAML22_DFP.3.8.203.atpack and the pinned
+//! TinyUSB reference at 5572168994a29266df6cbf12b46919498d3ece66.
 
 #![cfg(any(feature = "usb-enum", feature = "usb-cdc"))]
 
@@ -75,8 +76,10 @@ pub const DEVICE_DESCRIPTOR: [u8; 18] = [
     18, 1, 0x00, 0x02, 0xef, 0x02, 0x01, 64, 0x09, 0x12, 0x51, 0x21, 0x00, 0x01, 1, 2, 3, 1,
 ];
 
-/// CDC configuration is retained as a descriptor review fixture only.
-/// No CDC bulk endpoint is enabled by this module.
+/// CDC ACM configuration descriptor from the pinned TinyUSB layout.
+///
+/// The endpoint addresses are part of the host-visible contract even while the
+/// controller bulk path remains disabled by the hardware proof gate.
 pub const CONFIGURATION_DESCRIPTOR: [u8; 75] = [
     9,
     2,
@@ -289,6 +292,19 @@ pub enum UsbError {
 
 /// A fixed-size CDC packet buffer. No heap allocation is used by the transport.
 pub const CDC_ENDPOINT_BUFFER_SIZE: usize = 64;
+/// All three CDC endpoint payload buffers use the same full-speed size.
+pub const CDC_NOTIFICATION_BUFFER_SIZE: usize = 64;
+pub const CDC_BULK_OUT_BUFFER_SIZE: usize = 64;
+pub const CDC_BULK_IN_BUFFER_SIZE: usize = 64;
+pub const CDC_QUEUE_DEPTH: usize = 4;
+pub const CDC_LINE_MAX: usize = 32;
+
+const _: () = assert!(CDC_ENDPOINT_BUFFER_SIZE == MAX_PACKET_SIZE);
+const _: () = assert!(CDC_QUEUE_DEPTH > 0);
+
+/// The SAM L22 packet-memory placement and completion semantics are not yet
+/// proven. Keep this false until a protocol-analyzer-backed review enables it.
+const BULK_HARDWARE_PROVEN: bool = false;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ConnectionState {
@@ -340,6 +356,68 @@ pub enum CdcControlRequest {
     SetControlLineState { value: u16 },
 }
 
+pub const CDC_REQ_SET_LINE_CODING: u8 = 0x20;
+pub const CDC_REQ_GET_LINE_CODING: u8 = 0x21;
+pub const CDC_REQ_SET_CONTROL_LINE_STATE: u8 = 0x22;
+pub const CDC_LINE_CODING_SIZE: u16 = 7;
+
+impl LineCoding {
+    pub const fn from_bytes(bytes: &[u8; 7]) -> Self {
+        Self {
+            baud_rate: u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+            stop_bits: bytes[4],
+            parity: bytes[5],
+            data_bits: bytes[6],
+        }
+    }
+
+    pub fn to_bytes(self) -> [u8; 7] {
+        let baud = self.baud_rate.to_le_bytes();
+        [
+            baud[0],
+            baud[1],
+            baud[2],
+            baud[3],
+            self.stop_bits,
+            self.parity,
+            self.data_bits,
+        ]
+    }
+}
+
+/// Decode a CDC ACM class request received on interface 0.
+///
+/// SET_LINE_CODING data is supplied only after the bounded EP0 OUT stage has
+/// completed. Requests for other interfaces, directions, or lengths stall.
+pub fn handle_cdc_setup(
+    transport: &mut CdcTransport,
+    setup: SetupPacket,
+    data: Option<[u8; 7]>,
+) -> Result<CdcControlResponse, CdcError> {
+    if setup.index != 0 || setup.bm_request_type & 0x60 != 0x20 {
+        return Err(CdcError::InvalidRequest);
+    }
+    if setup.request != CDC_REQ_SET_CONTROL_LINE_STATE && setup.value != 0 {
+        return Err(CdcError::InvalidRequest);
+    }
+    let request = match (setup.bm_request_type, setup.request) {
+        (0xA1, CDC_REQ_GET_LINE_CODING) => CdcControlRequest::GetLineCoding {
+            length: setup.length,
+        },
+        (0x21, CDC_REQ_SET_LINE_CODING) => CdcControlRequest::SetLineCoding {
+            length: setup.length,
+            coding: data
+                .map(|bytes| LineCoding::from_bytes(&bytes))
+                .ok_or(CdcError::InvalidRequest)?,
+        },
+        (0x21, CDC_REQ_SET_CONTROL_LINE_STATE) if setup.length == 0 => {
+            CdcControlRequest::SetControlLineState { value: setup.value }
+        }
+        _ => return Err(CdcError::Unsupported),
+    };
+    transport.handle_control_request(request)
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CdcControlResponse {
     LineCoding(LineCoding),
@@ -372,23 +450,40 @@ impl ReadOnlyCommand {
 /// The buffers and contracts are ready for a reviewed physical implementation,
 /// but no method fabricates enumeration, packets, or shell responses.
 pub struct CdcTransport {
-    rx: [u8; CDC_ENDPOINT_BUFFER_SIZE],
-    tx: [u8; CDC_ENDPOINT_BUFFER_SIZE],
-    rx_len: usize,
-    tx_len: usize,
+    rx: [[u8; CDC_ENDPOINT_BUFFER_SIZE]; CDC_QUEUE_DEPTH],
+    rx_lengths: [u8; CDC_QUEUE_DEPTH],
+    rx_head: usize,
+    rx_tail: usize,
+    rx_count: usize,
+    tx: [[u8; CDC_ENDPOINT_BUFFER_SIZE]; CDC_QUEUE_DEPTH],
+    tx_lengths: [u8; CDC_QUEUE_DEPTH],
+    tx_head: usize,
+    tx_tail: usize,
+    tx_count: usize,
+    line: [u8; CDC_LINE_MAX],
+    line_len: usize,
     usb_state: UsbState,
     connection: ConnectionState,
     suspended_state: UsbState,
     line_coding: LineCoding,
+    control_line_state: u16,
 }
 
 impl CdcTransport {
     pub const fn new() -> Self {
         Self {
-            rx: [0; CDC_ENDPOINT_BUFFER_SIZE],
-            tx: [0; CDC_ENDPOINT_BUFFER_SIZE],
-            rx_len: 0,
-            tx_len: 0,
+            rx: [[0; CDC_ENDPOINT_BUFFER_SIZE]; CDC_QUEUE_DEPTH],
+            rx_lengths: [0; CDC_QUEUE_DEPTH],
+            rx_head: 0,
+            rx_tail: 0,
+            rx_count: 0,
+            tx: [[0; CDC_ENDPOINT_BUFFER_SIZE]; CDC_QUEUE_DEPTH],
+            tx_lengths: [0; CDC_QUEUE_DEPTH],
+            tx_head: 0,
+            tx_tail: 0,
+            tx_count: 0,
+            line: [0; CDC_LINE_MAX],
+            line_len: 0,
             usb_state: UsbState::Detached,
             connection: ConnectionState::Disconnected,
             suspended_state: UsbState::Detached,
@@ -398,6 +493,7 @@ impl CdcTransport {
                 parity: 0,
                 data_bits: 8,
             },
+            control_line_state: 0,
         }
     }
 
@@ -424,9 +520,19 @@ impl CdcTransport {
         }
     }
 
+    fn clear_queues(&mut self) {
+        self.rx_head = 0;
+        self.rx_tail = 0;
+        self.rx_count = 0;
+        self.tx_head = 0;
+        self.tx_tail = 0;
+        self.tx_count = 0;
+        self.line_len = 0;
+    }
+
     pub fn on_bus_reset(&mut self) {
-        self.rx_len = 0;
-        self.tx_len = 0;
+        self.clear_queues();
+        self.control_line_state = 0;
         if self.connection != ConnectionState::Disconnected {
             self.connection = ConnectionState::Connected;
         }
@@ -439,11 +545,11 @@ impl CdcTransport {
 
     pub fn on_configured(&mut self, configured: bool) {
         if configured && self.connection == ConnectionState::Connected {
+            self.clear_queues();
             self.usb_state = UsbState::Configured;
         } else if !configured && self.connection == ConnectionState::Connected {
             self.usb_state = UsbState::Addressed;
-            self.rx_len = 0;
-            self.tx_len = 0;
+            self.clear_queues();
         }
     }
 
@@ -463,10 +569,14 @@ impl CdcTransport {
     }
 
     pub fn disconnect(&mut self) {
-        self.rx_len = 0;
-        self.tx_len = 0;
+        self.clear_queues();
+        self.control_line_state = 0;
         self.connection = ConnectionState::Disconnected;
         self.usb_state = UsbState::Detached;
+    }
+
+    pub const fn control_line_state(&self) -> u16 {
+        self.control_line_state
     }
 
     pub fn write(&mut self, bytes: &[u8]) -> Result<usize, CdcError> {
@@ -476,40 +586,90 @@ impl CdcTransport {
         if self.usb_state != UsbState::Configured {
             return Err(CdcError::NotEnumerated);
         }
-        if self.tx_len != 0 {
+        if self.tx_count == CDC_QUEUE_DEPTH {
             return Err(CdcError::Overflow);
         }
-        self.tx[..bytes.len()].copy_from_slice(bytes);
-        self.tx_len = bytes.len();
+        let slot = self.tx_tail;
+        self.tx[slot][..bytes.len()].copy_from_slice(bytes);
+        self.tx_lengths[slot] = bytes.len() as u8;
+        self.tx_tail = (slot + 1) % CDC_QUEUE_DEPTH;
+        self.tx_count += 1;
         Ok(bytes.len())
+    }
+
+    /// Remove one complete packet for the proven hardware IN completion seam.
+    pub fn take_tx_packet(&mut self, out: &mut [u8; CDC_ENDPOINT_BUFFER_SIZE]) -> Option<usize> {
+        if self.tx_count == 0 {
+            return None;
+        }
+        let slot = self.tx_head;
+        let length = self.tx_lengths[slot] as usize;
+        out[..length].copy_from_slice(&self.tx[slot][..length]);
+        self.tx_head = (slot + 1) % CDC_QUEUE_DEPTH;
+        self.tx_count -= 1;
+        Some(length)
     }
 
     pub fn read(&mut self) -> Result<Option<u8>, CdcError> {
         if self.usb_state != UsbState::Configured {
             return Err(CdcError::NotEnumerated);
         }
-        if self.rx_len == 0 {
+        if self.rx_count == 0 {
             return Ok(None);
         }
-        let value = self.rx[0];
-        self.rx.copy_within(1..self.rx_len, 0);
-        self.rx_len -= 1;
+        let slot = self.rx_head;
+        let value = self.rx[slot][0];
+        if self.rx_lengths[slot] > 1 {
+            self.rx[slot].copy_within(1..self.rx_lengths[slot] as usize, 0);
+            self.rx_lengths[slot] -= 1;
+        } else {
+            self.rx_lengths[slot] = 0;
+            self.rx_head = (slot + 1) % CDC_QUEUE_DEPTH;
+            self.rx_count -= 1;
+        }
         Ok(Some(value))
     }
 
-    /// Contract seam for a future hardware RX completion. It never executes a command.
+    /// Queue one full-size-or-smaller hardware OUT packet. It never executes a command.
     pub fn accept_rx_packet(&mut self, packet: &[u8]) -> Result<(), CdcError> {
-        if packet.len() > CDC_ENDPOINT_BUFFER_SIZE
-            || packet.len() > CDC_ENDPOINT_BUFFER_SIZE - self.rx_len
-        {
+        if packet.len() > CDC_ENDPOINT_BUFFER_SIZE {
             return Err(CdcError::Overflow);
         }
         if self.usb_state != UsbState::Configured {
             return Err(CdcError::NotEnumerated);
         }
-        self.rx[self.rx_len..self.rx_len + packet.len()].copy_from_slice(packet);
-        self.rx_len += packet.len();
+        if self.rx_count == CDC_QUEUE_DEPTH {
+            return Err(CdcError::Overflow);
+        }
+        let slot = self.rx_tail;
+        self.rx[slot][..packet.len()].copy_from_slice(packet);
+        self.rx_lengths[slot] = packet.len() as u8;
+        self.rx_tail = (slot + 1) % CDC_QUEUE_DEPTH;
+        self.rx_count += 1;
         Ok(())
+    }
+
+    /// Consume a line-delimited packet and return only the read-only commands.
+    pub fn next_command(&mut self) -> Result<Option<ReadOnlyCommand>, CdcError> {
+        while let Some(byte) = self.read()? {
+            match byte {
+                b'\r' => {}
+                b'\n' => {
+                    let command = Self::allow_read_only_command(&self.line[..self.line_len]);
+                    self.line_len = 0;
+                    return command.map(Some);
+                }
+                byte if self.line_len < CDC_LINE_MAX => {
+                    self.line[self.line_len] = byte;
+                    self.line_len += 1;
+                }
+                _ => {
+                    self.line_len = 0;
+                    return Err(CdcError::Overflow);
+                }
+            }
+        }
+        Ok(None)
     }
 
     pub fn handle_control_request(
@@ -527,7 +687,10 @@ impl CdcTransport {
                 self.line_coding = coding;
                 Ok(CdcControlResponse::Accepted)
             }
-            CdcControlRequest::SetControlLineState { .. } => Ok(CdcControlResponse::Accepted),
+            CdcControlRequest::SetControlLineState { value } => {
+                self.control_line_state = value;
+                Ok(CdcControlResponse::Accepted)
+            }
             _ => Err(CdcError::Unsupported),
         }
     }
@@ -743,6 +906,15 @@ mod hardware {
                 USB_EPINT_RXSTP | USB_EPINT_TRCPT0 | USB_EPINT_TRCPT1,
             );
             w8(USB_ENDPOINTS_OFFSET + 0x05, USB_EPSTATUS_BK0RDY);
+            // Bulk endpoint packet-memory layout is deliberately not enabled.
+            // The DFP register map is known, but SRAM ownership/completion
+            // behavior still requires an analyzer-backed hardware pass.
+            if BULK_HARDWARE_PROVEN {
+                // Kept as a review gate; no unproven endpoint writes occur.
+                core::hint::black_box(CDC_NOTIFICATION_BUFFER_SIZE);
+                core::hint::black_box(CDC_BULK_OUT_BUFFER_SIZE);
+                core::hint::black_box(CDC_BULK_IN_BUFFER_SIZE);
+            }
         }
     }
 
@@ -1028,10 +1200,75 @@ mod tests {
             transport.accept_rx_packet(&[0; 65]),
             Err(CdcError::Overflow)
         );
-        assert_eq!(transport.write(&[0; 64]), Ok(64));
+        for _ in 0..CDC_QUEUE_DEPTH {
+            assert_eq!(transport.write(b"x"), Ok(1));
+        }
         assert_eq!(transport.write(b"x"), Err(CdcError::Overflow));
         transport.disconnect();
         assert_eq!(transport.read(), Err(CdcError::NotEnumerated));
+    }
+
+    #[test]
+    fn cdc_queue_framing_and_read_only_adapter_are_bounded() {
+        let mut transport = CdcTransport::new();
+        transport.on_vbus(true);
+        transport.on_configured(true);
+        transport.accept_rx_packet(b"ping\r\n").unwrap();
+        assert_eq!(transport.next_command(), Ok(Some(ReadOnlyCommand::Ping)));
+        transport.accept_rx_packet(b"erase\n").unwrap();
+        assert_eq!(transport.next_command(), Err(CdcError::Unsupported));
+        transport
+            .accept_rx_packet(&[b'a'; CDC_LINE_MAX + 1])
+            .unwrap();
+        assert_eq!(transport.next_command(), Err(CdcError::Overflow));
+    }
+
+    #[test]
+    fn cdc_queue_overflow_does_not_drop_existing_packets() {
+        let mut transport = CdcTransport::new();
+        transport.on_vbus(true);
+        transport.on_configured(true);
+        for _ in 0..CDC_QUEUE_DEPTH {
+            transport.accept_rx_packet(b"x").unwrap();
+        }
+        assert_eq!(transport.accept_rx_packet(b"y"), Err(CdcError::Overflow));
+        for _ in 0..CDC_QUEUE_DEPTH {
+            assert_eq!(transport.read(), Ok(Some(b'x')));
+        }
+    }
+
+    #[test]
+    fn cdc_requests_decode_line_coding_and_control_state() {
+        let mut transport = CdcTransport::new();
+        transport.on_vbus(true);
+        transport.on_configured(true);
+        let coding = [0x80, 0x25, 0, 0, 0, 0, 8];
+        assert_eq!(
+            handle_cdc_setup(
+                &mut transport,
+                setup(0x21, CDC_REQ_SET_LINE_CODING, 0, 7),
+                Some(coding),
+            ),
+            Ok(CdcControlResponse::Accepted)
+        );
+        assert_eq!(transport.line_coding().baud_rate, 9_600);
+        assert_eq!(
+            handle_cdc_setup(
+                &mut transport,
+                setup(0xA1, CDC_REQ_GET_LINE_CODING, 0, 7),
+                None,
+            ),
+            Ok(CdcControlResponse::LineCoding(transport.line_coding()))
+        );
+        assert_eq!(
+            handle_cdc_setup(
+                &mut transport,
+                setup(0x21, CDC_REQ_SET_CONTROL_LINE_STATE, 3, 0),
+                None,
+            ),
+            Ok(CdcControlResponse::Accepted)
+        );
+        assert_eq!(transport.control_line_state(), 3);
     }
 
     #[test]
@@ -1101,5 +1338,24 @@ mod tests {
         assert_eq!(USB_EP0_IN_BUFFER, 320);
         assert_eq!(DEVICE_DESCRIPTOR.len(), 18);
         assert_eq!(CONFIGURATION_DESCRIPTOR.len(), 75);
+        assert_eq!(CONFIGURATION_DESCRIPTOR[2], 75);
+        assert_eq!(CONFIGURATION_DESCRIPTOR[4], 2);
+        assert!(
+            CONFIGURATION_DESCRIPTOR
+                .windows(2)
+                .any(|window| window == [5, NOTIFICATION_ENDPOINT])
+        );
+        assert!(
+            CONFIGURATION_DESCRIPTOR
+                .windows(2)
+                .any(|window| window == [5, RX_ENDPOINT])
+        );
+        assert!(
+            CONFIGURATION_DESCRIPTOR
+                .windows(2)
+                .any(|window| window == [5, TX_ENDPOINT])
+        );
+        assert_eq!(CDC_NOTIFICATION_BUFFER_SIZE, 64);
+        assert!(!BULK_HARDWARE_PROVEN);
     }
 }
